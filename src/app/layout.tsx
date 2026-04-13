@@ -2,7 +2,7 @@ import { AntdRegistry } from "@ant-design/nextjs-registry";
 import { ConfigProvider } from "antd";
 
 export const metadata = {
-  title: "Community Ops",
+  title: "WLTH WLKS Ops",
   description: "Internal ops platform",
 };
 

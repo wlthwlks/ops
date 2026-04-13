@@ -2,13 +2,13 @@
 
 import { useState } from "react";
 import { Layout, Menu } from "antd";
-import { ThunderboltOutlined } from "@ant-design/icons";
+import { TeamOutlined } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 
 const { Sider, Content } = Layout;
 
 const menuItems = [
-  { key: "/ops", icon: <ThunderboltOutlined />, label: "Operations" },
+  { key: "/get-daily-new-customers-for-cities", icon: <TeamOutlined />, label: "Get New Members" },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -20,7 +20,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <Layout style={{ minHeight: "100vh" }}>
       <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} theme="light" style={{ borderRight: "1px solid #f0f0f0" }}>
         <div style={{ height: 48, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 600, fontSize: collapsed ? 14 : 16, borderBottom: "1px solid #f0f0f0" }}>
-          {collapsed ? "Ops" : "Community Ops"}
+          {collapsed ? "Ops" : "WLTH WLKS Ops"}
         </div>
         <Menu mode="inline" selectedKeys={[pathname]} items={menuItems} onClick={({ key }) => router.push(key)} style={{ borderRight: 0 }} />
       </Sider>

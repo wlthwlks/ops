@@ -23,7 +23,7 @@ export const donutTracker: Op = {
   run: async (ctx) => {
     const slack = createSlackClient({ botToken: process.env.SLACK_BOT_TOKEN! });
     const strapi = createStrapiClient({ baseUrl: process.env.STRAPI_URL!, token: process.env.STRAPI_TOKEN! });
-    const airtable = createAirtableClient({ apiKey: process.env.AIRTABLE_API_KEY!, baseId: process.env.AIRTABLE_BASE_ID! });
+    const airtable = createAirtableClient({ apiKey: process.env.AIRTABLE_GET_DATA_TOKEN!, baseId: process.env.AIRTABLE_BASE_ID! });
 
     const donutChannel = process.env.SLACK_DONUT_CHANNEL || "donut-pairings";
     ctx.log(`Fetching Donut channel history from #${donutChannel}...`);

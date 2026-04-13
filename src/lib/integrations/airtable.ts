@@ -59,6 +59,12 @@ export function createAirtableClient(config: AirtableConfig) {
       const params = new URLSearchParams();
       if (options?.filterByFormula) params.set("filterByFormula", options.filterByFormula);
       if (options?.fields) options.fields.forEach((f) => params.append("fields[]", f));
+      if (options?.sort) {
+        options.sort.forEach((s, i) => {
+          params.set(`sort[${i}][field]`, s.field);
+          if (s.direction) params.set(`sort[${i}][direction]`, s.direction);
+        });
+      }
       if (options?.maxRecords) params.set("maxRecords", String(options.maxRecords));
       if (offset) params.set("offset", offset);
 

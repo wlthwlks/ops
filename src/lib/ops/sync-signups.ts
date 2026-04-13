@@ -11,7 +11,7 @@ export const syncSignups: Op = {
 
   run: async (ctx) => {
     const airtable = createAirtableClient({
-      apiKey: process.env.AIRTABLE_API_KEY!,
+      apiKey: process.env.AIRTABLE_GET_DATA_TOKEN!,
       baseId: process.env.AIRTABLE_BASE_ID!,
     });
     const slack = createSlackClient({ botToken: process.env.SLACK_BOT_TOKEN! });

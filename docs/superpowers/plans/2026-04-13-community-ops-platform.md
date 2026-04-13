@@ -1,4 +1,4 @@
-# Community Ops Platform Implementation Plan
+# WLTH WLKS WLTH WLKS Ops Platform Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -155,7 +155,7 @@ import { AntdRegistry } from "@ant-design/nextjs-registry";
 import { ConfigProvider } from "antd";
 
 export const metadata = {
-  title: "Community Ops",
+  title: "WLTH WLKS Ops",
   description: "Internal ops platform",
 };
 
@@ -1120,7 +1120,7 @@ export default function DashboardLayout({
             borderBottom: "1px solid #f0f0f0",
           }}
         >
-          {collapsed ? "Ops" : "Community Ops"}
+          {collapsed ? "Ops" : "WLTH WLKS Ops"}
         </div>
         <Menu
           mode="inline"
@@ -1156,7 +1156,7 @@ export default function DashboardIndex() {
 npm run dev
 ```
 
-Open http://localhost:3000 — should see sidebar with "Community Ops" title and "Operations" menu item. Clicking it navigates to `/ops` (will 404 until next task).
+Open http://localhost:3000 — should see sidebar with "WLTH WLKS Ops" title and "Operations" menu item. Clicking it navigates to `/ops` (will 404 until next task).
 
 - [ ] **Step 4: Commit**
 

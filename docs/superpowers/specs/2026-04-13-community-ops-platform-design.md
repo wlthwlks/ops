@@ -1,4 +1,4 @@
-# Community Ops Platform — Design Spec
+# WLTH WLKS Ops Platform — Design Spec
 
 **Project:** wlth-wlks-ops
 **Date:** 2026-04-13
@@ -132,7 +132,7 @@ op_runs:
   finished_at   - timestamp
   status        - running | success | failed
   log           - text (stdout/error output)
-  summary       - string (e.g., "Synced 12 new members")
+  summary       - string (e.g., "Synced 12 Get New Members")
 ```
 
 Retention: 30 days, auto-pruned.
