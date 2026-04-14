@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function DashboardIndex() {
-  redirect("/ops");
+  redirect("/get-daily-new-customers-for-cities");
 }

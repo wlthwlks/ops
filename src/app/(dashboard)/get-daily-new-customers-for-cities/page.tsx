@@ -8,12 +8,18 @@ import dayjs, { Dayjs } from "dayjs";
 const { Title, Text } = Typography;
 const { RangePicker } = DatePicker;
 
+interface SublocationBreakdown {
+  sublocation: string;
+  emails: string[];
+}
+
 interface CityData {
   city: string;
   filename: string;
   count: number;
   emails: string[];
   csv: string;
+  breakdown: SublocationBreakdown[];
 }
 
 interface ApiResponse {
@@ -191,9 +197,19 @@ export default function DailyNewCustomersPage() {
           size="middle"
           expandable={{
             expandedRowRender: (record: CityData) => (
-              <Text style={{ wordBreak: "break-all" }}>
-                {record.csv || "No emails"}
-              </Text>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {(record.breakdown ?? []).map((sub) => (
+                  <div key={sub.sublocation}>
+                    <Text strong>{sub.sublocation}</Text>
+                    <Tag style={{ marginLeft: 8 }}>{sub.emails.length}</Tag>
+                    <div style={{ marginTop: 4 }}>
+                      <Text type="secondary" style={{ wordBreak: "break-all" }}>
+                        {sub.emails.join(", ")}
+                      </Text>
+                    </div>
+                  </div>
+                ))}
+              </div>
             ),
             rowExpandable: (record: CityData) => record.count > 0,
           }}

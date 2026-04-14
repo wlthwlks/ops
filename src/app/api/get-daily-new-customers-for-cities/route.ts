@@ -1,12 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAirtableClient } from "@/lib/integrations/airtable";
-import { CITIES } from "@/lib/constants";
+import { CITIES, CityGroup } from "@/lib/constants";
+
+interface SublocationBreakdown {
+  sublocation: string;
+  emails: string[];
+}
 
 interface CityExport {
   city: string;
   filename: string;
   emails: string[];
   csv: string;
+  breakdown: SublocationBreakdown[];
+}
+
+function buildCityFilter(cityGroup: CityGroup): string {
+  const allNames = [cityGroup.label, ...cityGroup.alternatives];
+  const conditions = allNames.map(
+    (name) => `FIND(LOWER("${name}"), LOWER({City}))`
+  );
+  return `OR(${conditions.join(", ")})`;
+}
+
+function matchSublocation(city: string, cityGroup: CityGroup): string {
+  const cityLower = (city || "").toLowerCase();
+  const allNames = [cityGroup.label, ...cityGroup.alternatives];
+  for (const name of allNames) {
+    if (cityLower.includes(name.toLowerCase())) {
+      return name;
+    }
+  }
+  return city || "Other";
 }
 
 export async function GET(request: NextRequest) {
@@ -35,37 +60,53 @@ export async function GET(request: NextRequest) {
       ? effectiveStart.replace(/-/g, "")
       : `${effectiveStart.replace(/-/g, "")}-${effectiveEnd.replace(/-/g, "")}`;
 
-  // Build date filter: for single day use IS_SAME, for range use IS_AFTER/IS_BEFORE
   const dateFilter =
     effectiveStart === effectiveEnd
       ? `IS_SAME(CREATED_TIME(), "${effectiveStart}", "day")`
       : `AND(IS_AFTER(CREATED_TIME(), DATEADD("${effectiveStart}", -1, "days")), IS_BEFORE(CREATED_TIME(), DATEADD("${effectiveEnd}", 1, "days")))`;
 
   const citiesToFetch = cityParam
-    ? CITIES.filter((c) => c.toLowerCase() === cityParam.toLowerCase())
+    ? CITIES.filter((c) => c.label.toLowerCase() === cityParam.toLowerCase())
     : [...CITIES];
 
   const results: CityExport[] = [];
 
-  for (const city of citiesToFetch) {
+  for (const cityGroup of citiesToFetch) {
+    const cityFilter = buildCityFilter(cityGroup);
+
     const records = await client.listRecords("Members", {
-      filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", {City} = "${city}", ${dateFilter})`,
+      filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", ${cityFilter}, ${dateFilter})`,
       sort: [{ field: "Date added", direction: "desc" }],
       fields: ["Name", "email", "City"],
     });
 
-    const emails = records
-      .map((r) => r.fields["email"] as string)
-      .filter(Boolean);
+    // Build sublocation breakdown
+    const sublocationMap = new Map<string, string[]>();
+    const allEmails: string[] = [];
 
-    const slug = city.toLowerCase().replace(/\s+/g, "-");
+    for (const r of records) {
+      const email = r.fields["email"] as string;
+      if (!email) continue;
+
+      allEmails.push(email);
+      const recordCity = r.fields["City"] as string;
+      const sublocation = matchSublocation(recordCity, cityGroup);
+
+      const existing = sublocationMap.get(sublocation) ?? [];
+      sublocationMap.set(sublocation, [...existing, email]);
+    }
+
+    const breakdown: SublocationBreakdown[] = Array.from(sublocationMap.entries())
+      .map(([sublocation, emails]) => ({ sublocation, emails }))
+      .sort((a, b) => b.emails.length - a.emails.length);
+
+    const slug = cityGroup.label.toLowerCase().replace(/\s+/g, "-");
     const filename = `${dateLabel}-${slug}-new-customers.csv`;
-    const csv = emails.join(",");
+    const csv = allEmails.join(",");
 
-    results.push({ city, filename, emails, csv });
+    results.push({ city: cityGroup.label, filename, emails: allEmails, csv, breakdown });
   }
 
-  // If single city + format=csv, return as downloadable CSV file
   if (cityParam && format === "csv" && results.length === 1) {
     const { filename, csv } = results[0];
     return new NextResponse(csv, {
@@ -80,12 +121,13 @@ export async function GET(request: NextRequest) {
     success: true,
     startDate: effectiveStart,
     endDate: effectiveEnd,
-    data: results.map(({ city, filename, emails, csv }) => ({
+    data: results.map(({ city, filename, emails, csv, breakdown }) => ({
       city,
       filename,
       count: emails.length,
       emails,
       csv,
+      breakdown,
     })),
   });
 }
