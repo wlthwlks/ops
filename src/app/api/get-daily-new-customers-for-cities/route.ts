@@ -7,11 +7,20 @@ interface SublocationBreakdown {
   emails: string[];
 }
 
+interface CustomerRecord {
+  name: string;
+  surname: string;
+  email: string;
+  city: string;
+  phone: string;
+}
+
 interface CityExport {
   city: string;
   filename: string;
   emails: string[];
   csv: string;
+  customers: CustomerRecord[];
   breakdown: SublocationBreakdown[];
 }
 
@@ -77,12 +86,12 @@ export async function GET(request: NextRequest) {
     const records = await client.listRecords("Members", {
       filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", ${cityFilter}, ${dateFilter})`,
       sort: [{ field: "Date added", direction: "desc" }],
-      fields: ["Name", "email", "City"],
     });
 
     // Build sublocation breakdown
     const sublocationMap = new Map<string, string[]>();
     const allEmails: string[] = [];
+    const allCustomers: CustomerRecord[] = [];
 
     for (const r of records) {
       const email = r.fields["email"] as string;
@@ -91,6 +100,14 @@ export async function GET(request: NextRequest) {
       allEmails.push(email);
       const recordCity = r.fields["City"] as string;
       const sublocation = matchSublocation(recordCity, cityGroup);
+
+      allCustomers.push({
+        name: (r.fields["First Name"] as string) || "",
+        surname: (r.fields["Last Name"] as string) || "",
+        email,
+        city: recordCity || "",
+        phone: (r.fields["phone number"] as string) || "",
+      });
 
       const existing = sublocationMap.get(sublocation) ?? [];
       sublocationMap.set(sublocation, [...existing, email]);
@@ -104,7 +121,7 @@ export async function GET(request: NextRequest) {
     const filename = `${dateLabel}-${slug}-new-customers.csv`;
     const csv = allEmails.join(",");
 
-    results.push({ city: cityGroup.label, filename, emails: allEmails, csv, breakdown });
+    results.push({ city: cityGroup.label, filename, emails: allEmails, csv, customers: allCustomers, breakdown });
   }
 
   if (cityParam && format === "csv" && results.length === 1) {
@@ -121,12 +138,13 @@ export async function GET(request: NextRequest) {
     success: true,
     startDate: effectiveStart,
     endDate: effectiveEnd,
-    data: results.map(({ city, filename, emails, csv, breakdown }) => ({
+    data: results.map(({ city, filename, emails, csv, customers, breakdown }) => ({
       city,
       filename,
       count: emails.length,
       emails,
       csv,
+      customers,
       breakdown,
     })),
   });

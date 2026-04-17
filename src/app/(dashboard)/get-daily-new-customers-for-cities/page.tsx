@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { Button, Card, DatePicker, Empty, Spin, Table, Tag, Typography, Space, message } from "antd";
-import { DownloadOutlined, CopyOutlined, SearchOutlined } from "@ant-design/icons";
+import { DownloadOutlined, CopyOutlined, SearchOutlined, ExportOutlined } from "@ant-design/icons";
 import dayjs, { Dayjs } from "dayjs";
 
 const { Title, Text } = Typography;
@@ -13,12 +13,21 @@ interface SublocationBreakdown {
   emails: string[];
 }
 
+interface CustomerRecord {
+  name: string;
+  surname: string;
+  email: string;
+  city: string;
+  phone: string;
+}
+
 interface CityData {
   city: string;
   filename: string;
   count: number;
   emails: string[];
   csv: string;
+  customers: CustomerRecord[];
   breakdown: SublocationBreakdown[];
 }
 
@@ -88,6 +97,42 @@ export default function DailyNewCustomersPage() {
   function copyEmails(item: CityData) {
     navigator.clipboard.writeText(item.csv);
     message.success(`Copied ${item.count} email(s) for ${item.city}`);
+  }
+
+  function exportAllCustomersCsv() {
+    if (!response?.data) return;
+
+    const allCustomers = response.data.flatMap((city) => city.customers ?? []);
+    if (allCustomers.length === 0) {
+      message.warning("No customers to export");
+      return;
+    }
+
+    const escapeField = (val: string) => {
+      if (val.includes(",") || val.includes('"') || val.includes("\n")) {
+        return `"${val.replace(/"/g, '""')}"`;
+      }
+      return val;
+    };
+
+    const header = "Name,Surname,Email,City,Phone";
+    const rows = allCustomers.map((c) =>
+      [c.name, c.surname, c.email, c.city, c.phone].map(escapeField).join(",")
+    );
+    const csvContent = [header, ...rows].join("\n");
+
+    const dateLabel =
+      response.startDate === response.endDate
+        ? response.startDate.replace(/-/g, "")
+        : `${response.startDate.replace(/-/g, "")}-${response.endDate.replace(/-/g, "")}`;
+
+    const blob = new Blob([csvContent], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${dateLabel}-all-cities-new-customers.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   const totalNew = response?.data.reduce((sum, d) => sum + d.count, 0) ?? 0;
@@ -172,6 +217,13 @@ export default function DailyNewCustomersPage() {
             loading={loading}
           >
             Get New Customers
+          </Button>
+          <Button
+            icon={<ExportOutlined />}
+            onClick={exportAllCustomersCsv}
+            disabled={loading || !response?.data || totalNew === 0}
+          >
+            Export New Cities Customers
           </Button>
         </Space>
       </Space>
