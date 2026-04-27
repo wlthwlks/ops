@@ -32,6 +32,16 @@ function buildCityFilter(cityGroup: CityGroup): string {
   return `OR(${conditions.join(", ")})`;
 }
 
+function buildExcludeAllCitiesFilter(): string {
+  const conditions = CITIES.flatMap((group) => {
+    const allNames = [group.label, ...group.alternatives];
+    return allNames.map(
+      (name) => `FIND(LOWER("${name}"), LOWER({City}))`
+    );
+  });
+  return `AND(NOT(OR(${conditions.join(", ")})))`;
+}
+
 function matchSublocation(city: string, cityGroup: CityGroup): string {
   const cityLower = (city || "").toLowerCase();
   const allNames = [cityGroup.label, ...cityGroup.alternatives];
@@ -122,6 +132,47 @@ export async function GET(request: NextRequest) {
     const csv = allEmails.join(",");
 
     results.push({ city: cityGroup.label, filename, emails: allEmails, csv, customers: allCustomers, breakdown });
+  }
+
+  // Fetch "Other" members that don't belong to any known city
+  if (!cityParam) {
+    const excludeFilter = buildExcludeAllCitiesFilter();
+    const otherRecords = await client.listRecords("Members", {
+      filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", ${excludeFilter}, ${dateFilter})`,
+      sort: [{ field: "Date added", direction: "desc" }],
+    });
+
+    const otherEmails: string[] = [];
+    const otherCustomers: CustomerRecord[] = [];
+    const otherSublocationMap = new Map<string, string[]>();
+
+    for (const r of otherRecords) {
+      const email = r.fields["email"] as string;
+      if (!email) continue;
+
+      const recordCity = (r.fields["City"] as string) || "Unknown";
+      otherEmails.push(email);
+      otherCustomers.push({
+        name: (r.fields["First Name"] as string) || "",
+        surname: (r.fields["Last Name"] as string) || "",
+        email,
+        city: recordCity,
+        phone: (r.fields["phone number"] as string) || "",
+      });
+
+      const existing = otherSublocationMap.get(recordCity) ?? [];
+      otherSublocationMap.set(recordCity, [...existing, email]);
+    }
+
+    if (otherEmails.length > 0) {
+      const breakdown: SublocationBreakdown[] = Array.from(otherSublocationMap.entries())
+        .map(([sublocation, emails]) => ({ sublocation, emails }))
+        .sort((a, b) => b.emails.length - a.emails.length);
+
+      const filename = `${dateLabel}-other-new-customers.csv`;
+      const csv = otherEmails.join(",");
+      results.push({ city: "Other", filename, emails: otherEmails, csv, customers: otherCustomers, breakdown });
+    }
   }
 
   if (cityParam && format === "csv" && results.length === 1) {
