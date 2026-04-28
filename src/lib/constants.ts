@@ -6,7 +6,7 @@ export interface CityGroup {
 export const CITIES: CityGroup[] = [
   {
     label: "Los Angeles",
-    alternatives: ["LA", "Los Ángeles", "Pasadena", "Santa Barbara", "Los Angeles"],
+    alternatives: ["Los Ángeles", "Pasadena", "Santa Barbara", "Los Angeles"],
   },
   {
     label: "San Diego",
