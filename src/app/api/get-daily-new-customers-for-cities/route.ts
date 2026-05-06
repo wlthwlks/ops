@@ -134,21 +134,22 @@ export async function GET(request: NextRequest) {
     results.push({ city: cityGroup.label, filename, emails: allEmails, csv, customers: allCustomers, breakdown });
   }
 
-  // Fetch "Other" members that don't belong to any known city
+  // Fetch "Other" members: get ALL active+paid for the date range, then exclude already-matched emails
   if (!cityParam) {
-    const excludeFilter = buildExcludeAllCitiesFilter();
-    const otherRecords = await client.listRecords("Members", {
-      filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", ${excludeFilter}, ${dateFilter})`,
+    const allRecords = await client.listRecords("Members", {
+      filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", ${dateFilter})`,
       sort: [{ field: "Date added", direction: "desc" }],
     });
+
+    const matchedEmails = new Set(results.flatMap((r) => r.emails));
 
     const otherEmails: string[] = [];
     const otherCustomers: CustomerRecord[] = [];
     const otherSublocationMap = new Map<string, string[]>();
 
-    for (const r of otherRecords) {
+    for (const r of allRecords) {
       const email = r.fields["email"] as string;
-      if (!email) continue;
+      if (!email || matchedEmails.has(email)) continue;
 
       const recordCity = (r.fields["City"] as string) || "Unknown";
       otherEmails.push(email);
@@ -164,15 +165,13 @@ export async function GET(request: NextRequest) {
       otherSublocationMap.set(recordCity, [...existing, email]);
     }
 
-    if (otherEmails.length > 0) {
-      const breakdown: SublocationBreakdown[] = Array.from(otherSublocationMap.entries())
-        .map(([sublocation, emails]) => ({ sublocation, emails }))
-        .sort((a, b) => b.emails.length - a.emails.length);
+    const breakdown: SublocationBreakdown[] = Array.from(otherSublocationMap.entries())
+      .map(([sublocation, emails]) => ({ sublocation, emails }))
+      .sort((a, b) => b.emails.length - a.emails.length);
 
-      const filename = `${dateLabel}-other-new-customers.csv`;
-      const csv = otherEmails.join(",");
-      results.push({ city: "Other", filename, emails: otherEmails, csv, customers: otherCustomers, breakdown });
-    }
+    const filename = `${dateLabel}-other-new-customers.csv`;
+    const csv = otherEmails.join(",");
+    results.push({ city: "Other", filename, emails: otherEmails, csv, customers: otherCustomers, breakdown });
   }
 
   if (cityParam && format === "csv" && results.length === 1) {
@@ -184,6 +183,8 @@ export async function GET(request: NextRequest) {
       },
     });
   }
+
+  console.log("[API] cities returned:", results.map(r => `${r.city}(${r.emails.length})`).join(", "));
 
   return NextResponse.json({
     success: true,

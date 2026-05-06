@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Layout, Menu } from "antd";
-import { TeamOutlined, RiseOutlined } from "@ant-design/icons";
+import { TeamOutlined, RiseOutlined, UserDeleteOutlined } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 
 const { Sider, Content } = Layout;
@@ -10,6 +10,7 @@ const { Sider, Content } = Layout;
 const menuItems = [
   { key: "/get-daily-new-customers-for-cities", icon: <TeamOutlined />, label: "Get New Members" },
   { key: "/growing-cities", icon: <RiseOutlined />, label: "See Growing Cities" },
+  { key: "/remove-members", icon: <UserDeleteOutlined />, label: "Remove Members" },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

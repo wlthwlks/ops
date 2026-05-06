@@ -190,7 +190,8 @@ export default function DailyNewCustomersPage() {
 
   return (
     <div style={{ maxWidth: 1100 }}>
-      <Space direction="vertical" size="middle" style={{ width: "100%", marginBottom: 16 }}>
+      <style>{`.other-row td { background: #fff2e8 !important; } .other-row:hover td { background: #ffe7d6 !important; } .other-row td .ant-typography { color: #d4380d !important; }`}</style>
+      <Space orientation="vertical" size="middle" style={{ width: "100%", marginBottom: 16 }}>
         <Space style={{ width: "100%", justifyContent: "space-between" }}>
           <div>
             <Title level={3} style={{ margin: 0 }}>
@@ -242,11 +243,12 @@ export default function DailyNewCustomersPage() {
         <Empty description="No data" />
       ) : (
         <Table
-          dataSource={response?.data}
+          dataSource={response?.data.filter((d) => d.count > 0)}
           columns={columns}
           rowKey="city"
           pagination={false}
           size="middle"
+          rowClassName={(record) => record.city === "Other" ? "other-row" : ""}
           expandable={{
             expandedRowRender: (record: CityData) => (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
