@@ -36,13 +36,13 @@ export async function GET(request: NextRequest) {
   const client = createAirtableClient({ apiKey: token, baseId });
 
   // Use Airtable formula to filter:
-  // - Cancelled Date is not blank (member is cancelled)
-  // - Cancelled Date falls within the selected range (inclusive)
-  const formula = `AND({Cancelled Date} != '', IS_AFTER({Cancelled Date}, DATEADD('${startDate}', -1, 'days')), IS_BEFORE({Cancelled Date}, DATEADD('${endDate}', 1, 'days')))`;
+  // - Cancellation date is not blank (member is cancelled)
+  // - Cancellation date falls within the selected range (inclusive)
+  const formula = `AND({Cancellation date} != '', IS_AFTER({Cancellation date}, DATEADD('${startDate}', -1, 'days')), IS_BEFORE({Cancellation date}, DATEADD('${endDate}', 1, 'days')))`;
 
   const records = await client.listRecords("Members", {
     filterByFormula: formula,
-    sort: [{ field: "Cancelled Date", direction: "desc" }],
+    sort: [{ field: "Cancellation date", direction: "desc" }],
   });
 
   const members: CancelledMember[] = records
@@ -53,7 +53,7 @@ export async function GET(request: NextRequest) {
       email: (r.fields["email"] as string) || "",
       city: (r.fields["City"] as string) || "",
       phone: (r.fields["phone number"] as string) || "",
-      cancelledDate: (r.fields["Cancelled Date"] as string) || "",
+      cancelledDate: (r.fields["Cancellation date"] as string) || "",
     }))
     .filter((m) => m.email);
 
