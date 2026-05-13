@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button, Card, DatePicker, Empty, Spin, Steps, Table, Tag, Typography, Space, message } from "antd";
-import { SearchOutlined, CopyOutlined, ExportOutlined, CalendarOutlined, FilterOutlined, MailOutlined, FileExcelOutlined } from "@ant-design/icons";
+import { CopyOutlined, ExportOutlined, ReloadOutlined } from "@ant-design/icons";
 import dayjs, { Dayjs } from "dayjs";
 
 const { Title, Text } = Typography;
@@ -15,45 +15,35 @@ interface CancelledMember {
   email: string;
   city: string;
   phone: string;
-  dateAdded: string;
+  cancelledDate: string;
 }
 
 interface ApiResponse {
   success: boolean;
+  total: number;
   startDate: string;
   endDate: string;
-  total: number;
   data: CancelledMember[];
 }
-
-type RangePreset = {
-  label: string;
-  value: [Dayjs, Dayjs];
-};
-
-const presets: RangePreset[] = [
-  { label: "Today", value: [dayjs(), dayjs()] },
-  { label: "Last 7 Days", value: [dayjs().subtract(6, "day"), dayjs()] },
-  { label: "Last 30 Days", value: [dayjs().subtract(29, "day"), dayjs()] },
-  { label: "Last 90 Days", value: [dayjs().subtract(89, "day"), dayjs()] },
-];
 
 export default function RemoveMembersPage() {
   const [loading, setLoading] = useState(true);
   const [response, setResponse] = useState<ApiResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>([
-    dayjs().subtract(29, "day"),
-    dayjs(),
+    dayjs().startOf("month"),
+    dayjs().endOf("month"),
   ]);
 
-  const fetchData = useCallback(async (range: [Dayjs, Dayjs]) => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const startDate = range[0].format("YYYY-MM-DD");
-      const endDate = range[1].format("YYYY-MM-DD");
-      const params = new URLSearchParams({ startDate, endDate });
+      const [start, end] = dateRange;
+      const params = new URLSearchParams({
+        startDate: start.format("YYYY-MM-DD"),
+        endDate: end.format("YYYY-MM-DD"),
+      });
       const res = await fetch(`/api/remove-members?${params}`);
       if (!res.ok) throw new Error(`API error: ${res.status}`);
       const data: ApiResponse = await res.json();
@@ -63,17 +53,11 @@ export default function RemoveMembersPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [dateRange]);
 
   useEffect(() => {
-    fetchData(dateRange);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  function handleDateChange(dates: [Dayjs | null, Dayjs | null] | null) {
-    if (dates && dates[0] && dates[1]) {
-      setDateRange([dates[0], dates[1]]);
-    }
-  }
+    fetchData();
+  }, [fetchData]);
 
   function copyEmails() {
     if (!response?.data.length) return;
@@ -84,28 +68,21 @@ export default function RemoveMembersPage() {
 
   function exportCsv() {
     if (!response?.data.length) return;
-
-    const escapeField = (val: string) => {
-      if (val.includes(",") || val.includes('"') || val.includes("\n")) {
-        return `"${val.replace(/"/g, '""')}"`;
-      }
-      return val;
-    };
-
     const csvContent = response.data.map((m) => m.email).join("\n");
-
-    const dateLabel =
-      response.startDate === response.endDate
-        ? response.startDate.replace(/-/g, "")
-        : `${response.startDate.replace(/-/g, "")}-${response.endDate.replace(/-/g, "")}`;
-
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
     const blob = new Blob([csvContent], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${dateLabel}-cancelled-members.csv`;
+    a.download = `${today}-cancelled-members.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  function handleDateChange(dates: [Dayjs | null, Dayjs | null] | null) {
+    if (dates && dates[0] && dates[1]) {
+      setDateRange([dates[0], dates[1]]);
+    }
   }
 
   const columns = [
@@ -134,6 +111,12 @@ export default function RemoveMembersPage() {
       render: (phone: string) => phone || "—",
     },
     {
+      title: "Cancelled Date",
+      dataIndex: "cancelledDate",
+      key: "cancelledDate",
+      render: (date: string) => date ? dayjs(date).format("DD MMM YYYY") : "—",
+    },
+    {
       title: "Status",
       key: "status",
       render: () => <Tag color="red">Cancelled</Tag>,
@@ -142,13 +125,13 @@ export default function RemoveMembersPage() {
 
   return (
     <div style={{ maxWidth: 1100 }}>
-      <Space orientation="vertical" size="middle" style={{ width: "100%", marginBottom: 16 }}>
+      <Space direction="vertical" size="middle" style={{ width: "100%", marginBottom: 16 }}>
         <div>
           <Title level={3} style={{ margin: 0 }}>
             Remove Members
           </Title>
           <Text type="secondary">
-            Recently cancelled members to remove from city channels
+            Cancelled members within selected date range — to remove from city channels
           </Text>
         </div>
 
@@ -171,7 +154,7 @@ export default function RemoveMembersPage() {
               },
               {
                 title: "Export cancelled members CSV",
-                description: "Select a date range below, click Search, then click Export CSV to download the list.",
+                description: "Click Export CSV below to download the list of cancelled member emails.",
               },
               {
                 title: "Upload CSV to Bulk Slack Deactivation Extension",
@@ -202,21 +185,20 @@ export default function RemoveMembersPage() {
           />
         </Card>
 
-        <Space>
+        <Space wrap>
           <RangePicker
             value={dateRange}
             onChange={handleDateChange}
-            presets={presets}
-            disabledDate={(current) => current && current.isAfter(dayjs(), "day")}
+            format="DD MMM YYYY"
             allowClear={false}
           />
           <Button
             type="primary"
-            icon={<SearchOutlined />}
-            onClick={() => fetchData(dateRange)}
+            icon={<ReloadOutlined />}
+            onClick={fetchData}
             loading={loading}
           >
-            Search
+            Refresh
           </Button>
           <Button
             icon={<CopyOutlined />}
@@ -251,7 +233,7 @@ export default function RemoveMembersPage() {
         <>
           <Card style={{ marginBottom: 16 }}>
             <Text strong>{response.total} cancelled member(s)</Text>
-            <Text type="secondary"> from {response.startDate} to {response.endDate}</Text>
+            <Text type="secondary"> from {dayjs(response.startDate).format("DD MMM YYYY")} to {dayjs(response.endDate).format("DD MMM YYYY")}</Text>
           </Card>
           <Table
             dataSource={response.data}

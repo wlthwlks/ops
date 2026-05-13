@@ -8,12 +8,7 @@ interface CancelledMember {
   email: string;
   city: string;
   phone: string;
-  membershipStatus: string;
-}
-
-function isCancelled(membershipValue: unknown): boolean {
-  if (!membershipValue) return false;
-  return String(membershipValue).toLowerCase().includes("cancel");
+  cancelledDate: string;
 }
 
 export async function GET(request: NextRequest) {
@@ -27,36 +22,30 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const startDate = request.nextUrl.searchParams.get("startDate");
-  const endDate = request.nextUrl.searchParams.get("endDate");
+  const { searchParams } = new URL(request.url);
+  const startDate = searchParams.get("startDate");
+  const endDate = searchParams.get("endDate");
+
+  if (!startDate || !endDate) {
+    return NextResponse.json(
+      { success: false, error: "startDate and endDate query params are required (YYYY-MM-DD)" },
+      { status: 400 }
+    );
+  }
+
   const client = createAirtableClient({ apiKey: token, baseId });
 
-  const today = new Date().toISOString().slice(0, 10);
-  const effectiveStart = startDate || today;
-  const effectiveEnd = endDate || today;
+  // Use Airtable formula to filter:
+  // - Cancelled Date is not blank (member is cancelled)
+  // - Cancelled Date falls within the selected range (inclusive)
+  const formula = `AND({Cancelled Date} != '', IS_AFTER({Cancelled Date}, DATEADD('${startDate}', -1, 'days')), IS_BEFORE({Cancelled Date}, DATEADD('${endDate}', 1, 'days')))`;
 
-  const dateFilter =
-    effectiveStart === effectiveEnd
-      ? `IS_SAME(CREATED_TIME(), "${effectiveStart}", "day")`
-      : `AND(IS_AFTER(CREATED_TIME(), DATEADD("${effectiveStart}", -1, "days")), IS_BEFORE(CREATED_TIME(), DATEADD("${effectiveEnd}", 1, "days")))`;
-
-  // Fetch ALL members in date range, filter cancelled in code
-  const allRecords = await client.listRecords("Members", {
-    filterByFormula: dateFilter,
-    sort: [{ field: "Date added", direction: "desc" }],
+  const records = await client.listRecords("Members", {
+    filterByFormula: formula,
+    sort: [{ field: "Cancelled Date", direction: "desc" }],
   });
 
-  // Debug: show distribution of membership values
-  const membershipCounts = allRecords.reduce<Record<string, number>>((acc, r) => {
-    const val = String(r.fields["Membership"] ?? "(empty)");
-    acc[val] = (acc[val] ?? 0) + 1;
-    return acc;
-  }, {});
-
-  console.log("[remove-members] membership distribution:", JSON.stringify(membershipCounts));
-
-  const members: CancelledMember[] = allRecords
-    .filter((r) => isCancelled(r.fields["Membership"]))
+  const members: CancelledMember[] = records
     .map((r) => ({
       id: r.id,
       name: (r.fields["First Name"] as string) || "",
@@ -64,16 +53,15 @@ export async function GET(request: NextRequest) {
       email: (r.fields["email"] as string) || "",
       city: (r.fields["City"] as string) || "",
       phone: (r.fields["phone number"] as string) || "",
-      membershipStatus: String(r.fields["Membership"] ?? ""),
+      cancelledDate: (r.fields["Cancelled Date"] as string) || "",
     }))
     .filter((m) => m.email);
 
   return NextResponse.json({
     success: true,
-    startDate: effectiveStart,
-    endDate: effectiveEnd,
     total: members.length,
-    debug_membershipDistribution: membershipCounts,
+    startDate,
+    endDate,
     data: members,
   });
 }
