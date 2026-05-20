@@ -447,7 +447,7 @@ export default function GetMatchedPage() {
         reasons.push(`you're both focused on ${memberTopic.toLowerCase()}`);
       }
     }
-    if (reasons.length < 2 && memberLocs.length > 0) {
+    if (reasons.length < 2 && meetingSpots.length > 0) {
       reasons.push("you're based in the same area");
     }
     if (reasons.length < 2 && commonDays.length > 0) {
