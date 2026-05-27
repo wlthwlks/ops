@@ -22,7 +22,7 @@ async function main() {
 
   const records = await client.listRecords("Members", {
     filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", IS_SAME(CREATED_TIME(), "${today}", "day"))`,
-    sort: [{ field: "Date added", direction: "desc" }],
+    sort: [{ field: "Date joined", direction: "desc" }],
     fields: [
       "Name",
       "email",
@@ -30,7 +30,7 @@ async function main() {
       "Country",
       "Industry",
       "Traction",
-      "Date added",
+      "Date joined",
     ],
   });
 

@@ -34,7 +34,7 @@ export async function GET() {
   const [unlistedRecords, listedRecords] = await Promise.all([
     client.listRecords("Members", {
       filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", ${excludeFilter})`,
-      sort: [{ field: "Date added", direction: "desc" }],
+      sort: [{ field: "Date joined", direction: "desc" }],
     }),
     client.listRecords("Members", {
       filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", NOT(${excludeFilter}))`,

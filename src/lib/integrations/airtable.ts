@@ -45,7 +45,9 @@ export function createAirtableClient(config: AirtableConfig) {
     }
 
     if (!res.ok) {
-      throw new Error(`Airtable API error: ${res.status} ${res.statusText}`);
+      const body = await res.text();
+      console.error(`[Airtable] ${res.status} ${res.statusText}:`, body);
+      throw new Error(`Airtable API error: ${res.status} ${res.statusText} — ${body}`);
     }
 
     return res;

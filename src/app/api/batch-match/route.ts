@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
 
   const records = await airtable.listRecords("Members", {
     filterByFormula: formula,
-    sort: [{ field: "Date added", direction: "desc" }],
+    sort: [{ field: "Date joined", direction: "desc" }],
   });
 
   // Group by city
@@ -110,7 +110,7 @@ export async function GET(request: NextRequest) {
       postcode: String(r.fields["post code"] || ""),
       industry: String(r.fields["Industry"] || ""),
       traction: String(r.fields["Traction"] || ""),
-      dateAdded: String(r.fields["Date added"] || r.createdTime || ""),
+      dateAdded: String(r.fields["Date joined"] || r.createdTime || ""),
       inPinecone: false,
       profile: null,
       matches: [],

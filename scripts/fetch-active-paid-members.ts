@@ -20,7 +20,7 @@ async function main() {
 
   const records = await client.listRecords("Members", {
     filterByFormula: 'AND({Membership} = "Active", {Payment} = "Paid")',
-    sort: [{ field: "Date added", direction: "desc" }],
+    sort: [{ field: "Date joined", direction: "desc" }],
     maxRecords: 10,
     fields: [
       "Name",
@@ -31,7 +31,7 @@ async function main() {
       "Traction",
       "Membership",
       "Payment",
-      "Date added",
+      "Date joined",
       "Days Active",
     ],
   });
@@ -44,8 +44,8 @@ async function main() {
 
   for (const [i, r] of records.entries()) {
     const f = r.fields;
-    const dateAdded = f["Date added"]
-      ? new Date(f["Date added"] as string).toISOString().slice(0, 10)
+    const dateAdded = f["Date joined"]
+      ? new Date(f["Date joined"] as string).toISOString().slice(0, 10)
       : "N/A";
 
     console.log(

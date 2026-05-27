@@ -54,6 +54,7 @@ function matchSublocation(city: string, cityGroup: CityGroup): string {
 }
 
 export async function GET(request: NextRequest) {
+  try {
   const token = process.env.AIRTABLE_GET_DATA_TOKEN;
   const baseId = process.env.AIRTABLE_BASE_ID;
 
@@ -95,7 +96,7 @@ export async function GET(request: NextRequest) {
 
     const records = await client.listRecords("Members", {
       filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", ${cityFilter}, ${dateFilter})`,
-      sort: [{ field: "Date added", direction: "desc" }],
+      sort: [{ field: "Date joined", direction: "desc" }],
     });
 
     // Build sublocation breakdown
@@ -138,7 +139,7 @@ export async function GET(request: NextRequest) {
   if (!cityParam) {
     const allRecords = await client.listRecords("Members", {
       filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", ${dateFilter})`,
-      sort: [{ field: "Date added", direction: "desc" }],
+      sort: [{ field: "Date joined", direction: "desc" }],
     });
 
     const matchedEmails = new Set(results.flatMap((r) => r.emails));
@@ -200,4 +201,11 @@ export async function GET(request: NextRequest) {
       breakdown,
     })),
   });
+  } catch (err) {
+    console.error("[API] get-daily-new-customers-for-cities error:", err);
+    return NextResponse.json(
+      { success: false, error: String(err) },
+      { status: 500 }
+    );
+  }
 }
