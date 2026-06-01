@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
-import { db } from "@/db";
-import { opRuns } from "@/db/schema";
-import { desc } from "drizzle-orm";
+
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
+    const { db } = await import("@/db");
+    const { opRuns } = await import("@/db/schema");
+    const { desc } = await import("drizzle-orm");
+
     const lastRuns = db
       .select()
       .from(opRuns)

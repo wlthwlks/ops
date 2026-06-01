@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { Button, Card, Collapse, DatePicker, Divider, Empty, Input, Modal, Select, Spin, Tag, Typography, Space, message, Checkbox } from "antd";
-import { SearchOutlined, MailOutlined, CheckCircleOutlined, SyncOutlined, SettingOutlined, DownOutlined, UpOutlined, EditOutlined, CopyOutlined, TeamOutlined, CalendarOutlined as CalendarIcon } from "@ant-design/icons";
+import { Button, Card, Collapse, DatePicker, Divider, Empty, Flex, Input, Modal, Select, Spin, Table, Tag, Typography, Space, message, Checkbox } from "antd";
+import { SearchOutlined, MailOutlined, CheckCircleOutlined, SyncOutlined, SettingOutlined, DownOutlined, UpOutlined, EditOutlined, CopyOutlined, TeamOutlined, CalendarOutlined as CalendarIcon, SlackOutlined, SendOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
+import { generateMatchMessage } from "@/lib/messaging/generate-match-message";
 
 const { RangePicker } = DatePicker;
 
@@ -380,72 +381,27 @@ export default function GetMatchedPage() {
 
     const member = response.member;
     const selected = response.matches.filter((m) => selectedIds.has(m.id));
-    const memberName = String(member.name).split(" ")[0];
-    const matchNames = selected.map((m) => String(m.name).split(" ")[0]);
 
-    // Emails
-    const emails = [String(member.email), ...selected.map((m) => String(m.email))].join(", ");
-
-    // Overlapping locations — find places that appear in multiple members' nearby lists
-    const allLocSets = [member, ...selected].map((m) => {
-      const locs = String(m.nearbyLocation || "").split(/\s*[|,]\s*/).map((l) => l.trim()).filter((l) => l.length > 1);
-      return new Set(locs);
+    const msg = generateMatchMessage({
+      newMember: {
+        name: String(member.name),
+        email: String(member.email),
+        industry: String(member.industry || ""),
+        businessStage: String(member.businessStage || ""),
+        nearbyLocation: String(member.nearbyLocation || ""),
+      },
+      matches: selected.map((m) => ({
+        name: String(m.name),
+        email: String(m.email),
+        industry: String(m.industry || ""),
+        businessStage: String(m.businessStage || ""),
+        nearbyLocation: String(m.nearbyLocation || ""),
+      })),
+      format: "plaintext",
     });
-    // Count how many members share each location
-    const locCounts = new Map<string, number>();
-    for (const locSet of allLocSets) {
-      for (const loc of locSet) {
-        locCounts.set(loc, (locCounts.get(loc) ?? 0) + 1);
-      }
-    }
-    // Prefer locations shared by all, then most, take top 3
-    const meetingSpots = Array.from(locCounts.entries())
-      .filter(([, count]) => count >= 2)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([loc]) => loc);
 
-    // Two similarity reasons
-    const reasons: string[] = [];
-    const memberStage = String(member.businessStage || "");
-    const matchStages = selected.map((m) => String(m.businessStage || ""));
-    if (matchStages.some((s) => s === memberStage) && memberStage) {
-      reasons.push(`you're at a similar business stage (${memberStage})`);
-    }
-    const memberInd = String(member.industry || "").toLowerCase();
-    const matchInds = selected.map((m) => String(m.industry || "").toLowerCase());
-    if (matchInds.some((ind) => ind === memberInd) && memberInd) {
-      reasons.push(`you share the same industry (${String(member.industry)})`);
-    }
-    if (reasons.length < 2 && meetingSpots.length > 0) {
-      reasons.push("you're based in the same area");
-    }
-
-    // Format names nicely
-    const nameList =
-      matchNames.length === 1
-        ? matchNames[0]
-        : matchNames.slice(0, -1).join(", ") + " and " + matchNames[matchNames.length - 1];
-
-    // Build the message
-    const lines: string[] = [];
-    lines.push(`Dear ${memberName},`);
-    lines.push("");
-    lines.push(`Welcome to the community! We've found some great connections for you.`);
-    lines.push("");
-    lines.push(`We'd love to introduce you to ${nameList} — we noticed some exciting similarities between you${reasons.length > 0 ? ": " + reasons.slice(0, 2).join(", and ") : ""}.`);
-    lines.push("");
-    if (meetingSpots.length > 0) {
-      lines.push(`Here are a few suggested meeting spots near you: ${meetingSpots.join(", ")}.`);
-      lines.push("");
-    }
-    lines.push("Looking forward to seeing you connect!");
-    lines.push("");
-    lines.push("Best,");
-    lines.push("The WLTH WLKS Team");
-
-    setDraftEmails(emails);
-    setDraftText(lines.join("\n"));
+    setDraftEmails(msg.recipients.join(", "));
+    setDraftText(msg.body);
     setDraftVisible(true);
   }
 
@@ -465,6 +421,100 @@ export default function GetMatchedPage() {
   const [batchDraftVisible, setBatchDraftVisible] = useState(false);
   const [batchDraftText, setBatchDraftText] = useState("");
   const [batchDraftEmails, setBatchDraftEmails] = useState("");
+
+  // ─── Slack intro state ───
+  const [slackDateRange, setSlackDateRange] = useState<[Dayjs, Dayjs]>([dayjs(), dayjs()]);
+  const [slackEmailInput, setSlackEmailInput] = useState("");
+  const [slackLoadMode, setSlackLoadMode] = useState<"date" | "email">("date");
+  const [slackLoading, setSlackLoading] = useState(false);
+  const [slackSending, setSlackSending] = useState(false);
+  interface SlackDeliveryMatch {
+    name: string;
+    email: string;
+    city: string;
+    industry: string;
+    traction: string;
+    businessStage: string;
+    nearbyLocation: string;
+    hasBusinessDomain: boolean;
+    similarityScore: number;
+    onSlack: boolean;
+  }
+  interface SlackDelivery {
+    newMemberName: string;
+    newMemberEmail: string;
+    newMemberCity: string;
+    newMemberIndustry: string;
+    newMemberTraction: string;
+    newMemberNearbyLocation: string;
+    newMemberBusinessStage: string;
+    newMemberOnSlack: boolean;
+    matches: SlackDeliveryMatch[];
+    slackMembersFound: string[];
+    slackMembersMissing: string[];
+    slackSent: boolean;
+    slackChannelId: string | null;
+    slackMessage: string | null;
+    error: string | null;
+  }
+  const [slackDeliveries, setSlackDeliveries] = useState<SlackDelivery[]>([]);
+  const [slackSummary, setSlackSummary] = useState<string | null>(null);
+  const [slackError, setSlackError] = useState<string | null>(null);
+  const [slackLogs, setSlackLogs] = useState<string[]>([]);
+  const [slackPreviewed, setSlackPreviewed] = useState(false);
+
+  async function callMatchIntros(mode: "preview" | "send") {
+    const isPreview = mode === "preview";
+    if (isPreview) {
+      setSlackLoading(true);
+      setSlackPreviewed(false);
+    } else {
+      setSlackSending(true);
+    }
+    setSlackError(null);
+    if (isPreview) {
+      setSlackDeliveries([]);
+      setSlackSummary(null);
+      setSlackLogs([]);
+    }
+
+    try {
+      const bodyObj: Record<string, unknown> = { mode };
+      if (slackLoadMode === "email" && slackEmailInput.trim()) {
+        bodyObj.emails = slackEmailInput.split(/[,\s]+/).map((e) => e.trim().toLowerCase()).filter(Boolean);
+      } else {
+        bodyObj.startDate = slackDateRange[0].format("YYYY-MM-DD");
+        bodyObj.endDate = slackDateRange[1].format("YYYY-MM-DD");
+      }
+
+      const res = await fetch("/api/send-match-intros", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(bodyObj),
+      });
+      const data = await res.json();
+
+      if (!data.success) {
+        setSlackError(data.summary || data.error || "Failed");
+        return;
+      }
+
+      setSlackDeliveries(data.deliveries || []);
+      setSlackSummary(data.summary);
+      setSlackLogs(data.logs || []);
+      if (isPreview) {
+        setSlackPreviewed(true);
+      } else {
+        message.success(data.summary);
+        setSlackPreviewed(false);
+      }
+    } catch (err) {
+      setSlackError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setSlackLoading(false);
+      setSlackSending(false);
+    }
+  }
 
   async function handleBatchMatch() {
     setBatchLoading(true);
@@ -524,62 +574,27 @@ export default function GetMatchedPage() {
     }
 
     const selected = newMember.matches.filter((m) => selectedSet.has(m.id));
-    const memberName = newMember.name.split(" ")[0];
-    const matchNames = selected.map((m) => String(m.name).split(" ")[0]);
-    const emails = [newMember.email, ...selected.map((m) => String(m.email))].join(", ");
 
-    // Overlapping locations — find places shared across the new member + selected matches
-    const newMemberLocs = String(newMember.profile?.nearbyLocation || "").split(/\s*[|,]\s*/).map((l) => l.trim()).filter((l) => l.length > 1);
-    const allLocSets = [new Set(newMemberLocs), ...selected.map((m) => {
-      const locs = String(m.nearbyLocation || "").split(/\s*[|,]\s*/).map((l) => l.trim()).filter((l) => l.length > 1);
-      return new Set(locs);
-    })];
-    const locCounts = new Map<string, number>();
-    for (const locSet of allLocSets) {
-      for (const loc of locSet) {
-        locCounts.set(loc, (locCounts.get(loc) ?? 0) + 1);
-      }
-    }
-    const meetingSpots = Array.from(locCounts.entries())
-      .filter(([, count]) => count >= 2)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([loc]) => loc);
+    const msg = generateMatchMessage({
+      newMember: {
+        name: newMember.name,
+        email: newMember.email,
+        industry: newMember.industry,
+        businessStage: String(newMember.profile?.businessStage || ""),
+        nearbyLocation: String(newMember.profile?.nearbyLocation || ""),
+      },
+      matches: selected.map((m) => ({
+        name: String(m.name),
+        email: String(m.email),
+        industry: String(m.industry || ""),
+        businessStage: String(m.businessStage || ""),
+        nearbyLocation: String(m.nearbyLocation || ""),
+      })),
+      format: "plaintext",
+    });
 
-    const reasons: string[] = [];
-    const matchStages = selected.map((m) => String(m.businessStage || ""));
-    if (matchStages.some((s) => s === newMember.traction) && newMember.traction) {
-      reasons.push(`you're at a similar revenue stage`);
-    }
-    const matchInds = selected.map((m) => String(m.industry || "").toLowerCase());
-    if (matchInds.some((ind) => ind === newMember.industry.toLowerCase()) && newMember.industry) {
-      reasons.push(`you share the same industry (${newMember.industry})`);
-    }
-    if (reasons.length < 2 && meetingSpots.length > 0) reasons.push("you're based in the same area");
-
-    const nameList =
-      matchNames.length === 1
-        ? matchNames[0]
-        : matchNames.slice(0, -1).join(", ") + " and " + matchNames[matchNames.length - 1];
-
-    const lines: string[] = [];
-    lines.push(`Dear ${memberName},`);
-    lines.push("");
-    lines.push("Welcome to the community! We've found some great connections for you.");
-    lines.push("");
-    lines.push(`We'd love to introduce you to ${nameList} — we noticed some exciting similarities between you${reasons.length > 0 ? ": " + reasons.slice(0, 2).join(", and ") : ""}.`);
-    lines.push("");
-    if (meetingSpots.length > 0) {
-      lines.push(`Here are a few suggested meeting spots near you: ${meetingSpots.join(", ")}.`);
-      lines.push("");
-    }
-    lines.push("Looking forward to seeing you connect!");
-    lines.push("");
-    lines.push("Best,");
-    lines.push("The WLTH WLKS Team");
-
-    setBatchDraftEmails(emails);
-    setBatchDraftText(lines.join("\n"));
+    setBatchDraftEmails(msg.recipients.join(", "));
+    setBatchDraftText(msg.body);
     setBatchDraftVisible(true);
   }
 
@@ -594,7 +609,7 @@ export default function GetMatchedPage() {
   return (
     <div style={{ maxWidth: 1100 }}>
       {/* Refresh Analysis */}
-      <Space direction="vertical" size="middle" style={{ width: "100%", marginBottom: 24 }}>
+      <Flex vertical gap="middle" style={{ width: "100%", marginBottom: 24 }}>
         <div>
           <Title level={4} style={{ margin: 0 }}>
             First, refresh analysis to remove members and update existing members
@@ -645,10 +660,10 @@ export default function GetMatchedPage() {
             )}
           </Card>
         )}
-      </Space>
+      </Flex>
 
       {/* Match Search */}
-      <Space direction="vertical" size="middle" style={{ width: "100%", marginBottom: 24 }}>
+      <Flex vertical gap="middle" style={{ width: "100%", marginBottom: 24 }}>
         <div>
           <Title level={3} style={{ margin: 0 }}>
             Custom Matching
@@ -686,7 +701,7 @@ export default function GetMatchedPage() {
             Draft Message {selectedCount > 0 ? `(${selectedCount})` : ""}
           </Button>
         </Space>
-      </Space>
+      </Flex>
 
       {error && (
         <Card style={{ marginBottom: 16, borderColor: "#ff4d4f" }}>
@@ -795,7 +810,7 @@ export default function GetMatchedPage() {
       {/* ═══════ Batch Match New Members ═══════ */}
       <Divider style={{ marginTop: 40 }} />
 
-      <Space direction="vertical" size="middle" style={{ width: "100%", marginBottom: 24 }}>
+      <Flex vertical gap="middle" style={{ width: "100%", marginBottom: 24 }}>
         <div>
           <Title level={3} style={{ margin: 0 }}>
             <TeamOutlined style={{ marginRight: 8 }} />
@@ -825,7 +840,7 @@ export default function GetMatchedPage() {
             Find &amp; Match New Members
           </Button>
         </Space>
-      </Space>
+      </Flex>
 
       {batchError && (
         <Card style={{ marginBottom: 16, borderColor: "#ff4d4f" }}>
@@ -994,6 +1009,249 @@ export default function GetMatchedPage() {
             />
           )}
         </div>
+      )}
+
+      {/* ═══════ Send Slack Introductions ═══════ */}
+      <Divider style={{ marginTop: 40 }} />
+
+      <Flex vertical gap="middle" style={{ width: "100%", marginBottom: 24 }}>
+        <div>
+          <Title level={3} style={{ margin: 0 }}>
+            <SlackOutlined style={{ marginRight: 8 }} />
+            Send Slack Introductions
+          </Title>
+          <Text type="secondary">
+            Load members by email or date range, preview matches, then approve to send Slack group DMs.
+          </Text>
+        </div>
+
+        <Flex gap={8} align="center">
+          <Select
+            value={slackLoadMode}
+            onChange={(v) => { setSlackLoadMode(v); setSlackPreviewed(false); setSlackDeliveries([]); setSlackSummary(null); }}
+            options={[
+              { value: "date", label: "By date range" },
+              { value: "email", label: "By email" },
+            ]}
+            style={{ width: 150 }}
+          />
+          {slackLoadMode === "date" ? (
+            <RangePicker
+              value={slackDateRange}
+              onChange={(dates) => {
+                if (dates && dates[0] && dates[1]) setSlackDateRange([dates[0], dates[1]]);
+              }}
+              presets={DATE_PRESETS}
+              disabledDate={(current) => current && current.isAfter(dayjs(), "day")}
+              allowClear={false}
+            />
+          ) : (
+            <Input
+              placeholder="member@example.com (comma-separated)"
+              value={slackEmailInput}
+              onChange={(e) => setSlackEmailInput(e.target.value)}
+              style={{ width: 400 }}
+              prefix={<MailOutlined />}
+            />
+          )}
+          <Button
+            type="primary"
+            icon={<SearchOutlined />}
+            onClick={() => callMatchIntros("preview")}
+            loading={slackLoading}
+          >
+            {slackLoading ? "Loading..." : "Preview Matches"}
+          </Button>
+        </Flex>
+      </Flex>
+
+      {slackError && (
+        <Card style={{ marginBottom: 16, borderColor: "#ff4d4f" }}>
+          <Text type="danger">{slackError}</Text>
+        </Card>
+      )}
+
+      {slackLoading && (
+        <div style={{ textAlign: "center", padding: 48 }}>
+          <Spin size="large" />
+          <div style={{ marginTop: 16 }}>
+            <Text type="secondary">Matching members and checking Slack...</Text>
+          </div>
+        </div>
+      )}
+
+      {slackSummary && !slackLoading && (
+        <Flex vertical gap={16} style={{ marginBottom: 24 }}>
+          <Card size="small" style={{ background: slackPreviewed ? "#e6f7ff" : "#f6ffed", borderColor: slackPreviewed ? "#91d5ff" : "#b7eb8f" }}>
+            <Flex justify="space-between" align="center">
+              <div>
+                <Text strong>{slackSummary}</Text>
+                {slackPreviewed && (
+                  <div style={{ marginTop: 4 }}>
+                    <Text type="secondary" style={{ fontSize: 12 }}>
+                      <SlackOutlined style={{ marginRight: 4 }} />
+                      {slackDeliveries.reduce((n, d) => n + d.slackMembersFound.length, 0)} members on Slack,{" "}
+                      {slackDeliveries.reduce((n, d) => n + d.slackMembersMissing.length, 0)} not on Slack
+                    </Text>
+                  </div>
+                )}
+              </div>
+              {slackPreviewed && slackDeliveries.some((d) => !d.error && d.slackMembersFound.length >= 2) && (
+                <Button
+                  type="primary"
+                  danger
+                  icon={<SendOutlined />}
+                  onClick={() => callMatchIntros("send")}
+                  loading={slackSending}
+                  size="large"
+                >
+                  {slackSending ? "Sending..." : "Approve & Send Slack Messages"}
+                </Button>
+              )}
+              {!slackPreviewed && slackDeliveries.some((d) => d.slackSent) && (
+                <Tag color="green" style={{ fontSize: 14, padding: "4px 12px" }}>Messages Sent</Tag>
+              )}
+            </Flex>
+          </Card>
+
+          {slackDeliveries.map((delivery) => (
+            <Card
+              key={delivery.newMemberEmail}
+              size="small"
+              style={{
+                borderColor: delivery.slackSent ? "#b7eb8f" : delivery.error ? "#ffccc7" : undefined,
+              }}
+            >
+              {/* New member header */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <div>
+                  <Text strong>{delivery.newMemberName}</Text>
+                  <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>{delivery.newMemberEmail}</Text>
+                  <br />
+                  <Space size={4} style={{ marginTop: 4 }}>
+                    {delivery.newMemberCity && <Tag>{delivery.newMemberCity}</Tag>}
+                    {delivery.newMemberIndustry && <Tag>{delivery.newMemberIndustry}</Tag>}
+                    {delivery.newMemberTraction && <Tag>{delivery.newMemberTraction}</Tag>}
+                    {delivery.newMemberOnSlack ? <Tag color="blue"><SlackOutlined /> On Slack</Tag> : <Tag>Not on Slack</Tag>}
+                    {delivery.error && <Tag color="red">{delivery.error}</Tag>}
+                    {delivery.slackSent && <Tag color="green">Slack DM Sent</Tag>}
+                    {!delivery.slackSent && !delivery.error && slackPreviewed && delivery.slackMembersFound.length >= 2 && (
+                      <Tag color="blue">Ready to send</Tag>
+                    )}
+                  </Space>
+                </div>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  {delivery.slackMembersFound.length}/{delivery.slackMembersFound.length + delivery.slackMembersMissing.length} on Slack
+                </Text>
+              </div>
+
+              {/* Match cards grid */}
+              {delivery.matches.length > 0 && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
+                  {/* Being matched card */}
+                  <Card size="small" style={{ background: "#f6ffed", borderColor: "#b7eb8f" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <Text strong style={{ fontSize: 13 }}>{delivery.newMemberName}</Text>
+                        <br />
+                        <Text type="secondary" style={{ fontSize: 11, wordBreak: "break-all" }}>{delivery.newMemberEmail}</Text>
+                      </div>
+                      <Tag color="green" style={{ flexShrink: 0, marginLeft: 6, fontWeight: 600 }}>Being matched</Tag>
+                    </div>
+                    <MemberCardBody m={{
+                      name: delivery.newMemberName,
+                      email: delivery.newMemberEmail,
+                      postcode: "",
+                      city: delivery.newMemberCity,
+                      nearbyLocation: delivery.newMemberNearbyLocation,
+                      active: true,
+                      industry: delivery.newMemberIndustry,
+                      traction: delivery.newMemberTraction,
+                      hasBusinessDomain: false,
+                      businessStage: delivery.newMemberBusinessStage,
+                    }} />
+                  </Card>
+
+                  {/* Match cards */}
+                  {delivery.matches.map((match, idx) => (
+                    <Card
+                      key={match.email}
+                      size="small"
+                      style={{
+                        borderColor: match.onSlack ? "#91d5ff" : undefined,
+                        background: match.onSlack ? "#f0f5ff" : undefined,
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <Text strong style={{ fontSize: 13 }}>#{idx + 1} {match.name}</Text>
+                          <br />
+                          <Text type="secondary" style={{ fontSize: 11, wordBreak: "break-all" }}>{match.email}</Text>
+                        </div>
+                        <Flex gap={4} align="center" style={{ flexShrink: 0, marginLeft: 6 }}>
+                          {match.onSlack && <Tag color="blue"><SlackOutlined /> Slack</Tag>}
+                          <div style={{
+                            background: scoreColor(match.similarityScore),
+                            color: "#fff", borderRadius: 6,
+                            padding: "1px 8px", fontSize: 12, fontWeight: 600,
+                          }}>
+                            {Math.round(match.similarityScore * 100)}%
+                          </div>
+                        </Flex>
+                      </div>
+                      <MemberCardBody m={{
+                        name: match.name,
+                        email: match.email,
+                        postcode: "",
+                        city: match.city,
+                        nearbyLocation: match.nearbyLocation,
+                        active: true,
+                        industry: match.industry,
+                        traction: match.traction,
+                        hasBusinessDomain: match.hasBusinessDomain,
+                        businessStage: match.businessStage,
+                      }} />
+                    </Card>
+                  ))}
+                </div>
+              )}
+
+              {/* Slack message preview */}
+              {delivery.slackMessage && (
+                <Collapse
+                  style={{ marginTop: 12 }}
+                  items={[{
+                    key: "msg",
+                    label: <Text type="secondary" style={{ fontSize: 12 }}>Slack message preview</Text>,
+                    children: (
+                      <pre style={{ margin: 0, fontSize: 12, lineHeight: "18px", whiteSpace: "pre-wrap", background: "#f5f5f5", padding: 12, borderRadius: 6 }}>
+                        {delivery.slackMessage}
+                      </pre>
+                    ),
+                  }]}
+                />
+              )}
+            </Card>
+          ))}
+
+          {slackLogs.length > 0 && (
+            <Collapse
+              items={[{
+                key: "logs",
+                label: <Text type="secondary">Execution logs ({slackLogs.length} lines)</Text>,
+                children: (
+                  <div style={{ maxHeight: 200, overflow: "auto" }}>
+                    {slackLogs.map((log, i) => (
+                      <div key={i}>
+                        <Text type="secondary" style={{ fontSize: 12, fontFamily: "monospace" }}>{log}</Text>
+                      </div>
+                    ))}
+                  </div>
+                ),
+              }]}
+            />
+          )}
+        </Flex>
       )}
 
       {/* Batch Draft Modal */}

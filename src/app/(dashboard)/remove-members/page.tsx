@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Button, Card, DatePicker, Empty, Spin, Steps, Table, Tag, Typography, Space, message } from "antd";
+import { Button, Card, DatePicker, Empty, Flex, Spin, Steps, Table, Tag, Typography, Space, message } from "antd";
 import { CopyOutlined, ExportOutlined, ReloadOutlined } from "@ant-design/icons";
 import dayjs, { Dayjs } from "dayjs";
 
@@ -125,7 +125,7 @@ export default function RemoveMembersPage() {
 
   return (
     <div style={{ maxWidth: 1100 }}>
-      <Space direction="vertical" size="middle" style={{ width: "100%", marginBottom: 16 }}>
+      <Flex vertical gap="middle" style={{ width: "100%", marginBottom: 16 }}>
         <div>
           <Title level={3} style={{ margin: 0 }}>
             Remove Members
@@ -215,7 +215,7 @@ export default function RemoveMembersPage() {
             Export CSV
           </Button>
         </Space>
-      </Space>
+      </Flex>
 
       {error && (
         <Card style={{ marginBottom: 16 }}>

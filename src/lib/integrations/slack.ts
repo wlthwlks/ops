@@ -14,10 +14,31 @@ const SLACK_API = "https://slack.com/api";
 
 export function createSlackClient(config: SlackConfig) {
   async function slackApi(method: string, body: Record<string, unknown>): Promise<any> {
+    // Use JSON for methods that support it, form-encoded for those that don't
+    const jsonMethods = new Set([
+      "chat.postMessage", "conversations.open", "conversations.history",
+    ]);
+    const useJson = jsonMethods.has(method);
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${config.botToken}`,
+    };
+
+    let reqBody: string;
+    if (useJson) {
+      headers["Content-Type"] = "application/json";
+      reqBody = JSON.stringify(body);
+    } else {
+      headers["Content-Type"] = "application/x-www-form-urlencoded";
+      reqBody = new URLSearchParams(
+        Object.entries(body).map(([k, v]) => [k, String(v)])
+      ).toString();
+    }
+
     const res = await fetch(`${SLACK_API}/${method}`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${config.botToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      headers,
+      body: reqBody,
     });
     const data = await res.json();
     if (!data.ok) throw new Error(`Slack API error: ${data.error}`);
@@ -45,7 +66,33 @@ export function createSlackClient(config: SlackConfig) {
     await fetch(config.webhookUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
   }
 
-  return { postMessage, getChannelHistory, sendWebhook };
+  /**
+   * Look up a Slack user by email. Returns null if the user is not in the workspace.
+   * Requires the `users:read.email` bot scope.
+   */
+  async function lookupByEmail(email: string): Promise<{ id: string; name: string } | null> {
+    try {
+      const data = await slackApi("users.lookupByEmail", { email });
+      return { id: data.user.id, name: data.user.real_name || data.user.name };
+    } catch (err) {
+      // users_not_found is expected for members not in Slack
+      if (err instanceof Error && err.message.includes("users_not_found")) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Open a group DM (multi-person IM) with the given user IDs.
+   * Requires the `mpim:write` bot scope. Max 8 users.
+   */
+  async function conversationsOpen(userIds: string[]): Promise<{ channelId: string }> {
+    const data = await slackApi("conversations.open", { users: userIds.join(",") });
+    return { channelId: data.channel.id };
+  }
+
+  return { postMessage, getChannelHistory, sendWebhook, lookupByEmail, conversationsOpen };
 }
 
 export type SlackClient = ReturnType<typeof createSlackClient>;
