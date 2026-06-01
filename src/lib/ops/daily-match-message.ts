@@ -239,11 +239,26 @@ export async function runDailyMatchMessage(
       ctx.log(`  ${newMemberName}: ${slackUserIds.size}/${allEmails.length} on Slack`);
 
       // 5. Send Slack group DM to members on Slack
-      // TEST MODE: when sending, only include allowlisted emails as recipients.
-      // Preview always shows real Slack status so you can see who would receive DMs.
-      const sendSlackUserIds = mode === "send"
-        ? new Map(Array.from(slackUserIds.entries()).filter(([e]) => SLACK_TEST_ALLOWLIST.has(e.toLowerCase())))
-        : slackUserIds;
+      // TEST MODE: when sending, deliver DM to the test allowlist users only
+      // (regardless of whether they're in the match group). This lets you test
+      // the full flow without messaging real members. Preview shows real status.
+      let sendSlackUserIds: Map<string, string>;
+      if (mode === "send") {
+        // Resolve allowlist emails to Slack IDs (they may not be in the match group)
+        const testIds = new Map<string, string>();
+        for (const testEmail of SLACK_TEST_ALLOWLIST) {
+          const existing = slackUserIds.get(testEmail);
+          if (existing) {
+            testIds.set(testEmail, existing);
+          } else {
+            const looked = await slack.lookupByEmail(testEmail);
+            if (looked) testIds.set(testEmail, looked.id);
+          }
+        }
+        sendSlackUserIds = testIds;
+      } else {
+        sendSlackUserIds = slackUserIds;
+      }
 
       // Generate the message for preview/sending
       const newMemberAsMsgMember: MessageMember = {
