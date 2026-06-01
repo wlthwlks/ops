@@ -1146,7 +1146,7 @@ export default function GetMatchedPage() {
               </div>
 
               {/* Match cards grid */}
-              {delivery.matches.length > 0 && (
+              {delivery.matches?.length > 0 && (
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
                   {/* Being matched card */}
                   <Card size="small" style={{ background: "#f6ffed", borderColor: "#b7eb8f" }}>

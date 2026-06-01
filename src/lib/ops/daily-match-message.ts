@@ -239,12 +239,11 @@ export async function runDailyMatchMessage(
       ctx.log(`  ${newMemberName}: ${slackUserIds.size}/${allEmails.length} on Slack`);
 
       // 5. Send Slack group DM to members on Slack
-      // TEST MODE: only include allowlisted emails as actual Slack DM recipients.
-      // The message still mentions ALL matched members by name, but the DM only
-      // goes to allowlisted Slack users. Remove the filter to go live.
-      const safeSlackUserIds = new Map(
-        Array.from(slackUserIds.entries()).filter(([e]) => SLACK_TEST_ALLOWLIST.has(e.toLowerCase()))
-      );
+      // TEST MODE: when sending, only include allowlisted emails as recipients.
+      // Preview always shows real Slack status so you can see who would receive DMs.
+      const sendSlackUserIds = mode === "send"
+        ? new Map(Array.from(slackUserIds.entries()).filter(([e]) => SLACK_TEST_ALLOWLIST.has(e.toLowerCase())))
+        : slackUserIds;
 
       // Generate the message for preview/sending
       const newMemberAsMsgMember: MessageMember = {
@@ -264,8 +263,8 @@ export async function runDailyMatchMessage(
 
       delivery.slackMessage = msg.body;
 
-      if (safeSlackUserIds.size >= 2 && mode === "send") {
-        const slackIds = Array.from(safeSlackUserIds.values());
+      if (sendSlackUserIds.size >= 2 && mode === "send") {
+        const slackIds = Array.from(sendSlackUserIds.values());
         const { channelId } = await slack.conversationsOpen(slackIds);
         await slack.postMessage(channelId, msg.body);
 
@@ -273,11 +272,11 @@ export async function runDailyMatchMessage(
         delivery.slackChannelId = channelId;
         slackSentCount++;
         ctx.log(`  ${newMemberName}: Slack group DM sent (${slackIds.length} members)`);
-      } else if (safeSlackUserIds.size >= 2 && mode === "preview") {
-        ctx.log(`  ${newMemberName}: ${safeSlackUserIds.size} eligible for Slack DM (preview only)`);
-      } else if (slackUserIds.size >= 2 && safeSlackUserIds.size < 2) {
+      } else if (sendSlackUserIds.size >= 2 && mode === "preview") {
+        ctx.log(`  ${newMemberName}: ${sendSlackUserIds.size} eligible for Slack DM (preview only)`);
+      } else if (slackUserIds.size >= 2 && sendSlackUserIds.size < 2 && mode === "send") {
         delivery.error = "Test mode: <2 allowlisted members on Slack";
-        ctx.log(`  ${newMemberName}: Slack skipped (test mode — ${safeSlackUserIds.size} allowlisted of ${slackUserIds.size} on Slack)`);
+        ctx.log(`  ${newMemberName}: Slack skipped (test mode — ${sendSlackUserIds.size} allowlisted of ${slackUserIds.size} on Slack)`);
       } else {
         ctx.log(`  ${newMemberName}: Slack skipped (<2 members on Slack)`);
       }
