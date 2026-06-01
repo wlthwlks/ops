@@ -126,7 +126,7 @@ export async function runDailyMatchMessage(
 
     const newMemberCity = String(record.fields["City"] || "");
     const newMemberIndustry = String(record.fields["Industry"] || "");
-    const newMemberTraction = String(record.fields["Traction"] || "");
+    const newMemberTraction = String(record.fields["Revenue"] || "");
 
     const delivery: DeliveryResult = {
       newMemberName,

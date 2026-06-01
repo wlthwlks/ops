@@ -49,7 +49,7 @@ async function main() {
       : "N/A";
 
     console.log(
-      `${String(i + 1).padEnd(3)} ${String(f["Name"] || "").padEnd(25)} ${String(f["email"] || "").padEnd(35)} ${String(f["City"] || "").padEnd(15)} ${String(f["Industry"] || "").padEnd(15)} ${String(f["Traction"] || "").padEnd(15)} ${dateAdded.padEnd(12)} ${String(f["Days Active"] || "")}`
+      `${String(i + 1).padEnd(3)} ${String(f["Name"] || "").padEnd(25)} ${String(f["email"] || "").padEnd(35)} ${String(f["City"] || "").padEnd(15)} ${String(f["Industry"] || "").padEnd(15)} ${String(f["Revenue"] || "").padEnd(15)} ${dateAdded.padEnd(12)} ${String(f["Days Active"] || "")}`
     );
   }
 

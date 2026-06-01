@@ -65,7 +65,7 @@ async function enrichMember(
   const postcode = String(f["post code"] || "");
   const city = String(f["City"] || "");
   const industry = String(f["Industry"] || "");
-  const traction = String(f["Traction"] || "");
+  const traction = String(f["Revenue"] || "");
 
   const businessStage = toBusinessStage(traction);
   const hasBizDomain = hasBusinessDomain(email);
@@ -232,7 +232,7 @@ export async function runPineconeSync(
     } else {
       // Location same — check if other metadata changed
       const currentIndustry = String(record.fields["Industry"] || "");
-      const currentTraction = String(record.fields["Traction"] || "");
+      const currentTraction = String(record.fields["Revenue"] || "");
       const existingIndustry = String(existing.industry || "");
       const existingTraction = String(existing.traction || "");
 
@@ -308,7 +308,7 @@ export async function runPineconeSync(
       const f = record.fields;
       const email = String(f["email"] || "");
       const industry = String(f["Industry"] || "");
-      const traction = String(f["Traction"] || "");
+      const traction = String(f["Revenue"] || "");
 
       metaVectors.push({
         id: record.id,

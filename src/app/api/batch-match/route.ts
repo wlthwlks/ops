@@ -105,7 +105,7 @@ export async function GET(request: NextRequest) {
       city: String(r.fields["City"] || ""),
       postcode: String(r.fields["post code"] || ""),
       industry: String(r.fields["Industry"] || ""),
-      traction: String(r.fields["Traction"] || ""),
+      traction: String(r.fields["Revenue"] || ""),
       dateAdded: String(r.fields["Date joined"] || r.createdTime || ""),
       inPinecone: false,
       profile: null,

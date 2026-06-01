@@ -54,7 +54,7 @@ async function main() {
     const postcode = String(f["post code"] || "");
     const city = String(f["City"] || "London");
     const industry = String(f["Industry"] || "");
-    const traction = String(f["Traction"] || "");
+    const traction = String(f["Revenue"] || "");
     const businessStage = toBusinessStage(traction);
     const hasBizDomain = hasBusinessDomain(email);
 

@@ -49,7 +49,7 @@ async function main() {
   for (const [i, r] of records.entries()) {
     const f = r.fields;
     console.log(
-      `${String(i + 1).padEnd(3)} ${String(f["Name"] || "").padEnd(25)} ${String(f["email"] || "").padEnd(35)} ${String(f["City"] || "").padEnd(15)} ${String(f["Country"] || "").padEnd(15)} ${String(f["Industry"] || "").padEnd(15)} ${String(f["Traction"] || "")}`
+      `${String(i + 1).padEnd(3)} ${String(f["Name"] || "").padEnd(25)} ${String(f["email"] || "").padEnd(35)} ${String(f["City"] || "").padEnd(15)} ${String(f["Country"] || "").padEnd(15)} ${String(f["Industry"] || "").padEnd(15)} ${String(f["Revenue"] || "")}`
     );
   }
 
