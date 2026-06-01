@@ -431,6 +431,7 @@ export default function GetMatchedPage() {
   interface SlackDeliveryMatch {
     name: string;
     email: string;
+    postcode: string;
     city: string;
     industry: string;
     traction: string;
@@ -443,6 +444,7 @@ export default function GetMatchedPage() {
   interface SlackDelivery {
     newMemberName: string;
     newMemberEmail: string;
+    newMemberPostcode: string;
     newMemberCity: string;
     newMemberIndustry: string;
     newMemberTraction: string;
@@ -1161,7 +1163,7 @@ export default function GetMatchedPage() {
                     <MemberCardBody m={{
                       name: delivery.newMemberName,
                       email: delivery.newMemberEmail,
-                      postcode: "",
+                      postcode: delivery.newMemberPostcode,
                       city: delivery.newMemberCity,
                       nearbyLocation: delivery.newMemberNearbyLocation,
                       active: true,
@@ -1202,7 +1204,7 @@ export default function GetMatchedPage() {
                       <MemberCardBody m={{
                         name: match.name,
                         email: match.email,
-                        postcode: "",
+                        postcode: match.postcode,
                         city: match.city,
                         nearbyLocation: match.nearbyLocation,
                         active: true,

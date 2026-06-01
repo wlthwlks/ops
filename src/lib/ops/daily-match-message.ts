@@ -19,6 +19,7 @@ const SLACK_TEST_ALLOWLIST = new Set([
 export interface DeliveryMatchMember {
   name: string;
   email: string;
+  postcode: string;
   city: string;
   industry: string;
   traction: string;
@@ -32,6 +33,7 @@ export interface DeliveryMatchMember {
 export interface DeliveryResult {
   newMemberName: string;
   newMemberEmail: string;
+  newMemberPostcode: string;
   newMemberCity: string;
   newMemberIndustry: string;
   newMemberTraction: string;
@@ -124,6 +126,7 @@ export async function runDailyMatchMessage(
       record.fields["Name"] || `${record.fields["First Name"] || ""} ${record.fields["Last Name"] || ""}`
     ).trim();
 
+    const newMemberPostcode = String(record.fields["post code"] || "");
     const newMemberCity = String(record.fields["City"] || "");
     const newMemberIndustry = String(record.fields["Industry"] || "");
     const newMemberTraction = String(record.fields["Revenue"] || "");
@@ -131,6 +134,7 @@ export async function runDailyMatchMessage(
     const delivery: DeliveryResult = {
       newMemberName,
       newMemberEmail: email,
+      newMemberPostcode,
       newMemberCity,
       newMemberIndustry,
       newMemberTraction,
@@ -205,6 +209,7 @@ export async function runDailyMatchMessage(
       const deliveryMatches: DeliveryMatchMember[] = matches.map((m) => ({
         name: String(m.metadata.name || ""),
         email: String(m.metadata.email || ""),
+        postcode: String(m.metadata.postcode || ""),
         city: String(m.metadata.city || ""),
         industry: String(m.metadata.industry || ""),
         traction: String(m.metadata.traction || ""),
