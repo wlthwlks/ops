@@ -2,7 +2,7 @@ import OpenAI from "openai";
 
 const MODEL = "text-embedding-3-small";
 const DIMENSIONS = 1536;
-const BATCH_SIZE = 2048;
+const BATCH_SIZE = 100;
 
 export { DIMENSIONS };
 

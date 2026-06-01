@@ -226,8 +226,10 @@ export async function runPineconeSync(
     const existingCity = String(existing.city || "");
     const existingPostcode = String(existing.postcode || "");
 
-    if (currentCity !== existingCity || currentPostcode !== existingPostcode) {
-      // Location changed — needs new geocoding + new embedding
+    const existingNearby = String(existing.nearbyLocation || "");
+
+    if (currentCity !== existingCity || currentPostcode !== existingPostcode || !existingNearby) {
+      // Location changed or nearbyLocation missing — needs geocoding + new embedding
       needsReEmbed.push(record);
     } else {
       // Location same — check if other metadata changed

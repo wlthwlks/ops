@@ -6,7 +6,7 @@ export interface MessageMember {
   nearbyLocation: string;
 }
 
-export type MessageFormat = "plaintext" | "slack";
+export type MessageFormat = "plaintext" | "slack" | "html";
 
 export interface GeneratedMessage {
   body: string;

@@ -52,18 +52,20 @@ export async function GET(request: NextRequest) {
 
   // Resolve city group for same-city filtering
   const memberCity = String(memberRecord.metadata.city || "");
-  const cityNames: string[] = [];
+  const cityNameSet = new Set<string>();
   const cityLower = memberCity.toLowerCase();
   for (const group of CITIES) {
     for (const alt of [group.label, ...group.alternatives]) {
       if (cityLower.includes(alt.toLowerCase())) {
-        cityNames.push(group.label, ...group.alternatives);
+        cityNameSet.add(group.label);
+        for (const a of group.alternatives) cityNameSet.add(a);
         break;
       }
     }
-    if (cityNames.length > 0) break;
+    if (cityNameSet.size > 0) break;
   }
-  if (cityNames.length === 0 && memberCity) cityNames.push(memberCity);
+  if (memberCity) cityNameSet.add(memberCity);
+  const cityNames = Array.from(cityNameSet);
 
   const cityFilter = cityNames.length > 0
     ? { $and: [{ active: { $eq: true } }, { city: { $in: cityNames } }] }

@@ -138,18 +138,21 @@ export async function GET(request: NextRequest) {
     };
 
     // Filter matches to same city group
-    const rawCity = String(memberRecord.metadata.city || member.city || "").toLowerCase();
-    const cityNames: string[] = [];
+    const rawCity = String(memberRecord.metadata.city || member.city || "");
+    const cityNameSet = new Set<string>();
+    const rawCityLower = rawCity.toLowerCase();
     for (const group of CITIES) {
       for (const alt of [group.label, ...group.alternatives]) {
-        if (rawCity.includes(alt.toLowerCase())) {
-          cityNames.push(group.label, ...group.alternatives);
+        if (rawCityLower.includes(alt.toLowerCase())) {
+          cityNameSet.add(group.label);
+          for (const a of group.alternatives) cityNameSet.add(a);
           break;
         }
       }
-      if (cityNames.length > 0) break;
+      if (cityNameSet.size > 0) break;
     }
-    if (cityNames.length === 0 && rawCity) cityNames.push(rawCity);
+    if (rawCity) cityNameSet.add(rawCity);
+    const cityNames = Array.from(cityNameSet);
 
     const cityFilter = cityNames.length > 0
       ? { $and: [{ active: { $eq: true } }, { city: { $in: cityNames } }] }

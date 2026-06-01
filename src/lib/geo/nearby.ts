@@ -70,15 +70,15 @@ async function fetchTier(
 ): Promise<string[]> {
   const stationRadius = Math.min(radiusMeters, 16_000);
 
-  const [stations, neighborhoods, suburbs] = await Promise.all([
-    searchNearby(lat, lon, ["train_station", "transit_station"], stationRadius, apiKey, 20),
-    searchNearby(lat, lon, ["neighborhood"], radiusMeters, apiKey, 20),
-    searchNearby(lat, lon, ["sublocality", "locality"], radiusMeters, apiKey, 10),
+  const [stations, landmarks, areas] = await Promise.all([
+    searchNearby(lat, lon, ["train_station", "subway_station", "transit_station", "light_rail_station"], stationRadius, apiKey, 20),
+    searchNearby(lat, lon, ["park", "library", "shopping_mall"], radiusMeters, apiKey, 15),
+    searchNearby(lat, lon, ["university", "community_center"], radiusMeters, apiKey, 10),
   ]);
 
   // Round-robin interleave: take one from each list in turn
   // This preserves per-type proximity order while mixing types fairly
-  const lists = [stations, neighborhoods, suburbs];
+  const lists = [stations, landmarks, areas];
   const seen = new Set<string>();
   const result: string[] = [];
   const maxLen = Math.max(...lists.map((l) => l.length));

@@ -457,6 +457,9 @@ export default function GetMatchedPage() {
     slackSent: boolean;
     slackChannelId: string | null;
     slackMessage: string | null;
+    emailPreview: string | null;
+    emailsSent: string[];
+    emailsFailed: string[];
     error: string | null;
   }
   const [slackDeliveries, setSlackDeliveries] = useState<SlackDelivery[]>([]);
@@ -465,8 +468,9 @@ export default function GetMatchedPage() {
   const [slackLogs, setSlackLogs] = useState<string[]>([]);
   const [slackPreviewed, setSlackPreviewed] = useState(false);
   const [slackEditedMessages, setSlackEditedMessages] = useState<Record<string, string>>({});
+  const [slackExpandedEmail, setSlackExpandedEmail] = useState<string | null>(null);
 
-  async function callMatchIntros(mode: "preview" | "send") {
+  async function callMatchIntros(mode: "preview" | "send" | "send-slack" | "send-email") {
     const isPreview = mode === "preview";
     if (isPreview) {
       setSlackLoading(true);
@@ -767,149 +771,187 @@ export default function GetMatchedPage() {
             </Flex>
           </Card>
 
-          {slackDeliveries.map((delivery) => (
-            <Card
-              key={delivery.newMemberEmail}
-              size="small"
-              style={{
-                borderColor: delivery.slackSent ? "#b7eb8f" : delivery.error ? "#ffccc7" : undefined,
-              }}
-            >
-              {/* New member header */}
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div>
-                  <Text strong>{delivery.newMemberName}</Text>
-                  <Text type="secondary" style={{ marginLeft: 8, fontSize: 12 }}>{delivery.newMemberEmail}</Text>
-                  <br />
-                  <Space size={4} style={{ marginTop: 4 }}>
-                    {delivery.newMemberCity && <Tag>{delivery.newMemberCity}</Tag>}
-                    {delivery.newMemberIndustry && <Tag>{delivery.newMemberIndustry}</Tag>}
-                    {delivery.newMemberTraction && <Tag>{delivery.newMemberTraction}</Tag>}
-                    {delivery.newMemberOnSlack ? <Tag color="blue"><SlackOutlined /> On Slack</Tag> : <Tag>Not on Slack</Tag>}
-                    {delivery.error && <Tag color="red">{delivery.error}</Tag>}
-                    {delivery.slackSent && <Tag color="green">Slack DM Sent</Tag>}
+          {slackDeliveries.map((delivery) => {
+            const isExpanded = slackExpandedEmail === delivery.newMemberEmail;
+            return (
+              <Card
+                key={delivery.newMemberEmail}
+                size="small"
+                style={{
+                  borderColor: delivery.slackSent ? "#b7eb8f" : delivery.error ? "#ffccc7" : isExpanded ? "#1890ff" : undefined,
+                  cursor: "pointer",
+                }}
+                onClick={() => setSlackExpandedEmail(isExpanded ? null : delivery.newMemberEmail)}
+              >
+                {/* Collapsed row header */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <Flex gap={8} align="center" style={{ flex: 1, minWidth: 0 }}>
+                    {isExpanded ? <UpOutlined style={{ fontSize: 10, color: "#999" }} /> : <DownOutlined style={{ fontSize: 10, color: "#999" }} />}
+                    <Text strong>{delivery.newMemberName}</Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}>{delivery.newMemberEmail}</Text>
+                    <Space size={4}>
+                      {delivery.newMemberCity && <Tag style={{ margin: 0 }}>{delivery.newMemberCity}</Tag>}
+                      {delivery.newMemberIndustry && <Tag style={{ margin: 0 }}>{delivery.newMemberIndustry}</Tag>}
+                      {delivery.newMemberTraction && <Tag style={{ margin: 0 }}>{delivery.newMemberTraction}</Tag>}
+                    </Space>
+                  </Flex>
+                  <Flex gap={6} align="center">
+                    {delivery.newMemberOnSlack ? <Tag color="blue" style={{ margin: 0 }}><SlackOutlined /> Slack</Tag> : <Tag style={{ margin: 0 }}>Not on Slack</Tag>}
+                    {delivery.error && <Tag color="red" style={{ margin: 0 }}>{delivery.error}</Tag>}
+                    {delivery.slackSent && <Tag color="green" style={{ margin: 0 }}>Slack Sent</Tag>}
+                    {delivery.emailsSent?.length > 0 && <Tag color="green" style={{ margin: 0 }}>{delivery.emailsSent.length} Email(s)</Tag>}
                     {!delivery.slackSent && !delivery.error && slackPreviewed && delivery.slackMembersFound.length >= 2 && (
-                      <Tag color="blue">Ready to send</Tag>
+                      <Tag color="blue" style={{ margin: 0 }}>Ready</Tag>
                     )}
-                  </Space>
+                    <Text type="secondary" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+                      {delivery.matches?.length ?? 0} matches | {delivery.slackMembersFound.length}/{delivery.slackMembersFound.length + delivery.slackMembersMissing.length} Slack
+                    </Text>
+                  </Flex>
                 </div>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  {delivery.slackMembersFound.length}/{delivery.slackMembersFound.length + delivery.slackMembersMissing.length} on Slack
-                </Text>
-              </div>
 
-              {/* Match cards grid */}
-              {delivery.matches?.length > 0 && (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
-                  {/* Being matched card */}
-                  <Card size="small" style={{ background: "#f6ffed", borderColor: "#b7eb8f" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                      <div style={{ minWidth: 0, flex: 1 }}>
-                        <Text strong style={{ fontSize: 13 }}>{delivery.newMemberName}</Text>
-                        <br />
-                        <Text type="secondary" style={{ fontSize: 11, wordBreak: "break-all" }}>{delivery.newMemberEmail}</Text>
-                      </div>
-                      <Tag color="green" style={{ flexShrink: 0, marginLeft: 6, fontWeight: 600 }}>Being matched</Tag>
-                    </div>
-                    <MemberCardBody m={{
-                      name: delivery.newMemberName,
-                      email: delivery.newMemberEmail,
-                      postcode: delivery.newMemberPostcode,
-                      city: delivery.newMemberCity,
-                      nearbyLocation: delivery.newMemberNearbyLocation,
-                      active: true,
-                      industry: delivery.newMemberIndustry,
-                      traction: delivery.newMemberTraction,
-                      hasBusinessDomain: false,
-                      businessStage: delivery.newMemberBusinessStage,
-                    }} />
-                  </Card>
-
-                  {/* Match cards */}
-                  {delivery.matches.map((match, idx) => (
-                    <Card
-                      key={match.email}
-                      size="small"
-                      style={{
-                        borderColor: match.onSlack ? "#91d5ff" : undefined,
-                        background: match.onSlack ? "#f0f5ff" : undefined,
-                      }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <Text strong style={{ fontSize: 13 }}>#{idx + 1} {match.name}</Text>
-                          <br />
-                          <Text type="secondary" style={{ fontSize: 11, wordBreak: "break-all" }}>{match.email}</Text>
-                        </div>
-                        <Flex gap={4} align="center" style={{ flexShrink: 0, marginLeft: 6 }}>
-                          {match.onSlack && <Tag color="blue"><SlackOutlined /> Slack</Tag>}
-                          <div style={{
-                            background: scoreColor(match.similarityScore),
-                            color: "#fff", borderRadius: 6,
-                            padding: "1px 8px", fontSize: 12, fontWeight: 600,
-                          }}>
-                            {Math.round(match.similarityScore * 100)}%
+                {/* Expanded content */}
+                {isExpanded && (
+                  <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 16 }}>
+                    {/* Match cards grid */}
+                    {delivery.matches?.length > 0 && (
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
+                        {/* Being matched card */}
+                        <Card size="small" style={{ background: "#f6ffed", borderColor: "#b7eb8f" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <Text strong style={{ fontSize: 13 }}>{delivery.newMemberName}</Text>
+                              <br />
+                              <Text type="secondary" style={{ fontSize: 11, wordBreak: "break-all" }}>{delivery.newMemberEmail}</Text>
+                            </div>
+                            <Tag color="green" style={{ flexShrink: 0, marginLeft: 6, fontWeight: 600 }}>Being matched</Tag>
                           </div>
-                        </Flex>
-                      </div>
-                      <MemberCardBody m={{
-                        name: match.name,
-                        email: match.email,
-                        postcode: match.postcode,
-                        city: match.city,
-                        nearbyLocation: match.nearbyLocation,
-                        active: true,
-                        industry: match.industry,
-                        traction: match.traction,
-                        hasBusinessDomain: match.hasBusinessDomain,
-                        businessStage: match.businessStage,
-                      }} />
-                    </Card>
-                  ))}
-                </div>
-              )}
+                          <MemberCardBody m={{
+                            name: delivery.newMemberName,
+                            email: delivery.newMemberEmail,
+                            postcode: delivery.newMemberPostcode,
+                            city: delivery.newMemberCity,
+                            nearbyLocation: delivery.newMemberNearbyLocation,
+                            active: true,
+                            industry: delivery.newMemberIndustry,
+                            traction: delivery.newMemberTraction,
+                            hasBusinessDomain: false,
+                            businessStage: delivery.newMemberBusinessStage,
+                          }} />
+                        </Card>
 
-              {/* Editable Slack message */}
-              {delivery.slackMessage && slackPreviewed && (
-                <div style={{ marginTop: 12 }}>
-                  <Text strong style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-                    <SlackOutlined style={{ marginRight: 4 }} />
-                    Slack message (editable):
-                  </Text>
-                  <Input.TextArea
-                    value={slackEditedMessages[delivery.newMemberEmail] ?? delivery.slackMessage}
-                    onChange={(e) => setSlackEditedMessages((prev) => ({ ...prev, [delivery.newMemberEmail]: e.target.value }))}
-                    autoSize={{ minRows: 6, maxRows: 16 }}
-                    style={{ fontFamily: "monospace", fontSize: 12, lineHeight: "18px" }}
-                  />
-                  <Button
-                    type="primary"
-                    danger
-                    icon={<SendOutlined />}
-                    onClick={() => callMatchIntros("send")}
-                    loading={slackSending}
-                    style={{ marginTop: 8 }}
-                  >
-                    {slackSending ? "Sending..." : "Approve & Send Slack Messages"}
-                  </Button>
-                </div>
-              )}
-              {delivery.slackMessage && !slackPreviewed && (
-                <Collapse
-                  style={{ marginTop: 12 }}
-                  items={[{
-                    key: "msg",
-                    label: <Text type="secondary" style={{ fontSize: 12 }}>Slack message sent</Text>,
-                    children: (
-                      <pre style={{ margin: 0, fontSize: 12, lineHeight: "18px", whiteSpace: "pre-wrap", background: "#f5f5f5", padding: 12, borderRadius: 6 }}>
-                        {slackEditedMessages[delivery.newMemberEmail] ?? delivery.slackMessage}
-                      </pre>
-                    ),
-                  }]}
-                />
-              )}
-            </Card>
-          ))}
+                        {/* Match cards */}
+                        {delivery.matches.map((match, idx) => (
+                          <Card
+                            key={match.email}
+                            size="small"
+                            style={{
+                              borderColor: match.onSlack ? "#91d5ff" : undefined,
+                              background: match.onSlack ? "#f0f5ff" : undefined,
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                              <div style={{ minWidth: 0, flex: 1 }}>
+                                <Text strong style={{ fontSize: 13 }}>#{idx + 1} {match.name}</Text>
+                                <br />
+                                <Text type="secondary" style={{ fontSize: 11, wordBreak: "break-all" }}>{match.email}</Text>
+                              </div>
+                              <Flex gap={4} align="center" style={{ flexShrink: 0, marginLeft: 6 }}>
+                                {match.onSlack && <Tag color="blue"><SlackOutlined /> Slack</Tag>}
+                                <div style={{
+                                  background: scoreColor(match.similarityScore),
+                                  color: "#fff", borderRadius: 6,
+                                  padding: "1px 8px", fontSize: 12, fontWeight: 600,
+                                }}>
+                                  {Math.round(match.similarityScore * 100)}%
+                                </div>
+                              </Flex>
+                            </div>
+                            <MemberCardBody m={{
+                              name: match.name,
+                              email: match.email,
+                              postcode: match.postcode,
+                              city: match.city,
+                              nearbyLocation: match.nearbyLocation,
+                              active: true,
+                              industry: match.industry,
+                              traction: match.traction,
+                              hasBusinessDomain: match.hasBusinessDomain,
+                              businessStage: match.businessStage,
+                            }} />
+                          </Card>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Editable Slack message */}
+                    {delivery.slackMessage && slackPreviewed && (
+                      <div style={{ marginTop: 12 }}>
+                        <Text strong style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
+                          <SlackOutlined style={{ marginRight: 4 }} />
+                          Slack message (editable):
+                        </Text>
+                        <Input.TextArea
+                          value={slackEditedMessages[delivery.newMemberEmail] ?? delivery.slackMessage}
+                          onChange={(e) => setSlackEditedMessages((prev) => ({ ...prev, [delivery.newMemberEmail]: e.target.value }))}
+                          autoSize={{ minRows: 6, maxRows: 16 }}
+                          style={{ fontFamily: "monospace", fontSize: 12, lineHeight: "18px" }}
+                        />
+                        <Button
+                          type="primary"
+                          danger
+                          icon={<SendOutlined />}
+                          onClick={() => callMatchIntros("send-slack")}
+                          loading={slackSending}
+                          style={{ marginTop: 8 }}
+                        >
+                          {slackSending ? "Sending..." : "Approve & Send Slack Message"}
+                        </Button>
+                      </div>
+                    )}
+                    {delivery.slackMessage && !slackPreviewed && (
+                      <Collapse
+                        style={{ marginTop: 12 }}
+                        items={[{
+                          key: "msg",
+                          label: <Text type="secondary" style={{ fontSize: 12 }}>Slack message sent</Text>,
+                          children: (
+                            <pre style={{ margin: 0, fontSize: 12, lineHeight: "18px", whiteSpace: "pre-wrap", background: "#f5f5f5", padding: 12, borderRadius: 6 }}>
+                              {slackEditedMessages[delivery.newMemberEmail] ?? delivery.slackMessage}
+                            </pre>
+                          ),
+                        }]}
+                      />
+                    )}
+
+                    {/* Email preview */}
+                    {delivery.emailPreview && (
+                      <div style={{ marginTop: 12 }}>
+                        <Text strong style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
+                          <MailOutlined style={{ marginRight: 4 }} />
+                          Email preview:
+                        </Text>
+                        <div
+                          style={{ border: "1px solid #f0f0f0", borderRadius: 6, padding: 16, background: "#fff", fontSize: 13, lineHeight: "20px" }}
+                          dangerouslySetInnerHTML={{ __html: delivery.emailPreview }}
+                        />
+                        {slackPreviewed && (
+                          <Button
+                            type="primary"
+                            icon={<MailOutlined />}
+                            onClick={() => callMatchIntros("send-email")}
+                            loading={slackSending}
+                            style={{ marginTop: 8 }}
+                          >
+                            {slackSending ? "Sending..." : "Approve & Send Email"}
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </Card>
+            );
+          })}
 
           {slackLogs.length > 0 && (
             <Collapse

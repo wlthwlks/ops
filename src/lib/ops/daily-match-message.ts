@@ -2,6 +2,7 @@ import type { Op, OpContext } from "../types";
 import { createAirtableClient } from "../integrations/airtable";
 import { createPineconeClient } from "../integrations/pinecone";
 import { createSlackClient } from "../integrations/slack";
+import { createResendClient } from "../integrations/resend";
 import { generateMatchMessage } from "../messaging/generate-match-message";
 import type { MessageMember } from "../messaging/types";
 import { CITIES } from "../constants";
@@ -12,14 +13,20 @@ import { CITIES } from "../constants";
  */
 function getCityGroupNames(rawCity: string): string[] {
   const lower = rawCity.toLowerCase();
+  const names = new Set<string>();
   for (const group of CITIES) {
     for (const alt of [group.label, ...group.alternatives]) {
       if (lower.includes(alt.toLowerCase())) {
-        return [group.label, ...group.alternatives];
+        names.add(group.label);
+        for (const a of group.alternatives) names.add(a);
+        break;
       }
     }
+    if (names.size > 0) break;
   }
-  return rawCity ? [rawCity] : [];
+  // Always include the raw city value — Pinecone uses exact match
+  if (rawCity) names.add(rawCity);
+  return Array.from(names);
 }
 
 /**
@@ -31,6 +38,10 @@ function getCityGroupNames(rawCity: string): string[] {
 const SLACK_TEST_ALLOWLIST = new Set([
   "polymathic.development@gmail.com",
   "jolanta@marllm.io",
+]);
+
+const EMAIL_TEST_ALLOWLIST = new Set([
+  "jolanta@wlthwlks.com",
 ]);
 
 export interface DeliveryMatchMember {
@@ -63,6 +74,9 @@ export interface DeliveryResult {
   slackSent: boolean;
   slackChannelId: string | null;
   slackMessage: string | null;
+  emailPreview: string | null;
+  emailsSent: string[];
+  emailsFailed: string[];
   error: string | null;
 }
 
@@ -82,7 +96,7 @@ export async function runDailyMatchMessage(
   startDate: string,
   endDate: string,
   ctx: OpContext,
-  mode: "preview" | "send" = "send",
+  mode: "preview" | "send" | "send-slack" | "send-email" = "send",
   emails?: string[],
   editedMessages?: Record<string, string>
 ): Promise<MatchMessageResult> {
@@ -91,6 +105,9 @@ export async function runDailyMatchMessage(
   const pineconeKey = process.env.PINECONE_API_KEY;
   const pineconeIndex = process.env.PINECONE_INDEX_NAME;
   const slackToken = process.env.SLACK_BOT_TOKEN;
+  const resendApiKey = process.env.RESEND_API_KEY;
+  const resendFromEmail = process.env.RESEND_FROM_EMAIL || "hello@wlthwlks.com";
+  const slackInviteUrl = process.env.SLACK_WORKSPACE_INVITE_URL || process.env.SLACK_JOIN_URL || "";
 
   if (!airtableToken || !airtableBase) {
     return { success: false, summary: "Missing Airtable credentials", deliveries: [] };
@@ -105,6 +122,7 @@ export async function runDailyMatchMessage(
   const airtable = createAirtableClient({ apiKey: airtableToken, baseId: airtableBase });
   const pinecone = createPineconeClient({ apiKey: pineconeKey, indexName: pineconeIndex });
   const slack = createSlackClient({ botToken: slackToken });
+  const resend = resendApiKey ? createResendClient({ apiKey: resendApiKey, fromEmail: resendFromEmail }) : null;
 
   // 1. Fetch members from Airtable — by email list or by date range
   let records;
@@ -165,6 +183,9 @@ export async function runDailyMatchMessage(
       slackSent: false,
       slackChannelId: null,
       slackMessage: null,
+      emailPreview: null,
+      emailsSent: [],
+      emailsFailed: [],
       error: null,
     };
 
@@ -271,7 +292,11 @@ export async function runDailyMatchMessage(
       // (regardless of whether they're in the match group). This lets you test
       // the full flow without messaging real members. Preview shows real status.
       let sendSlackUserIds: Map<string, string>;
-      if (mode === "send") {
+      const doSend = mode === "send" || mode === "send-slack" || mode === "send-email";
+      const doSlack = mode === "send" || mode === "send-slack";
+      const doEmail = mode === "send" || mode === "send-email";
+
+      if (doSend) {
         // Resolve allowlist emails to Slack IDs (they may not be in the match group)
         const testIds = new Map<string, string>();
         for (const testEmail of SLACK_TEST_ALLOWLIST) {
@@ -306,7 +331,17 @@ export async function runDailyMatchMessage(
 
       delivery.slackMessage = msg.body;
 
-      if (sendSlackUserIds.size >= 2 && mode === "send") {
+      // Generate email preview (shown in UI for both preview and send)
+      const emailPreviewMsg = generateMatchMessage({
+        newMember: newMemberAsMsgMember,
+        matches: matchMembers,
+        format: "html",
+        slackInviteUrl: slackInviteUrl || undefined,
+        isOnSlack: slackUserIds.has(email),
+      });
+      delivery.emailPreview = emailPreviewMsg.body;
+
+      if (sendSlackUserIds.size >= 2 && doSlack) {
         const slackIds = Array.from(sendSlackUserIds.values());
         // Use edited message if provided, otherwise use generated one
         const finalMessage = editedMessages?.[email] ?? msg.body;
@@ -319,11 +354,38 @@ export async function runDailyMatchMessage(
         ctx.log(`  ${newMemberName}: Slack group DM sent (${slackIds.length} members)`);
       } else if (sendSlackUserIds.size >= 2 && mode === "preview") {
         ctx.log(`  ${newMemberName}: ${sendSlackUserIds.size} eligible for Slack DM (preview only)`);
-      } else if (slackUserIds.size >= 2 && sendSlackUserIds.size < 2 && mode === "send") {
+      } else if (slackUserIds.size >= 2 && sendSlackUserIds.size < 2 && doSlack) {
         delivery.error = "Test mode: <2 allowlisted members on Slack";
         ctx.log(`  ${newMemberName}: Slack skipped (test mode — ${sendSlackUserIds.size} allowlisted of ${slackUserIds.size} on Slack)`);
       } else {
         ctx.log(`  ${newMemberName}: Slack skipped (<2 members on Slack)`);
+      }
+
+      // 6. Send email — TEST MODE: send to allowlisted test addresses with real match content
+      if (doEmail && resend) {
+        for (const testEmail of EMAIL_TEST_ALLOWLIST) {
+          const emailMsg = generateMatchMessage({
+            newMember: newMemberAsMsgMember,
+            matches: matchMembers,
+            format: "html",
+            slackInviteUrl: slackInviteUrl || undefined,
+            isOnSlack: false, // test recipient is not in the match group's Slack
+          });
+
+          const result = await resend.sendEmail(
+            testEmail,
+            "Your WLTH WLKS Connections Are Here!",
+            emailMsg.body
+          );
+
+          if (result) {
+            delivery.emailsSent.push(testEmail);
+            ctx.log(`  ${newMemberName}: email sent to ${testEmail}`);
+          } else {
+            delivery.emailsFailed.push(testEmail);
+            ctx.log(`  ${newMemberName}: email FAILED for ${testEmail}`);
+          }
+        }
       }
     } catch (err) {
       delivery.error = err instanceof Error ? err.message : "Unknown error";
@@ -333,9 +395,10 @@ export async function runDailyMatchMessage(
     deliveries.push(delivery);
   }
 
+  const emailTotal = deliveries.reduce((n, d) => n + d.emailsSent.length, 0);
   const summary = mode === "preview"
     ? `${deliveries.length} member(s) matched, ${deliveries.filter((d) => !d.error).length} ready to send, ${skippedCount} skipped`
-    : `${deliveries.length} member(s) processed, ${slackSentCount} Slack DM(s) sent, ${skippedCount} skipped`;
+    : `${deliveries.length} member(s) processed, ${slackSentCount} Slack DM(s) sent, ${emailTotal} email(s) sent, ${skippedCount} skipped`;
   ctx.log(`Done: ${summary}`);
 
   return { success: true, summary, deliveries };
