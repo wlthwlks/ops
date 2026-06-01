@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createPineconeClient } from "@/lib/integrations/pinecone";
+import { CITIES } from "@/lib/constants";
 
 export async function GET(request: NextRequest) {
   const pineconeKey = process.env.PINECONE_API_KEY;
@@ -49,11 +50,30 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // Resolve city group for same-city filtering
+  const memberCity = String(memberRecord.metadata.city || "");
+  const cityNames: string[] = [];
+  const cityLower = memberCity.toLowerCase();
+  for (const group of CITIES) {
+    for (const alt of [group.label, ...group.alternatives]) {
+      if (cityLower.includes(alt.toLowerCase())) {
+        cityNames.push(group.label, ...group.alternatives);
+        break;
+      }
+    }
+    if (cityNames.length > 0) break;
+  }
+  if (cityNames.length === 0 && memberCity) cityNames.push(memberCity);
+
+  const cityFilter = cityNames.length > 0
+    ? { $and: [{ active: { $eq: true } }, { city: { $in: cityNames } }] }
+    : { active: { $eq: true } };
+
   // Query for top 9 similar (member itself will be #1, so we get 8 others)
   const matches = await pinecone.queryByVector(
     memberRecord.values,
     9,
-    { active: { $eq: true } }
+    cityFilter
   );
 
   // Exclude the member themselves

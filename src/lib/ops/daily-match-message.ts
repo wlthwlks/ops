@@ -4,6 +4,23 @@ import { createPineconeClient } from "../integrations/pinecone";
 import { createSlackClient } from "../integrations/slack";
 import { generateMatchMessage } from "../messaging/generate-match-message";
 import type { MessageMember } from "../messaging/types";
+import { CITIES } from "../constants";
+
+/**
+ * Resolve a raw city string to the list of all city names in its group.
+ * Returns the group's alternatives (which includes the label) for Pinecone filtering.
+ */
+function getCityGroupNames(rawCity: string): string[] {
+  const lower = rawCity.toLowerCase();
+  for (const group of CITIES) {
+    for (const alt of [group.label, ...group.alternatives]) {
+      if (lower.includes(alt.toLowerCase())) {
+        return [group.label, ...group.alternatives];
+      }
+    }
+  }
+  return rawCity ? [rawCity] : [];
+}
 
 /**
  * TEST MODE: Only send Slack messages to these emails.
@@ -66,7 +83,8 @@ export async function runDailyMatchMessage(
   endDate: string,
   ctx: OpContext,
   mode: "preview" | "send" = "send",
-  emails?: string[]
+  emails?: string[],
+  editedMessages?: Record<string, string>
 ): Promise<MatchMessageResult> {
   const airtableToken = process.env.AIRTABLE_GET_DATA_TOKEN;
   const airtableBase = process.env.AIRTABLE_BASE_ID;
@@ -175,11 +193,16 @@ export async function runDailyMatchMessage(
         continue;
       }
 
-      // 3. Find top 5 matches
+      // 3. Find top 5 matches — filter to same city group
+      const cityNames = getCityGroupNames(newMemberCity);
+      const cityFilter = cityNames.length > 0
+        ? { $and: [{ active: { $eq: true } }, { city: { $in: cityNames } }] }
+        : { active: { $eq: true } };
+
       const matchResults = await pinecone.queryByVector(
         memberRecord.values,
         6,
-        { active: { $eq: true } }
+        cityFilter
       );
 
       const matches = matchResults
@@ -285,8 +308,10 @@ export async function runDailyMatchMessage(
 
       if (sendSlackUserIds.size >= 2 && mode === "send") {
         const slackIds = Array.from(sendSlackUserIds.values());
+        // Use edited message if provided, otherwise use generated one
+        const finalMessage = editedMessages?.[email] ?? msg.body;
         const { channelId } = await slack.conversationsOpen(slackIds);
-        await slack.postMessage(channelId, msg.body);
+        await slack.postMessage(channelId, finalMessage);
 
         delivery.slackSent = true;
         delivery.slackChannelId = channelId;
