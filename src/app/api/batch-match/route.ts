@@ -61,8 +61,6 @@ export async function GET(request: NextRequest) {
     inPinecone: boolean;
     profile: {
       nearbyLocation: string;
-      availability: string;
-      priorityTopic: string;
       businessStage: string;
       hasBusinessDomain: boolean;
       active: boolean;
@@ -76,8 +74,6 @@ export async function GET(request: NextRequest) {
       industry: string;
       traction: string;
       businessStage: string;
-      priorityTopic: string;
-      availability: string;
       nearbyLocation: string;
       hasBusinessDomain: boolean;
       active: boolean;
@@ -136,8 +132,6 @@ export async function GET(request: NextRequest) {
 
     member.profile = {
       nearbyLocation: String(memberRecord.metadata.nearbyLocation || ""),
-      availability: String(memberRecord.metadata.availability || ""),
-      priorityTopic: String(memberRecord.metadata.priorityTopic || ""),
       businessStage: String(memberRecord.metadata.businessStage || ""),
       hasBusinessDomain: Boolean(memberRecord.metadata.hasBusinessDomain),
       active: Boolean(memberRecord.metadata.active),
@@ -161,8 +155,6 @@ export async function GET(request: NextRequest) {
         industry: String(m.metadata.industry || ""),
         traction: String(m.metadata.traction || ""),
         businessStage: String(m.metadata.businessStage || ""),
-        priorityTopic: String(m.metadata.priorityTopic || ""),
-        availability: String(m.metadata.availability || ""),
         nearbyLocation: String(m.metadata.nearbyLocation || ""),
         hasBusinessDomain: Boolean(m.metadata.hasBusinessDomain),
         active: Boolean(m.metadata.active),

@@ -90,8 +90,6 @@ interface MemberFields {
   industry: string;
   traction: string;
   hasBusinessDomain: boolean;
-  availability: string;
-  priorityTopic: string;
   businessStage: string;
 }
 
@@ -120,8 +118,6 @@ interface SyncApiResponse {
 
 interface BatchMemberProfile {
   nearbyLocation: string;
-  availability: string;
-  priorityTopic: string;
   businessStage: string;
   hasBusinessDomain: boolean;
   active: boolean;
@@ -232,12 +228,6 @@ function MemberCardBody({ m }: { m: MemberFields }) {
       </LabelRow>
       <LabelRow label="Nearby">
         {loc ? <LocationText text={loc} /> : <Text type="secondary" style={{ fontSize: 12 }}>—</Text>}
-      </LabelRow>
-      <LabelRow label="Availability">
-        <Text style={{ fontSize: 13 }}>{String(m.availability || "—")}</Text>
-      </LabelRow>
-      <LabelRow label="Priority Topic">
-        <Text style={{ fontSize: 13 }}>{String(m.priorityTopic || "—")}</Text>
       </LabelRow>
       <LabelRow label="Business Stage">
         <Tag color={stageColor(stage)} style={{ margin: 0 }}>{stage || "—"}</Tag>
@@ -415,19 +405,6 @@ export default function GetMatchedPage() {
       .slice(0, 3)
       .map(([loc]) => loc);
 
-    // Overlapping availability days — intersect the searched member + all selected matches
-    const allPeople = [member, ...selected];
-    const allAvailSets = allPeople.map((m) => {
-      const days = String(m.availability || "")
-        .split(/\s*,\s*/)
-        .map((d) => d.trim())
-        .filter((d) => d.length > 0);
-      return new Set(days);
-    });
-    const commonDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].filter((day) =>
-      allAvailSets.every((s) => s.has(day))
-    );
-
     // Two similarity reasons
     const reasons: string[] = [];
     const memberStage = String(member.businessStage || "");
@@ -440,18 +417,8 @@ export default function GetMatchedPage() {
     if (matchInds.some((ind) => ind === memberInd) && memberInd) {
       reasons.push(`you share the same industry (${String(member.industry)})`);
     }
-    if (reasons.length < 2) {
-      const memberTopic = String(member.priorityTopic || "");
-      const matchTopics = selected.map((m) => String(m.priorityTopic || ""));
-      if (matchTopics.some((t) => t === memberTopic) && memberTopic) {
-        reasons.push(`you're both focused on ${memberTopic.toLowerCase()}`);
-      }
-    }
     if (reasons.length < 2 && meetingSpots.length > 0) {
       reasons.push("you're based in the same area");
-    }
-    if (reasons.length < 2 && commonDays.length > 0) {
-      reasons.push("your availability overlaps well");
     }
 
     // Format names nicely
@@ -472,12 +439,6 @@ export default function GetMatchedPage() {
       lines.push(`Here are a few suggested meeting spots near you: ${meetingSpots.join(", ")}.`);
       lines.push("");
     }
-    if (commonDays.length > 0) {
-      lines.push(`It looks like ${commonDays.join(", ")} ${commonDays.length === 1 ? "works" : "work"} for everyone — would any of those days suit for a first meet?`);
-    } else {
-      lines.push("Have a look at each other's availability and find a day that works for all of you.");
-    }
-    lines.push("");
     lines.push("Looking forward to seeing you connect!");
     lines.push("");
     lines.push("Best,");
@@ -585,16 +546,6 @@ export default function GetMatchedPage() {
       .slice(0, 3)
       .map(([loc]) => loc);
 
-    // Intersect the new member's availability + all selected matches
-    const newMemberDays = String(newMember.profile?.availability || "").split(/\s*,\s*/).filter((d) => d.length > 0);
-    const allAvailSets = [new Set(newMemberDays), ...selected.map((m) => {
-      const days = String(m.availability || "").split(/\s*,\s*/).filter((d) => d.length > 0);
-      return new Set(days);
-    })];
-    const commonDays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].filter((day) =>
-      allAvailSets.every((s) => s.has(day))
-    );
-
     const reasons: string[] = [];
     const matchStages = selected.map((m) => String(m.businessStage || ""));
     if (matchStages.some((s) => s === newMember.traction) && newMember.traction) {
@@ -605,7 +556,6 @@ export default function GetMatchedPage() {
       reasons.push(`you share the same industry (${newMember.industry})`);
     }
     if (reasons.length < 2 && meetingSpots.length > 0) reasons.push("you're based in the same area");
-    if (reasons.length < 2 && commonDays.length > 0) reasons.push("your availability overlaps well");
 
     const nameList =
       matchNames.length === 1
@@ -623,12 +573,6 @@ export default function GetMatchedPage() {
       lines.push(`Here are a few suggested meeting spots near you: ${meetingSpots.join(", ")}.`);
       lines.push("");
     }
-    if (commonDays.length > 0) {
-      lines.push(`It looks like ${commonDays.join(", ")} ${commonDays.length === 1 ? "works" : "work"} for everyone — would any of those days suit for a first meet?`);
-    } else {
-      lines.push("Have a look at each other's availability and find a day that works for all of you.");
-    }
-    lines.push("");
     lines.push("Looking forward to seeing you connect!");
     lines.push("");
     lines.push("Best,");
@@ -707,7 +651,7 @@ export default function GetMatchedPage() {
       <Space direction="vertical" size="middle" style={{ width: "100%", marginBottom: 24 }}>
         <div>
           <Title level={3} style={{ margin: 0 }}>
-            Deliver Custom Matching
+            Custom Matching
           </Title>
           <Text type="secondary">
             Enter a member&apos;s email to find their top 8 matches. Select 4-5 for introductions.
@@ -998,8 +942,6 @@ export default function GetMatchedPage() {
                                   industry: newMember.industry,
                                   traction: newMember.traction,
                                   hasBusinessDomain: newMember.profile?.hasBusinessDomain ?? false,
-                                  availability: newMember.profile?.availability ?? "",
-                                  priorityTopic: newMember.profile?.priorityTopic ?? "",
                                   businessStage: newMember.profile?.businessStage ?? "",
                                 }} />
                               </Card>

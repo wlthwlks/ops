@@ -6,8 +6,6 @@ import { findNearbyPlaces } from "../src/lib/geo/nearby";
 import {
   toBusinessStage,
   hasBusinessDomain,
-  assignPriorityTopic,
-  generateAvailability,
   buildEmbeddingText,
 } from "../src/lib/matching/transforms";
 import { CITIES } from "../src/lib/constants";
@@ -41,7 +39,7 @@ async function main() {
   const enriched: Array<{
     id: string; email: string; name: string; postcode: string; city: string;
     nearbyLocation: string; industry: string; traction: string;
-    hasBusinessDomain: boolean; availability: string; priorityTopic: string;
+    hasBusinessDomain: boolean;
     businessStage: string; embeddingText: string;
   }> = [];
 
@@ -58,8 +56,6 @@ async function main() {
     const industry = String(f["Industry"] || "");
     const traction = String(f["Traction"] || "");
     const businessStage = toBusinessStage(traction);
-    const priorityTopic = assignPriorityTopic(record.id);
-    const availability = generateAvailability(record.id);
     const hasBizDomain = hasBusinessDomain(email);
 
     let nearbyLocation = "";
@@ -82,14 +78,14 @@ async function main() {
     }
 
     const embeddingText = buildEmbeddingText({
-      nearbyLocation, availability, businessStage, priorityTopic, industry,
+      nearbyLocation, businessStage, industry,
     });
 
     enriched.push({
       id: record.id, email,
       name: String(f["Name"] || `${f["First Name"] || ""} ${f["Last Name"] || ""}`).trim(),
       postcode, city, nearbyLocation, industry, traction,
-      hasBusinessDomain: hasBizDomain, availability, priorityTopic,
+      hasBusinessDomain: hasBizDomain,
       businessStage, embeddingText,
     });
   }
@@ -115,8 +111,6 @@ async function main() {
       industry: member.industry,
       traction: member.traction,
       hasBusinessDomain: member.hasBusinessDomain,
-      availability: member.availability,
-      priorityTopic: member.priorityTopic,
       businessStage: member.businessStage,
     },
   }));

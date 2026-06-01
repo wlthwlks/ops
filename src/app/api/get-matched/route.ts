@@ -72,8 +72,6 @@ export async function GET(request: NextRequest) {
       industry: memberRecord.metadata.industry,
       traction: memberRecord.metadata.traction,
       hasBusinessDomain: memberRecord.metadata.hasBusinessDomain,
-      availability: memberRecord.metadata.availability,
-      priorityTopic: memberRecord.metadata.priorityTopic,
       businessStage: memberRecord.metadata.businessStage,
     },
     matches: filtered.map((m) => ({
@@ -87,8 +85,6 @@ export async function GET(request: NextRequest) {
       industry: m.metadata.industry,
       traction: m.metadata.traction,
       hasBusinessDomain: m.metadata.hasBusinessDomain,
-      availability: m.metadata.availability,
-      priorityTopic: m.metadata.priorityTopic,
       businessStage: m.metadata.businessStage,
       similarityScore: Math.round(m.score * 100) / 100,
     })),

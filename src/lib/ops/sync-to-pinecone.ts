@@ -7,8 +7,6 @@ import { findNearbyPlaces } from "../geo/nearby";
 import {
   toBusinessStage,
   hasBusinessDomain,
-  assignPriorityTopic,
-  generateAvailability,
   buildEmbeddingText,
 } from "../matching/transforms";
 import { CITIES, type CityGroup } from "../constants";
@@ -48,8 +46,6 @@ interface EnrichedMember {
   industry: string;
   traction: string;
   hasBusinessDomain: boolean;
-  availability: string;
-  priorityTopic: string;
   businessStage: string;
   embeddingText: string;
 }
@@ -72,8 +68,6 @@ async function enrichMember(
   const traction = String(f["Traction"] || "");
 
   const businessStage = toBusinessStage(traction);
-  const priorityTopic = assignPriorityTopic(record.id);
-  const availability = generateAvailability(record.id);
   const hasBizDomain = hasBusinessDomain(email);
 
   let nearbyLocation = "";
@@ -97,9 +91,7 @@ async function enrichMember(
 
   const embeddingText = buildEmbeddingText({
     nearbyLocation,
-    availability,
     businessStage,
-    priorityTopic,
     industry,
   });
 
@@ -114,8 +106,6 @@ async function enrichMember(
     industry,
     traction,
     hasBusinessDomain: hasBizDomain,
-    availability,
-    priorityTopic,
     businessStage,
     embeddingText,
   };
@@ -287,8 +277,6 @@ export async function runPineconeSync(
           industry: member.industry,
           traction: member.traction,
           hasBusinessDomain: member.hasBusinessDomain,
-          availability: member.availability,
-          priorityTopic: member.priorityTopic,
           businessStage: member.businessStage,
         },
       }));
@@ -335,8 +323,6 @@ export async function runPineconeSync(
           industry,
           traction,
           hasBusinessDomain: hasBusinessDomain(email),
-          availability: generateAvailability(record.id),
-          priorityTopic: assignPriorityTopic(record.id),
           businessStage: toBusinessStage(traction),
         },
       });

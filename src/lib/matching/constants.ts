@@ -16,23 +16,6 @@ export const TRACTION_TO_STAGE: ReadonlyMap<string, string> = new Map([
   ["$20M+", "Established Scale"],
 ]);
 
-export const PRIORITY_TOPICS: readonly string[] = [
-  "Building a repeatable way to acquire customers",
-  "Reducing customer churn and improving retention",
-  "Increasing revenue without breaking operations",
-  "Setting and optimizing pricing",
-  "Hiring the right people to fill key gaps",
-  "Defining roles and structuring the organization",
-  "Managing cash flow and extending runway",
-  "Deciding whether and how to raise capital",
-  "Fixing operational bottlenecks and inefficiencies",
-  "Aligning product, sales, and marketing for launch and growth",
-  "Differentiating from competitors in the market",
-  "Upgrading systems and infrastructure to support scale",
-  "Improving the end-to-end customer experience",
-  "Prioritising leadership focus and deciding what not to do",
-];
-
 export const PERSONAL_EMAIL_DOMAINS: ReadonlySet<string> = new Set([
   // Google
   "gmail.com", "googlemail.com",
@@ -58,6 +41,3 @@ export const PERSONAL_EMAIL_DOMAINS: ReadonlySet<string> = new Set([
   "btinternet.com", "sky.com", "virginmedia.com",
 ]);
 
-export const WEEKDAYS: readonly string[] = [
-  "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
-];

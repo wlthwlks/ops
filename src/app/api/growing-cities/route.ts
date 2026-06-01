@@ -52,10 +52,35 @@ export async function GET() {
     .map(([city, count]) => ({ city, count }))
     .sort((a, b) => b.count - a.count);
 
+  // Build per-city counts for listed (tracked) cities
+  const listedCityMap = new Map<string, number>();
+  for (const r of listedRecords) {
+    const rawCity = ((r.fields["City"] as string) || "").trim().toLowerCase();
+    // Resolve to the canonical city label
+    let label = "Other";
+    for (const group of CITIES) {
+      for (const alt of [group.label, ...group.alternatives]) {
+        if (rawCity.includes(alt.toLowerCase())) {
+          label = group.label;
+          break;
+        }
+      }
+      if (label !== "Other") break;
+    }
+    if (label !== "Other") {
+      listedCityMap.set(label, (listedCityMap.get(label) ?? 0) + 1);
+    }
+  }
+
+  const listedCities: GrowingCity[] = Array.from(listedCityMap.entries())
+    .map(([city, count]) => ({ city, count }))
+    .sort((a, b) => b.count - a.count);
+
   return NextResponse.json({
     success: true,
     totalUnlistedMembers: unlistedRecords.length,
     totalListedMembers: listedRecords.length,
     data,
+    listedCities,
   });
 }
