@@ -11,7 +11,8 @@ export function createResendClient(config: ResendConfig) {
   async function sendEmail(
     to: string,
     subject: string,
-    html: string
+    html: string,
+    options?: { cc?: string | string[]; replyTo?: string | string[] }
   ): Promise<{ id: string } | null> {
     try {
       const result = await client.emails.send({
@@ -19,6 +20,8 @@ export function createResendClient(config: ResendConfig) {
         to,
         subject,
         html,
+        ...(options?.cc ? { cc: options.cc } : {}),
+        ...(options?.replyTo ? { replyTo: options.replyTo } : {}),
       });
       if (result.error) {
         console.error(`Resend error for ${to}:`, result.error);

@@ -6,22 +6,34 @@
  * Works globally.
  */
 
+// Only successful (non-empty) results are cached. We don't cache empties so a
+// transient outage doesn't poison the cache for the whole process lifetime.
 const NEARBY_CACHE = new Map<string, string>();
 
 interface PlaceResult {
   displayName?: { text: string };
 }
 
-/**
- * Single search call — returns names in Google's proximity/relevance order.
- */
+export interface NearbyOptions {
+  /** Called with a human-readable error string when an upstream Google call fails. */
+  onError?: (msg: string) => void;
+}
+
+const RETRY_BACKOFF_MS = [1_000, 3_000, 8_000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 async function searchNearby(
   lat: number,
   lon: number,
   types: string[],
   radiusMeters: number,
   apiKey: string,
-  maxResults: number = 20
+  maxResults: number = 20,
+  onError?: (msg: string) => void,
+  attempt = 0
 ): Promise<string[]> {
   const body = {
     includedTypes: types,
@@ -46,38 +58,51 @@ async function searchNearby(
       body: JSON.stringify(body),
     });
 
-    if (!res.ok) return [];
+    // Retry the per-minute-quota case with exponential backoff. Anything else
+    // is fatal for this call — we don't want to retry permission-denied / bad-request.
+    if (res.status === 429 && attempt < RETRY_BACKOFF_MS.length) {
+      const wait = RETRY_BACKOFF_MS[attempt];
+      onError?.(`Places API 429 rate-limited — sleeping ${wait}ms (attempt ${attempt + 1}/${RETRY_BACKOFF_MS.length})`);
+      await sleep(wait);
+      return searchNearby(lat, lon, types, radiusMeters, apiKey, maxResults, onError, attempt + 1);
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      const msg = `Places API ${res.status} ${res.statusText}: ${text.slice(0, 250)}`;
+      console.error(`[findNearbyPlaces] ${msg}`);
+      onError?.(msg);
+      return [];
+    }
 
     const data = await res.json();
     return ((data.places ?? []) as PlaceResult[])
       .map((p) => p.displayName?.text ?? "")
       .filter((name) => name.length > 1);
-  } catch {
+  } catch (err) {
+    const msg = `Places API exception: ${err instanceof Error ? err.message : String(err)}`;
+    console.error(`[findNearbyPlaces] ${msg}`);
+    onError?.(msg);
     return [];
   }
 }
 
-/**
- * Fetch all place types for a single tier, merge-dedup preserving order.
- * Runs all type searches in parallel, then round-robin interleaves results
- * so no single type dominates the top of the list.
- */
 async function fetchTier(
   lat: number,
   lon: number,
   radiusMeters: number,
-  apiKey: string
+  apiKey: string,
+  onError?: (msg: string) => void
 ): Promise<string[]> {
   const stationRadius = Math.min(radiusMeters, 16_000);
 
-  const [stations, landmarks, areas] = await Promise.all([
-    searchNearby(lat, lon, ["train_station", "subway_station", "transit_station", "light_rail_station"], stationRadius, apiKey, 20),
-    searchNearby(lat, lon, ["park", "library", "shopping_mall"], radiusMeters, apiKey, 15),
-    searchNearby(lat, lon, ["university", "community_center"], radiusMeters, apiKey, 10),
-  ]);
+  // Serial instead of parallel to keep the per-minute quota happy. Per-tier
+  // wall-clock goes up by ~2x but average throughput stays well under
+  // Google's `SearchNearbyRequest per minute` limit.
+  const stations = await searchNearby(lat, lon, ["train_station", "subway_station", "transit_station", "light_rail_station"], stationRadius, apiKey, 20, onError);
+  const landmarks = await searchNearby(lat, lon, ["park", "library", "shopping_mall"], radiusMeters, apiKey, 15, onError);
+  const areas = await searchNearby(lat, lon, ["university", "community_center"], radiusMeters, apiKey, 10, onError);
 
-  // Round-robin interleave: take one from each list in turn
-  // This preserves per-type proximity order while mixing types fairly
   const lists = [stations, landmarks, areas];
   const seen = new Set<string>();
   const result: string[] = [];
@@ -98,30 +123,26 @@ async function fetchTier(
   return result;
 }
 
-/**
- * Find nearby places in 3 tiers: 5km → 10km → 25km.
- * Places are ordered closest-first within each tier.
- * Duplicates across tiers are removed (a place found at 5km won't repeat at 10km).
- * Tiers are separated by " | " for downstream parsing.
- *
- * Example: "Clapham Junction, Battersea, Brixton | Fulham, Chelsea | Croydon, Kingston"
- */
 export async function findNearbyPlaces(
   lat: number,
-  lon: number
+  lon: number,
+  options?: NearbyOptions
 ): Promise<string> {
   const cacheKey = `${lat.toFixed(3)},${lon.toFixed(3)}`;
   const cached = NEARBY_CACHE.get(cacheKey);
-  if (cached !== undefined) return cached;
+  if (cached) return cached; // only return cache when it has content
 
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-  if (!apiKey) return "";
+  if (!apiKey) {
+    options?.onError?.("GOOGLE_MAPS_API_KEY env var is missing");
+    return "";
+  }
 
   const globalSeen = new Set<string>();
   const tiers: string[][] = [];
 
   for (const radius of [5_000, 10_000, 40_000]) {
-    const names = await fetchTier(lat, lon, radius, apiKey);
+    const names = await fetchTier(lat, lon, radius, apiKey, options?.onError);
     const newInTier = names.filter((n) => !globalSeen.has(n));
     newInTier.forEach((n) => globalSeen.add(n));
     if (newInTier.length > 0) {
@@ -130,6 +151,6 @@ export async function findNearbyPlaces(
   }
 
   const result = tiers.map((t) => t.join(", ")).join(" | ");
-  NEARBY_CACHE.set(cacheKey, result);
+  if (result) NEARBY_CACHE.set(cacheKey, result);
   return result;
 }

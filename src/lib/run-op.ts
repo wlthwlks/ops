@@ -1,12 +1,13 @@
 import { createRunLogger } from "./logger";
+import type { AppDb } from "@/db";
 import type { Op, OpResult } from "./types";
 
-export async function runOp(op: Op, db: any): Promise<OpResult> {
-  const { ctx, finishRun } = createRunLogger(db, op.slug);
+export async function runOp(op: Op, db: AppDb): Promise<OpResult> {
+  const { ctx, finishRun } = await createRunLogger(db, op.slug);
 
   try {
     const result = await op.run(ctx);
-    finishRun(result);
+    await finishRun(result);
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -14,7 +15,7 @@ export async function runOp(op: Op, db: any): Promise<OpResult> {
       success: false,
       summary: `Error: ${message}`,
     };
-    finishRun(failResult);
+    await finishRun(failResult);
     return failResult;
   }
 }

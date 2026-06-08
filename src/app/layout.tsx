@@ -1,12 +1,6 @@
 import { AntdRegistry } from "@ant-design/nextjs-registry";
 import { ConfigProvider } from "antd";
-import {
-  ClerkProvider,
-  SignInButton,
-  SignUpButton,
-  Show,
-  UserButton,
-} from "@clerk/nextjs";
+import { ClerkProvider } from "@clerk/nextjs";
 
 export const metadata = {
   title: "WLTH WLKS Ops",
@@ -30,15 +24,6 @@ export default function RootLayout({
                 },
               }}
             >
-              <header style={{ display: "flex", gap: 8, padding: "8px 16px", justifyContent: "flex-end" }}>
-                <Show when="signed-out">
-                  <SignInButton />
-                  <SignUpButton />
-                </Show>
-                <Show when="signed-in">
-                  <UserButton />
-                </Show>
-              </header>
               {children}
             </ConfigProvider>
           </AntdRegistry>

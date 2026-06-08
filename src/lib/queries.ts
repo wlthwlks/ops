@@ -13,35 +13,35 @@ export interface OpStatus {
   status: "idle" | "running" | "success" | "failed";
 }
 
-export function getOpsOverview(): OpStatus[] {
+export async function getOpsOverview(): Promise<OpStatus[]> {
   const ops = registry.getAll();
 
-  return ops.map((op) => {
-    const lastRun = db
-      .select()
-      .from(opRuns)
-      .where(eq(opRuns.opSlug, op.slug))
-      .orderBy(desc(opRuns.startedAt))
-      .limit(1)
-      .get();
+  return Promise.all(
+    ops.map(async (op) => {
+      const [lastRun] = await db
+        .select()
+        .from(opRuns)
+        .where(eq(opRuns.opSlug, op.slug))
+        .orderBy(desc(opRuns.startedAt))
+        .limit(1);
 
-    return {
-      slug: op.slug,
-      name: op.name,
-      description: op.description,
-      schedule: op.schedule,
-      lastRun: lastRun ?? undefined,
-      status: (lastRun?.status as "running" | "success" | "failed") ?? "idle",
-    };
-  });
+      return {
+        slug: op.slug,
+        name: op.name,
+        description: op.description,
+        schedule: op.schedule,
+        lastRun: lastRun ?? undefined,
+        status: (lastRun?.status as "running" | "success" | "failed") ?? "idle",
+      };
+    })
+  );
 }
 
-export function getOpRuns(slug: string, limit = 20): OpRun[] {
+export async function getOpRuns(slug: string, limit = 20): Promise<OpRun[]> {
   return db
     .select()
     .from(opRuns)
     .where(eq(opRuns.opSlug, slug))
     .orderBy(desc(opRuns.startedAt))
-    .limit(limit)
-    .all();
+    .limit(limit);
 }

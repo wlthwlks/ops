@@ -1,66 +1,52 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import { opRuns } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { createTestDb, type TestDb } from "../helpers/test-db";
 
 describe("op_runs schema", () => {
-  let sqlite: Database.Database;
-  let db: ReturnType<typeof drizzle>;
+  let db: TestDb;
+  let close: () => Promise<void>;
 
-  beforeEach(() => {
-    sqlite = new Database(":memory:");
-    db = drizzle(sqlite);
-    sqlite.exec(`
-      CREATE TABLE op_runs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        op_slug TEXT NOT NULL,
-        started_at TEXT NOT NULL DEFAULT (datetime('now')),
-        finished_at TEXT,
-        status TEXT NOT NULL DEFAULT 'running',
-        log TEXT NOT NULL DEFAULT '',
-        summary TEXT
-      )
-    `);
+  beforeEach(async () => {
+    const harness = await createTestDb();
+    db = harness.db;
+    close = harness.close;
   });
 
-  afterEach(() => {
-    sqlite.close();
+  afterEach(async () => {
+    await close();
   });
 
-  it("inserts and retrieves a run", () => {
-    const inserted = db
+  it("inserts and retrieves a run", async () => {
+    const [inserted] = await db
       .insert(opRuns)
       .values({ opSlug: "test-op", status: "running" })
-      .returning()
-      .get();
+      .returning();
 
     expect(inserted.opSlug).toBe("test-op");
     expect(inserted.status).toBe("running");
     expect(inserted.id).toBeGreaterThan(0);
   });
 
-  it("updates status and summary on finish", () => {
-    const inserted = db
+  it("updates status and summary on finish", async () => {
+    const [inserted] = await db
       .insert(opRuns)
       .values({ opSlug: "test-op", status: "running" })
-      .returning()
-      .get();
+      .returning();
 
-    db.update(opRuns)
+    await db
+      .update(opRuns)
       .set({
         status: "success",
         summary: "Processed 5 records",
-        finishedAt: new Date().toISOString(),
+        finishedAt: new Date(),
       })
-      .where(eq(opRuns.id, inserted.id))
-      .run();
+      .where(eq(opRuns.id, inserted.id));
 
-    const updated = db
+    const [updated] = await db
       .select()
       .from(opRuns)
-      .where(eq(opRuns.id, inserted.id))
-      .get();
+      .where(eq(opRuns.id, inserted.id));
 
     expect(updated?.status).toBe("success");
     expect(updated?.summary).toBe("Processed 5 records");

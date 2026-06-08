@@ -45,7 +45,7 @@ describe("AirtableClient", () => {
   });
 
   it("throws on non-retryable error", async () => {
-    mockFetch.mockResolvedValueOnce({ ok: false, status: 401, statusText: "Unauthorized" });
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 401, statusText: "Unauthorized", text: async () => "invalid api key" });
     await expect(client.listRecords("Members")).rejects.toThrow("401");
   });
 });

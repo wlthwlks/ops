@@ -9,19 +9,27 @@ export interface GeoPoint {
   displayName: string;
 }
 
-const GEOCODE_CACHE = new Map<string, GeoPoint | null>();
+export interface GeocodeOptions {
+  /** Called with a human-readable error string when the Google call fails. */
+  onError?: (msg: string) => void;
+}
 
-/**
- * Geocode a postcode + city to lat/lng using Google Maps Geocoding API.
- */
-export async function geocode(postcode: string, city: string): Promise<GeoPoint | null> {
+// Only successful results are cached. We don't cache null/failure so a transient
+// outage doesn't suppress retries for the whole process lifetime.
+const GEOCODE_CACHE = new Map<string, GeoPoint>();
+
+export async function geocode(
+  postcode: string,
+  city: string,
+  options?: GeocodeOptions
+): Promise<GeoPoint | null> {
   const cacheKey = `${postcode}|${city}`.toLowerCase();
   const cached = GEOCODE_CACHE.get(cacheKey);
-  if (cached !== undefined) return cached;
+  if (cached) return cached;
 
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
   if (!apiKey) {
-    // Fallback: return null if no Google API key
+    options?.onError?.("GOOGLE_MAPS_API_KEY env var is missing");
     return null;
   }
 
@@ -36,13 +44,20 @@ export async function geocode(postcode: string, city: string): Promise<GeoPoint 
   try {
     const res = await fetch(url);
     if (!res.ok) {
-      GEOCODE_CACHE.set(cacheKey, null);
+      const text = await res.text().catch(() => "");
+      const msg = `Geocoding API ${res.status} ${res.statusText}: ${text.slice(0, 250)}`;
+      console.error(`[geocode] ${msg}`);
+      options?.onError?.(msg);
       return null;
     }
 
     const data = await res.json();
     if (data.status !== "OK" || !data.results?.length) {
-      GEOCODE_CACHE.set(cacheKey, null);
+      const msg = `Geocoding status=${data.status}` +
+        (data.error_message ? ` error_message="${data.error_message}"` : "") +
+        ` query="${query}"`;
+      console.error(`[geocode] ${msg}`);
+      options?.onError?.(msg);
       return null;
     }
 
@@ -55,8 +70,10 @@ export async function geocode(postcode: string, city: string): Promise<GeoPoint 
 
     GEOCODE_CACHE.set(cacheKey, point);
     return point;
-  } catch {
-    GEOCODE_CACHE.set(cacheKey, null);
+  } catch (err) {
+    const msg = `Geocoding exception: ${err instanceof Error ? err.message : String(err)}`;
+    console.error(`[geocode] ${msg}`);
+    options?.onError?.(msg);
     return null;
   }
 }

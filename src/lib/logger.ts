@@ -1,46 +1,37 @@
 import { opRuns } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { OpContext, OpResult } from "./types";
+import type { AppDb } from "@/db";
 
-export function createRunLogger(db: any, opSlug: string) {
-  const inserted = db
+export async function createRunLogger(db: AppDb, opSlug: string) {
+  const [inserted] = await db
     .insert(opRuns)
     .values({ opSlug, status: "running" })
-    .returning()
-    .get();
+    .returning({ id: opRuns.id });
 
   const runId: number = inserted.id;
 
-  const ctx: OpContext = {
-    db,
-    log: (message: string) => {
-      const current = db
-        .select({ log: opRuns.log })
-        .from(opRuns)
-        .where(eq(opRuns.id, runId))
-        .get();
-
-      const timestamp = new Date().toISOString();
-      const newLog = current?.log
-        ? `${current.log}\n[${timestamp}] ${message}`
-        : `[${timestamp}] ${message}`;
-
-      db.update(opRuns)
-        .set({ log: newLog })
-        .where(eq(opRuns.id, runId))
-        .run();
-    },
+  const log = async (message: string): Promise<void> => {
+    const line = `[${new Date().toISOString()}] ${message}`;
+    await db
+      .update(opRuns)
+      .set({
+        log: sql`CASE WHEN ${opRuns.log} = '' THEN ${line} ELSE ${opRuns.log} || E'\n' || ${line} END`,
+      })
+      .where(eq(opRuns.id, runId));
   };
 
-  const finishRun = (result: OpResult) => {
-    db.update(opRuns)
+  const ctx: OpContext = { db, log };
+
+  const finishRun = async (result: OpResult): Promise<void> => {
+    await db
+      .update(opRuns)
       .set({
         status: result.success ? "success" : "failed",
         summary: result.summary,
-        finishedAt: new Date().toISOString(),
+        finishedAt: new Date(),
       })
-      .where(eq(opRuns.id, runId))
-      .run();
+      .where(eq(opRuns.id, runId));
   };
 
   return { ctx, runId, finishRun };

@@ -8,12 +8,11 @@ export async function GET() {
     const { opRuns } = await import("@/db/schema");
     const { desc } = await import("drizzle-orm");
 
-    const lastRuns = db
+    const lastRuns = await db
       .select()
       .from(opRuns)
       .orderBy(desc(opRuns.startedAt))
-      .limit(20)
-      .all();
+      .limit(20);
 
     const failedOps = lastRuns.filter((r) => r.status === "failed");
 

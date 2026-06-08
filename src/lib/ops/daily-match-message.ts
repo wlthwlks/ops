@@ -6,6 +6,13 @@ import { createResendClient } from "../integrations/resend";
 import { generateMatchMessage } from "../messaging/generate-match-message";
 import type { MessageMember } from "../messaging/types";
 import { CITIES } from "../constants";
+import { db } from "@/db";
+import {
+  recordMatchEvent,
+  recordSlackDelivery,
+  recordEmailDelivery,
+  type MatchInput,
+} from "@/lib/matchmake/record";
 
 /**
  * Resolve a raw city string to the list of all city names in its group.
@@ -30,19 +37,18 @@ function getCityGroupNames(rawCity: string): string[] {
 }
 
 /**
- * TEST MODE: Only send Slack messages to these emails.
- * All other processing (matching, lookups, message generation) runs normally
- * with real member data, but Slack DMs are only delivered when ALL recipients
- * in the group are on this allowlist. Remove this filter to go live.
+ * Parse a comma-separated env value into a deduped Set of trimmed,
+ * lowercased non-empty strings. Returns an empty Set if undefined.
  */
-const SLACK_TEST_ALLOWLIST = new Set([
-  "polymathic.development@gmail.com",
-  "jolanta@marllm.io",
-]);
-
-const EMAIL_TEST_ALLOWLIST = new Set([
-  "jolanta@wlthwlks.com",
-]);
+function parseEmailEnv(value: string | undefined): Set<string> {
+  if (!value) return new Set();
+  return new Set(
+    value
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length > 0)
+  );
+}
 
 export interface DeliveryMatchMember {
   name: string;
@@ -98,16 +104,32 @@ export async function runDailyMatchMessage(
   ctx: OpContext,
   mode: "preview" | "send" | "send-slack" | "send-email" = "send",
   emails?: string[],
-  editedMessages?: Record<string, string>
+  editedMessages?: Record<string, string>,
+  editedEmails?: Record<string, string>,
+  requestId?: string
 ): Promise<MatchMessageResult> {
+  // Defensive: UI should supply a requestId for non-preview modes so DB
+  // tracking is idempotent end-to-end. Fall back to a fresh UUID and log a
+  // warning when missing so we can spot UI/route gaps in production.
+  const trackingRequestId = requestId ?? crypto.randomUUID();
+  if (!requestId && mode !== "preview") {
+    ctx.log(
+      `WARN: runDailyMatchMessage called in mode=${mode} without a requestId — generated fallback ${trackingRequestId}`
+    );
+  }
+  const shouldTrack = mode !== "preview";
   const airtableToken = process.env.AIRTABLE_GET_DATA_TOKEN;
   const airtableBase = process.env.AIRTABLE_BASE_ID;
   const pineconeKey = process.env.PINECONE_API_KEY;
   const pineconeIndex = process.env.PINECONE_INDEX_NAME;
   const slackToken = process.env.SLACK_BOT_TOKEN;
   const resendApiKey = process.env.RESEND_API_KEY;
-  const resendFromEmail = process.env.RESEND_FROM_EMAIL || "hello@wlthwlks.com";
+  const resendFromEmail = process.env.RESEND_FROM_EMAIL || "donotreply@wlthwlks.com";
   const slackInviteUrl = process.env.SLACK_WORKSPACE_INVITE_URL || process.env.SLACK_JOIN_URL || "";
+
+  // Slack oversight recipients are added to every group DM. Configured via
+  // the SLACK_OVERSIGHT_EMAILS env var (comma-separated). Empty disables it.
+  const slackOversightRecipients = parseEmailEnv(process.env.SLACK_OVERSIGHT_EMAILS);
 
   if (!airtableToken || !airtableBase) {
     return { success: false, summary: "Missing Airtable credentials", deliveries: [] };
@@ -288,29 +310,57 @@ export async function runDailyMatchMessage(
       ctx.log(`  ${newMemberName}: ${slackUserIds.size}/${allEmails.length} on Slack`);
 
       // 5. Send Slack group DM to members on Slack
-      // TEST MODE: when sending, deliver DM to the test allowlist users only
-      // (regardless of whether they're in the match group). This lets you test
-      // the full flow without messaging real members. Preview shows real status.
-      let sendSlackUserIds: Map<string, string>;
+      // The DM includes the actual matched members plus any oversight recipients
+      // (so admins can see and respond inside the same thread).
       const doSend = mode === "send" || mode === "send-slack" || mode === "send-email";
       const doSlack = mode === "send" || mode === "send-slack";
       const doEmail = mode === "send" || mode === "send-email";
 
-      if (doSend) {
-        // Resolve allowlist emails to Slack IDs (they may not be in the match group)
-        const testIds = new Map<string, string>();
-        for (const testEmail of SLACK_TEST_ALLOWLIST) {
-          const existing = slackUserIds.get(testEmail);
-          if (existing) {
-            testIds.set(testEmail, existing);
-          } else {
-            const looked = await slack.lookupByEmail(testEmail);
-            if (looked) testIds.set(testEmail, looked.id);
-          }
+      // Record the match event to DB before any delivery. Best-effort: if the
+      // DB write fails we still send Slack/email — never block real-world
+      // deliveries on tracking. Skip entirely in preview mode.
+      // Per-event idempotency key composes the master requestId with the new
+      // member's email so multiple members in one batch run don't collide.
+      let matchEventId: string | null = null;
+      if (shouldTrack) {
+        const perEventRequestId = `${trackingRequestId}:${email.toLowerCase()}`;
+        const trackedMatches: MatchInput[] = matches.map((m, idx) => ({
+          email: String(m.metadata.email || ""),
+          postcode: m.metadata.postcode != null ? String(m.metadata.postcode) : undefined,
+          city: m.metadata.city != null ? String(m.metadata.city) : undefined,
+          industry: m.metadata.industry != null ? String(m.metadata.industry) : undefined,
+          rank: idx + 1,
+          similarityScore: m.score,
+          wasOnSlack: slackUserIds.has(String(m.metadata.email || "")),
+        }));
+        try {
+          const recorded = await recordMatchEvent({
+            db,
+            requestId: perEventRequestId,
+            mode,
+            dryRun: false,
+            newMember: {
+              email,
+              postcode: newMemberPostcode || undefined,
+              city: newMemberCity || undefined,
+              industry: newMemberIndustry || undefined,
+            },
+            matches: trackedMatches,
+          });
+          matchEventId = recorded.matchEventId;
+        } catch (recordErr) {
+          const msg = recordErr instanceof Error ? recordErr.message : String(recordErr);
+          ctx.log(`  ${newMemberName}: WARN recordMatchEvent failed — ${msg}`);
         }
-        sendSlackUserIds = testIds;
-      } else {
-        sendSlackUserIds = slackUserIds;
+      }
+
+      const sendSlackUserIds = new Map<string, string>(slackUserIds);
+      if (doSend) {
+        for (const oversightEmail of slackOversightRecipients) {
+          if (sendSlackUserIds.has(oversightEmail)) continue;
+          const looked = await slack.lookupByEmail(oversightEmail);
+          if (looked) sendSlackUserIds.set(oversightEmail, looked.id);
+        }
       }
 
       // Generate the message for preview/sending
@@ -346,44 +396,104 @@ export async function runDailyMatchMessage(
         // Use edited message if provided, otherwise use generated one
         const finalMessage = editedMessages?.[email] ?? msg.body;
         const { channelId } = await slack.conversationsOpen(slackIds);
-        await slack.postMessage(channelId, finalMessage);
+        const { ts: slackMessageTs } = await slack.postMessage(channelId, finalMessage);
 
         delivery.slackSent = true;
         delivery.slackChannelId = channelId;
         slackSentCount++;
-        ctx.log(`  ${newMemberName}: Slack group DM sent (${slackIds.length} members)`);
+        const oversightInGroup = Array.from(slackOversightRecipients).filter((e) => sendSlackUserIds.has(e));
+        const oversightNote = oversightInGroup.length > 0 ? ` (incl. ${oversightInGroup.length} oversight)` : "";
+        ctx.log(`  ${newMemberName}: Slack group DM sent (${slackIds.length} members${oversightNote})`);
+
+        // Record Slack delivery metadata on the match_event. Best-effort —
+        // never let a DB write failure mask a successful Slack send.
+        if (shouldTrack && matchEventId) {
+          try {
+            await recordSlackDelivery(db, matchEventId, {
+              slackChannelId: channelId,
+              slackMessageTs,
+              slackRecipientCount: slackIds.length,
+            });
+          } catch (slackRecErr) {
+            const msg = slackRecErr instanceof Error ? slackRecErr.message : String(slackRecErr);
+            ctx.log(`  ${newMemberName}: WARN recordSlackDelivery failed — ${msg}`);
+          }
+        }
       } else if (sendSlackUserIds.size >= 2 && mode === "preview") {
         ctx.log(`  ${newMemberName}: ${sendSlackUserIds.size} eligible for Slack DM (preview only)`);
-      } else if (slackUserIds.size >= 2 && sendSlackUserIds.size < 2 && doSlack) {
-        delivery.error = "Test mode: <2 allowlisted members on Slack";
-        ctx.log(`  ${newMemberName}: Slack skipped (test mode — ${sendSlackUserIds.size} allowlisted of ${slackUserIds.size} on Slack)`);
       } else {
         ctx.log(`  ${newMemberName}: Slack skipped (<2 members on Slack)`);
       }
 
-      // 6. Send email — TEST MODE: send to allowlisted test addresses with real match content
+      // 6. Send a SINGLE introduction email to the new member (To:) with all
+      // matches CC'd in. One Resend send, one rendered email, one reply-all
+      // thread. Each recipient still gets a row in email_deliveries for audit.
       if (doEmail && resend) {
-        for (const testEmail of EMAIL_TEST_ALLOWLIST) {
-          const emailMsg = generateMatchMessage({
-            newMember: newMemberAsMsgMember,
-            matches: matchMembers,
-            format: "html",
-            slackInviteUrl: slackInviteUrl || undefined,
-            isOnSlack: false, // test recipient is not in the match group's Slack
-          });
+        // Use edited HTML if the operator changed it in the UI, otherwise generate fresh.
+        const editedEmailHtml = editedEmails?.[email];
+        const emailBody = editedEmailHtml ?? generateMatchMessage({
+          newMember: newMemberAsMsgMember,
+          matches: matchMembers,
+          format: "html",
+          slackInviteUrl: slackInviteUrl || undefined,
+          isOnSlack: slackUserIds.has(email),
+        }).body;
 
-          const result = await resend.sendEmail(
-            testEmail,
-            "Your WLTH WLKS Connections Are Here!",
-            emailMsg.body
+        const toEmail = email.toLowerCase();
+        const ccEmails = Array.from(new Set(
+          matchMembers
+            .map((m) => (m.email || "").toLowerCase())
+            .filter((e) => e && e !== toEmail)
+        ));
+
+        // Reply-To routes replies AWAY from the donotreply sender and TO the
+        // human recipients. Including the new joiner + matches means hitting
+        // Reply or Reply-All in any client lands the reply with the group,
+        // not the unmonitored donotreply inbox.
+        const replyToList = [toEmail, ...ccEmails];
+
+        const result = await resend.sendEmail(
+          toEmail,
+          "Your WLTH WLKS Connections Are Here!",
+          emailBody,
+          {
+            ...(ccEmails.length > 0 ? { cc: ccEmails } : {}),
+            replyTo: replyToList,
+          }
+        );
+
+        const allRecipients: Array<{ email: string; role: "new_member" | "match" }> = [
+          { email: toEmail, role: "new_member" },
+          ...ccEmails.map((e) => ({ email: e, role: "match" as const })),
+        ];
+
+        if (result) {
+          for (const r of allRecipients) delivery.emailsSent.push(r.email);
+          ctx.log(
+            `  ${newMemberName}: email sent — To: ${toEmail}` +
+              (ccEmails.length > 0 ? `, Cc: ${ccEmails.join(", ")}` : "")
           );
+        } else {
+          for (const r of allRecipients) delivery.emailsFailed.push(r.email);
+          ctx.log(`  ${newMemberName}: email FAILED (1 send, ${allRecipients.length} recipients)`);
+        }
 
-          if (result) {
-            delivery.emailsSent.push(testEmail);
-            ctx.log(`  ${newMemberName}: email sent to ${testEmail}`);
-          } else {
-            delivery.emailsFailed.push(testEmail);
-            ctx.log(`  ${newMemberName}: email FAILED for ${testEmail}`);
+        // Record one row per recipient (sharing the same resend_message_id) so
+        // per-person webhook engagement can attach correctly in Phase 2.
+        if (shouldTrack && matchEventId) {
+          for (const r of allRecipients) {
+            try {
+              await recordEmailDelivery(db, matchEventId, {
+                recipientEmail: r.email,
+                recipientRole: r.role,
+                resendMessageId: result?.id,
+                status: result ? "sent" : "failed",
+                error: result ? undefined : "Resend returned no id",
+              });
+            } catch (emailRecErr) {
+              const msg = emailRecErr instanceof Error ? emailRecErr.message : String(emailRecErr);
+              ctx.log(`  ${newMemberName}: WARN recordEmailDelivery failed for ${r.email} — ${msg}`);
+            }
           }
         }
       }

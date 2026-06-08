@@ -1,43 +1,21 @@
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
+import { neon } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/neon-http";
 import * as schema from "./schema";
-import path from "path";
-import fs from "fs";
 
-function getDb() {
-  const dbUrl = process.env.DATABASE_URL;
-
-  if (dbUrl && dbUrl.startsWith("postgres")) {
-    throw new Error(
-      "Postgres support requires drizzle-orm/node-postgres. Set up separately for production."
-    );
-  }
-
-  const dbPath = dbUrl || path.join(process.cwd(), "data", "ops.db");
-  const dir = path.dirname(dbPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
-  const sqlite = new Database(dbPath);
-  sqlite.pragma("journal_mode = WAL");
-
-  const db = drizzle(sqlite, { schema });
-
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS op_runs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      op_slug TEXT NOT NULL,
-      started_at TEXT NOT NULL DEFAULT (datetime('now')),
-      finished_at TEXT,
-      status TEXT NOT NULL DEFAULT 'running',
-      log TEXT NOT NULL DEFAULT '',
-      summary TEXT
-    )
-  `);
-
-  return db;
+// Provided by the Vercel/Neon Marketplace integration. In local dev pulled
+// via `vercel env pull .env.development.local --environment=production` plus
+// the connection-string overrides documented in the README.
+const url = process.env.POSTGRES_URL;
+if (!url) {
+  throw new Error(
+    "POSTGRES_URL is not set. Either run via " +
+      "`node --env-file=.env.development.local …` or pull it with " +
+      "`vercel env pull .env.development.local --environment=production` " +
+      "(then paste the real Neon pooled URL into the file — Vercel writes " +
+      "empty strings for sensitive vars)."
+  );
 }
 
-export const db = getDb();
+const client = neon(url);
+export const db = drizzle(client, { schema });
 export type AppDb = typeof db;

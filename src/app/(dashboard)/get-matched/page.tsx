@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { Button, Card, Collapse, DatePicker, Divider, Empty, Flex, Input, Modal, Select, Spin, Table, Tag, Typography, Space, message, Checkbox } from "antd";
+import { Alert, Button, Card, Collapse, DatePicker, Divider, Empty, Flex, Input, Modal, Select, Spin, Table, Tag, Typography, Space, message, Checkbox } from "antd";
+import { WarningOutlined } from "@ant-design/icons";
 import { SearchOutlined, MailOutlined, CheckCircleOutlined, SyncOutlined, SettingOutlined, DownOutlined, UpOutlined, EditOutlined, CopyOutlined, TeamOutlined, CalendarOutlined as CalendarIcon, SlackOutlined, SendOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 import { generateMatchMessage } from "@/lib/messaging/generate-match-message";
+import { KpiCards } from "./kpi-cards";
 
 const { RangePicker } = DatePicker;
 
@@ -468,7 +470,43 @@ export default function GetMatchedPage() {
   const [slackLogs, setSlackLogs] = useState<string[]>([]);
   const [slackPreviewed, setSlackPreviewed] = useState(false);
   const [slackEditedMessages, setSlackEditedMessages] = useState<Record<string, string>>({});
+  const [slackEditedEmails, setSlackEditedEmails] = useState<Record<string, string>>({});
   const [slackExpandedEmail, setSlackExpandedEmail] = useState<string | null>(null);
+  const [emailHtmlExpanded, setEmailHtmlExpanded] = useState<Record<string, boolean>>({});
+
+  // ─── Places diagnostic ───
+  const [diagnosticOpen, setDiagnosticOpen] = useState(false);
+  const [diagnosticLoading, setDiagnosticLoading] = useState(false);
+  const [diagnosticResult, setDiagnosticResult] = useState<{ ok: boolean; verdict: string; nextSteps: string[]; geocoding: any; places: any } | null>(null);
+
+  async function runPlacesDiagnostic() {
+    setDiagnosticOpen(true);
+    setDiagnosticLoading(true);
+    setDiagnosticResult(null);
+    try {
+      const res = await fetch("/api/diagnose-places");
+      const data = await res.json();
+      setDiagnosticResult(data);
+    } catch (err) {
+      setDiagnosticResult({ ok: false, verdict: err instanceof Error ? err.message : "Network error", nextSteps: [], geocoding: {}, places: {} });
+    } finally {
+      setDiagnosticLoading(false);
+    }
+  }
+
+  function countMembersMissingNearby(): { missing: number; total: number } {
+    let missing = 0;
+    let total = 0;
+    for (const d of slackDeliveries) {
+      total += 1; // the new member
+      if (!d.newMemberNearbyLocation || d.newMemberNearbyLocation.trim() === "") missing += 1;
+      for (const m of d.matches ?? []) {
+        total += 1;
+        if (!m.nearbyLocation || m.nearbyLocation.trim() === "") missing += 1;
+      }
+    }
+    return { missing, total };
+  }
 
   async function callMatchIntros(mode: "preview" | "send" | "send-slack" | "send-email") {
     const isPreview = mode === "preview";
@@ -476,6 +514,8 @@ export default function GetMatchedPage() {
       setSlackLoading(true);
       setSlackPreviewed(false);
       setSlackEditedMessages({});
+      setSlackEditedEmails({});
+      setEmailHtmlExpanded({});
     } else {
       setSlackSending(true);
     }
@@ -488,8 +528,14 @@ export default function GetMatchedPage() {
 
     try {
       const bodyObj: Record<string, unknown> = { mode };
-      if (mode === "send" && Object.keys(slackEditedMessages).length > 0) {
-        bodyObj.editedMessages = slackEditedMessages;
+      if (!isPreview) {
+        bodyObj.requestId = crypto.randomUUID();
+        if (Object.keys(slackEditedMessages).length > 0) {
+          bodyObj.editedMessages = slackEditedMessages;
+        }
+        if (Object.keys(slackEditedEmails).length > 0) {
+          bodyObj.editedEmails = slackEditedEmails;
+        }
       }
       if (slackLoadMode === "email" && slackEmailInput.trim()) {
         bodyObj.emails = slackEmailInput.split(/[,\s]+/).map((e) => e.trim().toLowerCase()).filter(Boolean);
@@ -516,10 +562,13 @@ export default function GetMatchedPage() {
       if (isPreview) {
         // Populate editable messages from generated previews
         const msgs: Record<string, string> = {};
+        const emails: Record<string, string> = {};
         for (const d of data.deliveries || []) {
           if (d.slackMessage) msgs[d.newMemberEmail] = d.slackMessage;
+          if (d.emailPreview) emails[d.newMemberEmail] = d.emailPreview;
         }
         setSlackEditedMessages(msgs);
+        setSlackEditedEmails(emails);
         setSlackPreviewed(true);
       } else {
         message.success(data.summary);
@@ -531,6 +580,12 @@ export default function GetMatchedPage() {
       setSlackLoading(false);
       setSlackSending(false);
     }
+  }
+
+  function readyToSendCount(): number {
+    return slackDeliveries.filter(
+      (d) => !d.error && (d.slackMembersFound.length >= 2 || d.emailPreview)
+    ).length;
   }
 
   async function handleBatchMatch() {
@@ -625,6 +680,8 @@ export default function GetMatchedPage() {
 
   return (
     <div style={{ maxWidth: 1100 }}>
+      <KpiCards />
+      <Divider />
       {/* Refresh Analysis */}
       <Flex vertical gap="middle" style={{ width: "100%", marginBottom: 24 }}>
         <div>
@@ -752,7 +809,7 @@ export default function GetMatchedPage() {
       {slackSummary && !slackLoading && (
         <Flex vertical gap={16} style={{ marginBottom: 24 }}>
           <Card size="small" style={{ background: slackPreviewed ? "#e6f7ff" : "#f6ffed", borderColor: slackPreviewed ? "#91d5ff" : "#b7eb8f" }}>
-            <Flex justify="space-between" align="center">
+            <Flex justify="space-between" align="center" gap={12} wrap="wrap">
               <div>
                 <Text strong>{slackSummary}</Text>
                 {slackPreviewed && (
@@ -765,11 +822,44 @@ export default function GetMatchedPage() {
                   </div>
                 )}
               </div>
+              {slackPreviewed && readyToSendCount() > 0 && (
+                <Button
+                  type="primary"
+                  danger
+                  size="large"
+                  icon={<SendOutlined />}
+                  onClick={() => callMatchIntros("send")}
+                  loading={slackSending}
+                >
+                  {slackSending
+                    ? "Sending All..."
+                    : `Send All Slack + Email to ${readyToSendCount()} Group${readyToSendCount() === 1 ? "" : "s"}`}
+                </Button>
+              )}
               {!slackPreviewed && slackDeliveries.some((d) => d.slackSent) && (
                 <Tag color="green" style={{ fontSize: 14, padding: "4px 12px" }}>Messages Sent</Tag>
               )}
             </Flex>
           </Card>
+
+          {(() => {
+            const { missing, total } = countMembersMissingNearby();
+            if (missing === 0 || total === 0) return null;
+            return (
+              <Alert
+                type="warning"
+                showIcon
+                icon={<WarningOutlined />}
+                message={`${missing} of ${total} members have no nearby-location data`}
+                description={
+                  <>
+                    Their cards will render with an empty "Nearby" field and they're excluded from meeting-spot suggestions in the messages. Most often this means Google Places API (New) isn't enabled or billing has lapsed.{" "}
+                    <a onClick={runPlacesDiagnostic} style={{ cursor: "pointer", textDecoration: "underline" }}>Run diagnostic →</a>
+                  </>
+                }
+              />
+            );
+          })()}
 
           {slackDeliveries.map((delivery) => {
             const isExpanded = slackExpandedEmail === delivery.newMemberEmail;
@@ -923,17 +1013,48 @@ export default function GetMatchedPage() {
                       />
                     )}
 
-                    {/* Email preview */}
+                    {/* Email preview + editable HTML */}
                     {delivery.emailPreview && (
                       <div style={{ marginTop: 12 }}>
-                        <Text strong style={{ fontSize: 12, display: "block", marginBottom: 4 }}>
-                          <MailOutlined style={{ marginRight: 4 }} />
-                          Email preview:
-                        </Text>
+                        <Flex justify="space-between" align="center" style={{ marginBottom: 4 }}>
+                          <Text strong style={{ fontSize: 12 }}>
+                            <MailOutlined style={{ marginRight: 4 }} />
+                            Email preview{slackPreviewed ? " (editable):" : ":"}
+                          </Text>
+                          {slackPreviewed && (
+                            <a
+                              onClick={() =>
+                                setEmailHtmlExpanded((prev) => ({
+                                  ...prev,
+                                  [delivery.newMemberEmail]: !prev[delivery.newMemberEmail],
+                                }))
+                              }
+                              style={{ fontSize: 11, cursor: "pointer" }}
+                            >
+                              {emailHtmlExpanded[delivery.newMemberEmail] ? <UpOutlined /> : <EditOutlined />}{" "}
+                              {emailHtmlExpanded[delivery.newMemberEmail] ? "Hide HTML editor" : "Edit HTML"}
+                            </a>
+                          )}
+                        </Flex>
                         <div
                           style={{ border: "1px solid #f0f0f0", borderRadius: 6, padding: 16, background: "#fff", fontSize: 13, lineHeight: "20px" }}
-                          dangerouslySetInnerHTML={{ __html: delivery.emailPreview }}
+                          dangerouslySetInnerHTML={{
+                            __html: slackEditedEmails[delivery.newMemberEmail] ?? delivery.emailPreview,
+                          }}
                         />
+                        {slackPreviewed && emailHtmlExpanded[delivery.newMemberEmail] && (
+                          <Input.TextArea
+                            value={slackEditedEmails[delivery.newMemberEmail] ?? delivery.emailPreview}
+                            onChange={(e) =>
+                              setSlackEditedEmails((prev) => ({
+                                ...prev,
+                                [delivery.newMemberEmail]: e.target.value,
+                              }))
+                            }
+                            autoSize={{ minRows: 10, maxRows: 24 }}
+                            style={{ fontFamily: "monospace", fontSize: 12, lineHeight: "18px", marginTop: 8 }}
+                          />
+                        )}
                         {slackPreviewed && (
                           <Button
                             type="primary"
@@ -972,6 +1093,56 @@ export default function GetMatchedPage() {
           )}
         </Flex>
       )}
+
+      {/* Places API diagnostic modal */}
+      <Modal
+        title="Google Places API diagnostic"
+        open={diagnosticOpen}
+        onCancel={() => setDiagnosticOpen(false)}
+        width={760}
+        footer={[
+          <Button key="rerun" onClick={runPlacesDiagnostic} loading={diagnosticLoading}>Re-run</Button>,
+          <Button key="close" type="primary" onClick={() => setDiagnosticOpen(false)}>Close</Button>,
+        ]}
+      >
+        {diagnosticLoading && <div style={{ textAlign: "center", padding: 24 }}><Spin /></div>}
+        {!diagnosticLoading && diagnosticResult && (
+          <Flex vertical gap={12}>
+            <Alert
+              type={diagnosticResult.ok ? "success" : "error"}
+              showIcon
+              message={diagnosticResult.verdict}
+              description={diagnosticResult.nextSteps?.length > 0 ? (
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  {diagnosticResult.nextSteps.map((s, i) => <li key={i}>{s}</li>)}
+                </ul>
+              ) : null}
+            />
+            <Collapse
+              items={[
+                {
+                  key: "geo",
+                  label: <Text strong>Geocoding API ({String(diagnosticResult.geocoding?.httpStatus ?? "—")})</Text>,
+                  children: (
+                    <pre style={{ fontSize: 11, lineHeight: "16px", margin: 0, background: "#f5f5f5", padding: 12, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                      {JSON.stringify(diagnosticResult.geocoding, null, 2)}
+                    </pre>
+                  ),
+                },
+                {
+                  key: "places",
+                  label: <Text strong>Places API New ({String(diagnosticResult.places?.httpStatus ?? "—")})</Text>,
+                  children: (
+                    <pre style={{ fontSize: 11, lineHeight: "16px", margin: 0, background: "#f5f5f5", padding: 12, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                      {JSON.stringify(diagnosticResult.places, null, 2)}
+                    </pre>
+                  ),
+                },
+              ]}
+            />
+          </Flex>
+        )}
+      </Modal>
 
       {/* Batch Draft Modal */}
       <Modal

@@ -1,32 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import { runOp } from "@/lib/run-op";
 import { opRuns } from "@/db/schema";
 import type { Op } from "@/lib/types";
+import { createTestDb, type TestDb } from "../helpers/test-db";
 
 describe("runOp", () => {
-  let sqlite: Database.Database;
-  let db: ReturnType<typeof drizzle>;
+  let db: TestDb;
+  let close: () => Promise<void>;
 
-  beforeEach(() => {
-    sqlite = new Database(":memory:");
-    db = drizzle(sqlite);
-    sqlite.exec(`
-      CREATE TABLE op_runs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        op_slug TEXT NOT NULL,
-        started_at TEXT NOT NULL DEFAULT (datetime('now')),
-        finished_at TEXT,
-        status TEXT NOT NULL DEFAULT 'running',
-        log TEXT NOT NULL DEFAULT '',
-        summary TEXT
-      )
-    `);
+  beforeEach(async () => {
+    const harness = await createTestDb();
+    db = harness.db;
+    close = harness.close;
   });
 
-  afterEach(() => {
-    sqlite.close();
+  afterEach(async () => {
+    await close();
   });
 
   it("runs a successful op and records history", async () => {
@@ -35,7 +24,7 @@ describe("runOp", () => {
       name: "Test",
       description: "test",
       run: async (ctx) => {
-        ctx.log("working");
+        await ctx.log("working");
         return { success: true, summary: "done", recordsProcessed: 3 };
       },
     };
@@ -44,7 +33,7 @@ describe("runOp", () => {
     expect(result.success).toBe(true);
     expect(result.summary).toBe("done");
 
-    const runs = db.select().from(opRuns).all();
+    const runs = await db.select().from(opRuns);
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe("success");
     expect(runs[0].log).toContain("working");
@@ -64,7 +53,7 @@ describe("runOp", () => {
     expect(result.success).toBe(false);
     expect(result.summary).toContain("connection refused");
 
-    const runs = db.select().from(opRuns).all();
+    const runs = await db.select().from(opRuns);
     expect(runs).toHaveLength(1);
     expect(runs[0].status).toBe("failed");
   });

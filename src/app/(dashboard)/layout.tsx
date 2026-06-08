@@ -4,8 +4,9 @@ import { useState } from "react";
 import { Layout, Menu } from "antd";
 import { TeamOutlined, RiseOutlined, UserDeleteOutlined, UsergroupAddOutlined } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
+import { UserButton } from "@clerk/nextjs";
 
-const { Sider, Content } = Layout;
+const { Sider, Content, Header } = Layout;
 
 const menuItems = [
   { key: "/get-daily-new-customers-for-cities", icon: <TeamOutlined />, label: "Get New Members" },
@@ -27,7 +28,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
         <Menu mode="inline" selectedKeys={[pathname]} items={menuItems} onClick={({ key }) => router.push(key)} style={{ borderRight: 0 }} />
       </Sider>
-      <Content style={{ padding: 24, background: "#fafafa" }}>{children}</Content>
+      <Layout>
+        <Header style={{ background: "#fff", padding: "0 24px", display: "flex", alignItems: "center", justifyContent: "flex-end", borderBottom: "1px solid #f0f0f0", height: 48, lineHeight: "48px" }}>
+          <UserButton />
+        </Header>
+        <Content style={{ padding: 24, background: "#fafafa" }}>{children}</Content>
+      </Layout>
     </Layout>
   );
 }

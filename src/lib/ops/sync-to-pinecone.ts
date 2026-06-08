@@ -16,11 +16,12 @@ function buildCityFilter(cityGroup: CityGroup): string {
   const conditions = allNames.map(
     (name) => `FIND(LOWER("${name}"), LOWER({City}))`
   );
-  return `AND({Membership} = "Active", {Payment} = "Paid", OR(${conditions.join(", ")}))`;
+  // Active + Paid + NOT cancelled. A cancellation date overrides the Active flag.
+  return `AND({Membership} = "Active", {Payment} = "Paid", {Cancellation date} = "", OR(${conditions.join(", ")}))`;
 }
 
 function buildAllCitiesFilter(): string {
-  return `AND({Membership} = "Active", {Payment} = "Paid")`;
+  return `AND({Membership} = "Active", {Payment} = "Paid", {Cancellation date} = "")`;
 }
 
 function buildCancelledFilter(cityGroup: CityGroup): string {
@@ -33,6 +34,10 @@ function buildCancelledFilter(cityGroup: CityGroup): string {
 
 function buildAllCancelledFilter(): string {
   return `{Cancellation date} != ""`;
+}
+
+function normalizeLocationField(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
 interface EnrichedMember {
@@ -52,11 +57,17 @@ interface EnrichedMember {
 
 /**
  * Enrich a single Airtable record. Returns null if no email.
+ *
+ * `fallbackNearby` is the value already stored in Pinecone for this member.
+ * If the new geocode/places lookup yields an empty string (rate limit, API
+ * key missing, no places found, transient error) we fall back to it rather
+ * than wiping good data.
  */
 async function enrichMember(
   record: AirtableRecord,
   geocodeCache: Map<string, string>,
-  ctx: OpContext
+  ctx: OpContext,
+  fallbackNearby = ""
 ): Promise<EnrichedMember | null> {
   const f = record.fields;
   const email = String(f["email"] || "");
@@ -77,16 +88,33 @@ async function enrichMember(
     if (cachedNearby !== undefined) {
       nearbyLocation = cachedNearby;
     } else {
-      const point = await geocode(postcode, city);
+      const onError = (msg: string) => {
+        // Surface upstream Google errors verbatim into the op log so the
+        // operator can see exactly why a member's nearbyLocation came back
+        // empty (Places API disabled, billing, key restriction, etc.).
+        void ctx.log(`  Google API: ${msg}`);
+      };
+      const point = await geocode(postcode, city, { onError });
       if (point) {
-        nearbyLocation = await findNearbyPlaces(point.lat, point.lon);
-        geocodeCache.set(outcode, nearbyLocation);
-        ctx.log(`Geocoded ${outcode}: ${nearbyLocation.slice(0, 60)}...`);
+        nearbyLocation = await findNearbyPlaces(point.lat, point.lon, { onError });
+        // Only cache populated results; empties shouldn't poison this run.
+        if (nearbyLocation) {
+          geocodeCache.set(outcode, nearbyLocation);
+          ctx.log(`Geocoded ${outcode}: ${nearbyLocation.slice(0, 60)}...`);
+        } else {
+          ctx.log(`Geocoded ${outcode} but Places returned 0 results`);
+        }
       } else {
-        geocodeCache.set(outcode, "");
         ctx.log(`Could not geocode: ${postcode}`);
       }
     }
+  }
+
+  // Defensive: never overwrite a previously populated nearbyLocation with "".
+  // If geocoding/places failed this run, keep whatever was already stored.
+  if (!nearbyLocation && fallbackNearby) {
+    nearbyLocation = fallbackNearby;
+    ctx.log(`  preserved existing nearbyLocation for ${email} (new lookup empty)`);
   }
 
   const embeddingText = buildEmbeddingText({
@@ -149,7 +177,7 @@ export async function runPineconeSync(
     return { success: false, summary: `City "${cityLabel}" not found in CITIES list` };
   }
 
-  // ─── Step 1: Remove cancelled members ───
+  // ─── Step 1: Remove cancelled members (Airtable says cancelled) ───
   ctx.log(`Checking for cancelled members (${isAllCities ? "all cities" : cityLabel})...`);
   const cancelledFilter = isAllCities
     ? buildAllCancelledFilter()
@@ -170,6 +198,31 @@ export async function runPineconeSync(
   } else {
     ctx.log("No cancelled members to remove");
   }
+
+  // ─── Step 1b: Reconcile — delete Pinecone records that aren't in the
+  // current Active+Paid+No-cancel set across ALL cities. Catches: hard
+  // deletes from Airtable, members who became Paused/Failed without a
+  // cancellation date, status flips, and anything else the cancellation
+  // sweep above can't see.
+  ctx.log("Reconciling Pinecone against Airtable Active+Paid+No-cancel set...");
+  const [pineconeIds, activeAirtableRecords] = await Promise.all([
+    pinecone.listAllIds(),
+    airtable.listRecords("Members", {
+      filterByFormula: buildAllCitiesFilter(),
+      fields: ["email"],
+    }),
+  ]);
+  const activeIdSet = new Set(activeAirtableRecords.map((r) => r.id));
+  const orphanIds = pineconeIds.filter((id) => !activeIdSet.has(id));
+  let orphanRemovedCount = 0;
+  if (orphanIds.length > 0) {
+    ctx.log(`Found ${orphanIds.length} orphan(s) in Pinecone (not Active+Paid in Airtable). Deleting...`);
+    await pinecone.deleteByIds(orphanIds);
+    orphanRemovedCount = orphanIds.length;
+  } else {
+    ctx.log(`No orphans — Pinecone has ${pineconeIds.length} records, all match Airtable Active+Paid set.`);
+  }
+  removedCount += orphanRemovedCount;
 
   // ─── Step 2: Fetch active members from Airtable ───
   let allActiveRecords: AirtableRecord[] = [];
@@ -221,10 +274,10 @@ export async function runPineconeSync(
       continue;
     }
 
-    const currentCity = String(record.fields["City"] || "");
-    const currentPostcode = String(record.fields["post code"] || "");
-    const existingCity = String(existing.city || "");
-    const existingPostcode = String(existing.postcode || "");
+    const currentCity = normalizeLocationField(String(record.fields["City"] || ""));
+    const currentPostcode = normalizeLocationField(String(record.fields["post code"] || ""));
+    const existingCity = normalizeLocationField(String(existing.city || ""));
+    const existingPostcode = normalizeLocationField(String(existing.postcode || ""));
 
     const existingNearby = String(existing.nearbyLocation || "");
 
@@ -257,7 +310,10 @@ export async function runPineconeSync(
     const enriched: EnrichedMember[] = [];
 
     for (const record of needsReEmbed) {
-      const member = await enrichMember(record, geocodeCache, ctx);
+      // Pass the existing nearbyLocation (if any) as fallback so an empty
+      // new lookup never wipes good data already in Pinecone.
+      const fallbackNearby = String(existingMeta.get(record.id)?.nearbyLocation || "");
+      const member = await enrichMember(record, geocodeCache, ctx, fallbackNearby);
       if (member) enriched.push(member);
     }
 

@@ -21,7 +21,7 @@ export default async function OpDetailPage({
     notFound();
   }
 
-  const runs = getOpRuns(slug);
+  const runs = await getOpRuns(slug);
 
   return (
     <>

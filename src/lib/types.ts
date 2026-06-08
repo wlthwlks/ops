@@ -1,7 +1,7 @@
 import type { AppDb } from "@/db";
 
 export interface OpContext {
-  log: (message: string) => void;
+  log: (message: string) => Promise<void>;
   db: AppDb;
 }
 

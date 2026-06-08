@@ -6,8 +6,8 @@ export const dynamic = "force-dynamic";
 
 const { Title } = Typography;
 
-export default function OpsPage() {
-  const ops = getOpsOverview();
+export default async function OpsPage() {
+  const ops = await getOpsOverview();
 
   return (
     <>

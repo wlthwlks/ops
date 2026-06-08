@@ -18,7 +18,7 @@ export const maxDuration = 300;
  */
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { startDate, endDate, mode = "preview", emails, editedMessages } = body;
+  const { startDate, endDate, mode = "preview", emails, editedMessages, editedEmails, requestId } = body;
 
   if (!emails?.length && (!startDate || !endDate)) {
     return NextResponse.json(
@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
   const logs: string[] = [];
   const { db } = await import("@/db");
   const ctx = {
-    log: (msg: string) => logs.push(msg),
+    log: async (msg: string) => { logs.push(msg); },
     db,
   };
 
@@ -40,7 +40,9 @@ export async function POST(request: NextRequest) {
     ctx,
     mode,
     emails,
-    editedMessages
+    editedMessages,
+    editedEmails,
+    requestId
   );
 
   return NextResponse.json({ ...result, logs });

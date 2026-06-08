@@ -33,7 +33,8 @@ export function OpsTable({ ops }: { ops: OpStatus[] }) {
     {
       title: "Last Run",
       key: "lastRun",
-      render: (_: unknown, record: OpStatus) => record.lastRun?.startedAt ?? "Never",
+      render: (_: unknown, record: OpStatus) =>
+        record.lastRun?.startedAt ? new Date(record.lastRun.startedAt).toLocaleString() : "Never",
     },
     {
       title: "Schedule",

@@ -27,7 +27,7 @@ describe("donut-tracker op", () => {
 
   it("runs and extracts pairings", async () => {
     const logs: string[] = [];
-    const ctx = { log: (msg: string) => logs.push(msg), db: {} as any };
+    const ctx = { log: async (msg: string) => { logs.push(msg); }, db: {} as any };
     const result = await donutTracker.run(ctx);
     expect(result.success).toBe(true);
     expect(logs.length).toBeGreaterThan(0);

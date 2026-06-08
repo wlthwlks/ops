@@ -5,10 +5,10 @@ import { runOp } from "@/lib/run-op";
 import { opRuns } from "@/db/schema";
 import { desc, eq, and } from "drizzle-orm";
 
-function shouldRun(schedule: string, lastRunAt: string | null): boolean {
+function shouldRun(schedule: string, lastRunAt: Date | string | null): boolean {
   if (!lastRunAt) return true;
 
-  const lastRun = new Date(lastRunAt);
+  const lastRun = lastRunAt instanceof Date ? lastRunAt : new Date(lastRunAt);
   const now = new Date();
   const diffMinutes = (now.getTime() - lastRun.getTime()) / 1000 / 60;
 
@@ -29,15 +29,14 @@ export async function GET() {
   const results: Array<{ slug: string; ran: boolean; result?: string }> = [];
 
   for (const op of scheduledOps) {
-    const lastRun = db
+    const [lastRun] = await db
       .select()
       .from(opRuns)
       .where(
         and(eq(opRuns.opSlug, op.slug), eq(opRuns.status, "success"))
       )
       .orderBy(desc(opRuns.startedAt))
-      .limit(1)
-      .get();
+      .limit(1);
 
     if (shouldRun(op.schedule!, lastRun?.startedAt ?? null)) {
       const result = await runOp(op, db);

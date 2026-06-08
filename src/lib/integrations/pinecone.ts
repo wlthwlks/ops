@@ -94,7 +94,25 @@ export function createPineconeClient(config: PineconeConfig) {
     }
   }
 
-  return { upsertVectors, queryByVector, fetchById, fetchMetadataByIds, deleteByIds, pc, index };
+  /**
+   * Return every vector ID currently in the index. Pinecone's list API is
+   * paginated; we walk all pages. For indexes >100k vectors consider a
+   * different strategy — for our member count (~3k) this is fast.
+   */
+  async function listAllIds(): Promise<string[]> {
+    const ids: string[] = [];
+    let paginationToken: string | undefined;
+    do {
+      const result = await index.listPaginated({ paginationToken });
+      for (const v of result.vectors ?? []) {
+        if (v.id) ids.push(v.id);
+      }
+      paginationToken = result.pagination?.next;
+    } while (paginationToken);
+    return ids;
+  }
+
+  return { upsertVectors, queryByVector, fetchById, fetchMetadataByIds, deleteByIds, listAllIds, pc, index };
 }
 
 export type PineconeClient = ReturnType<typeof createPineconeClient>;

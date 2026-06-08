@@ -26,7 +26,7 @@ describe("member-export op", () => {
 
   it("exports members to CSV", async () => {
     const logs: string[] = [];
-    const ctx = { log: (msg: string) => logs.push(msg), db: {} as any };
+    const ctx = { log: async (msg: string) => { logs.push(msg); }, db: {} as any };
     const result = await memberExport.run(ctx);
     expect(result.success).toBe(true);
     expect(result.recordsProcessed).toBe(2);

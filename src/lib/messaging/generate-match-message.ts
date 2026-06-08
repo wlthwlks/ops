@@ -184,6 +184,16 @@ function buildSlackMessage(p: {
   }
   lines.push("We'd love for you to meet up and share what you're working on. Sometimes the best ideas come from a conversation with someone on a similar journey. :handshake:");
   lines.push("");
+  // Kick-off CTA addressed to the new joiner — references the suggested spots
+  // when we surfaced them, otherwise nudges them to propose a time + place.
+  const newMemberSlackId = p.slackUserIds.get(p.newMember.email);
+  const newMemberMention = newMemberSlackId ? `<@${newMemberSlackId}>` : `*${p.memberFirstName}*`;
+  if (p.meetingSpots.length > 0) {
+    lines.push(`:calendar: ${newMemberMention}, fancy kicking things off? Drop a couple of times that work for you and pick one of the spots above — the rest can chime in. :sparkles:`);
+  } else {
+    lines.push(`:calendar: ${newMemberMention}, fancy kicking things off? Drop a couple of times that work for you and suggest a spot — the rest can chime in. :sparkles:`);
+  }
+  lines.push("");
   lines.push(":email: You'll also receive an email with everyone's contact details.");
 
   return { body: lines.join("\n"), recipients: p.recipients };
@@ -211,6 +221,8 @@ const EMAIL_TEMPLATE = `
   <ul style="padding-left: 20px;">{{CONTACT_LIST}}</ul>
 
   <p>Looking forward to seeing you connect!</p>
+
+  {{KICKOFF_INVITE}}
 
   <p>Best,<br/>The WLTH WLKS Team</p>
 </div>`.trim();
@@ -240,12 +252,19 @@ function buildHtmlMessage(p: {
     `<li>${esc(String(m.name).split(" ")[0])} — <a href="mailto:${esc(m.email)}" style="color: #1890ff;">${esc(m.email)}</a></li>`
   ).join("");
 
+  // Kick-off CTA addressed to the new joiner — references the suggested spots
+  // when we surfaced them, otherwise just nudges them to propose times.
+  const kickoffInvite = p.meetingSpots.length > 0
+    ? `<p>${esc(p.memberFirstName)}, would you like to kick things off? A quick reply-all with a couple of times that work for you and which of the spots above suits — and the group can confirm from there.</p>`
+    : `<p>${esc(p.memberFirstName)}, would you like to kick things off? A quick reply-all with a couple of times and a location idea, and the group can take it from there.</p>`;
+
   const html = EMAIL_TEMPLATE
     .replace("{{FIRST_NAME}}", esc(p.memberFirstName))
     .replace("{{GROUP_DESCRIPTION}}", esc(groupDesc))
     .replace("{{MEETING_SPOTS}}", meetingSpots)
     .replace("{{SLACK_SECTION}}", slackSection)
-    .replace("{{CONTACT_LIST}}", contactList);
+    .replace("{{CONTACT_LIST}}", contactList)
+    .replace("{{KICKOFF_INVITE}}", kickoffInvite);
 
   return { body: html, recipients: p.recipients };
 }

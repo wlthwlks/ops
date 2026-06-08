@@ -32,7 +32,7 @@ describe("sync-signups op", () => {
 
   it("runs and returns result", async () => {
     const logs: string[] = [];
-    const ctx = { log: (msg: string) => logs.push(msg), db: {} as any };
+    const ctx = { log: async (msg: string) => { logs.push(msg); }, db: {} as any };
     const result = await syncSignups.run(ctx);
     expect(result.success).toBe(true);
     expect(result.recordsProcessed).toBe(2);

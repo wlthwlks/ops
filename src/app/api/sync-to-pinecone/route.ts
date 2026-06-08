@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
 
   const logs: string[] = [];
   const ctx = {
-    log: (msg: string) => {
+    log: async (msg: string) => {
       console.log(`[sync-to-pinecone] ${msg}`);
       logs.push(msg);
     },
