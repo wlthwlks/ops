@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Layout, Menu } from "antd";
-import { TeamOutlined, RiseOutlined, UserDeleteOutlined, UsergroupAddOutlined } from "@ant-design/icons";
+import { TeamOutlined, RiseOutlined, UserDeleteOutlined, UsergroupAddOutlined, BookOutlined } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
 
@@ -15,6 +15,10 @@ const menuItems = [
   { key: "/get-matched", icon: <UsergroupAddOutlined />, label: "Custom Matching" },
 ];
 
+const bottomMenuItems = [
+  { key: "/docs", icon: <BookOutlined />, label: "Docs" },
+];
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const router = useRouter();
@@ -23,10 +27,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <Layout style={{ minHeight: "100vh" }}>
       <Sider collapsible collapsed={collapsed} onCollapse={setCollapsed} theme="light" style={{ borderRight: "1px solid #f0f0f0" }}>
-        <div style={{ height: 48, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 600, fontSize: collapsed ? 14 : 16, borderBottom: "1px solid #f0f0f0" }}>
-          {collapsed ? "Ops" : "WLTH WLKS Ops"}
+        <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+          <div style={{ height: 48, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 600, fontSize: collapsed ? 14 : 16, borderBottom: "1px solid #f0f0f0", flexShrink: 0 }}>
+            {collapsed ? "Ops" : "WLTH WLKS Ops"}
+          </div>
+          <Menu mode="inline" selectedKeys={[pathname]} items={menuItems} onClick={({ key }) => router.push(key)} style={{ borderRight: 0, flex: 1, minHeight: 0 }} />
+          <div style={{ borderTop: "1px solid #f0f0f0", flexShrink: 0 }}>
+            <Menu mode="inline" selectedKeys={[pathname]} items={bottomMenuItems} onClick={({ key }) => router.push(key)} style={{ borderRight: 0 }} />
+          </div>
         </div>
-        <Menu mode="inline" selectedKeys={[pathname]} items={menuItems} onClick={({ key }) => router.push(key)} style={{ borderRight: 0 }} />
       </Sider>
       <Layout>
         <Header style={{ background: "#fff", padding: "0 24px", display: "flex", alignItems: "center", justifyContent: "flex-end", borderBottom: "1px solid #f0f0f0", height: 48, lineHeight: "48px" }}>
