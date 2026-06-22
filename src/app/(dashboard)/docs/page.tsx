@@ -115,6 +115,11 @@ const groups: ServiceGroup[] = [
         url: "https://api.slack.com/apps",
       },
       {
+        name: "Slack — match-maker bot",
+        description: "Collaborators & settings for the match-maker bot app",
+        url: "https://app.slack.com/app-settings/T0ASD0GD8E4/A0B7861TNM9/collaborators",
+      },
+      {
         name: "Slack bulk operations — LemonSqueezy",
         description: "License & orders for the Bulk Slack User Deactivation Chrome extension (used on /remove-members)",
         url: "https://app.lemonsqueezy.com/my-orders/login",
