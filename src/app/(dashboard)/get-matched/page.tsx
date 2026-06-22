@@ -473,6 +473,9 @@ export default function GetMatchedPage() {
   const [slackEditedEmails, setSlackEditedEmails] = useState<Record<string, string>>({});
   const [slackExpandedEmail, setSlackExpandedEmail] = useState<string | null>(null);
   const [emailHtmlExpanded, setEmailHtmlExpanded] = useState<Record<string, boolean>>({});
+  // Emails the operator has un-ticked on the preview list — they will be
+  // skipped when "Send All" runs. Reset on every fresh preview.
+  const [excludedEmails, setExcludedEmails] = useState<Set<string>>(new Set());
 
   // Bumped after a non-preview send completes so the KPI cards refetch and
   // reflect the just-finished batch (Matches sent today, Last send, etc.).
@@ -520,6 +523,7 @@ export default function GetMatchedPage() {
       setSlackEditedMessages({});
       setSlackEditedEmails({});
       setEmailHtmlExpanded({});
+      setExcludedEmails(new Set());
     } else {
       setSlackSending(true);
     }
@@ -541,7 +545,19 @@ export default function GetMatchedPage() {
           bodyObj.editedEmails = slackEditedEmails;
         }
       }
-      if (slackLoadMode === "email" && slackEmailInput.trim()) {
+
+      // On a non-preview send, scope to the un-excluded subset of previewed
+      // deliveries. We pass them as `emails` so the server only re-fetches
+      // those records — date range / original email input is ignored.
+      const tickedEmailsFromPreview = !isPreview && slackDeliveries.length > 0
+        ? slackDeliveries
+            .filter((d) => !excludedEmails.has(d.newMemberEmail))
+            .map((d) => d.newMemberEmail)
+        : null;
+
+      if (tickedEmailsFromPreview && tickedEmailsFromPreview.length > 0) {
+        bodyObj.emails = tickedEmailsFromPreview;
+      } else if (slackLoadMode === "email" && slackEmailInput.trim()) {
         bodyObj.emails = slackEmailInput.split(/[,\s]+/).map((e) => e.trim().toLowerCase()).filter(Boolean);
       } else {
         bodyObj.startDate = slackDateRange[0].format("YYYY-MM-DD");
@@ -592,8 +608,28 @@ export default function GetMatchedPage() {
 
   function readyToSendCount(): number {
     return slackDeliveries.filter(
-      (d) => !d.error && (d.slackMembersFound.length >= 2 || d.emailPreview)
+      (d) =>
+        !d.error &&
+        !excludedEmails.has(d.newMemberEmail) &&
+        (d.slackMembersFound.length >= 2 || d.emailPreview)
     ).length;
+  }
+
+  function toggleExcluded(email: string) {
+    setExcludedEmails((prev) => {
+      const next = new Set(prev);
+      if (next.has(email)) next.delete(email);
+      else next.add(email);
+      return next;
+    });
+  }
+
+  function setAllExcluded(exclude: boolean) {
+    if (exclude) {
+      setExcludedEmails(new Set(slackDeliveries.map((d) => d.newMemberEmail)));
+    } else {
+      setExcludedEmails(new Set());
+    }
   }
 
   async function handleBatchMatch() {
@@ -826,7 +862,21 @@ export default function GetMatchedPage() {
                       <SlackOutlined style={{ marginRight: 4 }} />
                       {slackDeliveries.reduce((n, d) => n + d.slackMembersFound.length, 0)} members on Slack,{" "}
                       {slackDeliveries.reduce((n, d) => n + d.slackMembersMissing.length, 0)} not on Slack
+                      {excludedEmails.size > 0 && (
+                        <>
+                          {" "}· <Text type="warning" style={{ fontSize: 12 }}>{excludedEmails.size} excluded</Text>
+                        </>
+                      )}
                     </Text>
+                    <div style={{ marginTop: 4 }}>
+                      <a onClick={() => setAllExcluded(false)} style={{ fontSize: 12 }}>
+                        Select all
+                      </a>
+                      {" · "}
+                      <a onClick={() => setAllExcluded(true)} style={{ fontSize: 12 }}>
+                        Deselect all
+                      </a>
+                    </div>
                   </div>
                 )}
               </div>
@@ -940,8 +990,15 @@ export default function GetMatchedPage() {
                 onClick={() => setSlackExpandedEmail(isExpanded ? null : delivery.newMemberEmail)}
               >
                 {/* Collapsed row header */}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", opacity: excludedEmails.has(delivery.newMemberEmail) ? 0.55 : 1 }}>
                   <Flex gap={8} align="center" style={{ flex: 1, minWidth: 0 }}>
+                    {slackPreviewed && !delivery.slackSent && !delivery.error && (
+                      <Checkbox
+                        checked={!excludedEmails.has(delivery.newMemberEmail)}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => toggleExcluded(delivery.newMemberEmail)}
+                      />
+                    )}
                     {isExpanded ? <UpOutlined style={{ fontSize: 10, color: "#999" }} /> : <DownOutlined style={{ fontSize: 10, color: "#999" }} />}
                     <Text strong>{delivery.newMemberName}</Text>
                     <Text type="secondary" style={{ fontSize: 12 }}>{delivery.newMemberEmail}</Text>
@@ -952,11 +1009,14 @@ export default function GetMatchedPage() {
                     </Space>
                   </Flex>
                   <Flex gap={6} align="center">
+                    {excludedEmails.has(delivery.newMemberEmail) && (
+                      <Tag color="orange" style={{ margin: 0 }}>Excluded</Tag>
+                    )}
                     {delivery.newMemberOnSlack ? <Tag color="blue" style={{ margin: 0 }}><SlackOutlined /> Slack</Tag> : <Tag style={{ margin: 0 }}>Not on Slack</Tag>}
                     {delivery.error && <Tag color="red" style={{ margin: 0 }}>{delivery.error}</Tag>}
                     {delivery.slackSent && <Tag color="green" style={{ margin: 0 }}>Slack Sent</Tag>}
                     {delivery.emailsSent?.length > 0 && <Tag color="green" style={{ margin: 0 }}>{delivery.emailsSent.length} Email(s)</Tag>}
-                    {!delivery.slackSent && !delivery.error && slackPreviewed && delivery.slackMembersFound.length >= 2 && (
+                    {!delivery.slackSent && !delivery.error && slackPreviewed && !excludedEmails.has(delivery.newMemberEmail) && delivery.slackMembersFound.length >= 2 && (
                       <Tag color="blue" style={{ margin: 0 }}>Ready</Tag>
                     )}
                     <Text type="secondary" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
