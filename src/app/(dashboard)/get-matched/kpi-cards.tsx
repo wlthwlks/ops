@@ -64,7 +64,12 @@ function lastSendColor(lastSendAt: string | null): string | undefined {
   return ageHours > STALE_LAST_SEND_HOURS ? RED : undefined;
 }
 
-export function KpiCards() {
+interface KpiCardsProps {
+  /** Bump to force a refetch (e.g. after a successful Send All click). */
+  refreshKey?: number;
+}
+
+export function KpiCards({ refreshKey = 0 }: KpiCardsProps = {}) {
   const [state, setState] = useState<FetchState>(INITIAL_STATE);
 
   const fetchKpis = useCallback(async () => {
@@ -90,9 +95,12 @@ export function KpiCards() {
     }
   }, []);
 
+  // Refetch on mount AND whenever the parent bumps refreshKey. The parent
+  // (get-matched page) bumps it after a non-preview send so the cards reflect
+  // the new "Matches sent today", "Last send", etc. without a manual refresh.
   useEffect(() => {
     void fetchKpis();
-  }, [fetchKpis]);
+  }, [fetchKpis, refreshKey]);
 
   const data = state.data;
   const rate = data?.emailSuccessRate;

@@ -281,7 +281,7 @@ export default function GetMatchedPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Sync state
-  const [syncCity, setSyncCity] = useState("London");
+  const [syncCity, setSyncCity] = useState("All Cities");
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncApiResponse | null>(null);
 
@@ -474,6 +474,10 @@ export default function GetMatchedPage() {
   const [slackExpandedEmail, setSlackExpandedEmail] = useState<string | null>(null);
   const [emailHtmlExpanded, setEmailHtmlExpanded] = useState<Record<string, boolean>>({});
 
+  // Bumped after a non-preview send completes so the KPI cards refetch and
+  // reflect the just-finished batch (Matches sent today, Last send, etc.).
+  const [kpiRefreshKey, setKpiRefreshKey] = useState(0);
+
   // ─── Places diagnostic ───
   const [diagnosticOpen, setDiagnosticOpen] = useState(false);
   const [diagnosticLoading, setDiagnosticLoading] = useState(false);
@@ -573,6 +577,10 @@ export default function GetMatchedPage() {
       } else {
         message.success(data.summary);
         setSlackPreviewed(false);
+        // Force KPI cards to refetch so the operator sees the just-sent batch
+        // reflected in "Matches sent today" / "Last send" without waiting for
+        // the next manual refresh.
+        setKpiRefreshKey((k) => k + 1);
       }
     } catch (err) {
       setSlackError(err instanceof Error ? err.message : "Network error");
@@ -680,7 +688,7 @@ export default function GetMatchedPage() {
 
   return (
     <div style={{ maxWidth: 1100 }}>
-      <KpiCards />
+      <KpiCards refreshKey={kpiRefreshKey} />
       <Divider />
       {/* Refresh Analysis */}
       <Flex vertical gap="middle" style={{ width: "100%", marginBottom: 24 }}>
@@ -842,6 +850,52 @@ export default function GetMatchedPage() {
             </Flex>
           </Card>
 
+          {/* Post-send validation banner — only after a non-preview send. */}
+          {!slackPreviewed && slackDeliveries.length > 0 && (() => {
+            const total = slackDeliveries.length;
+            const slackSent = slackDeliveries.filter((d) => d.slackSent).length;
+            const emailsSent = slackDeliveries.reduce((n, d) => n + (d.emailsSent?.length ?? 0), 0);
+            const emailsFailed = slackDeliveries.reduce((n, d) => n + (d.emailsFailed?.length ?? 0), 0);
+            const withError = slackDeliveries.filter((d) => d.error);
+            const allOk = withError.length === 0 && emailsFailed === 0;
+            return (
+              <Alert
+                type={allOk ? "success" : withError.length > 0 ? "error" : "warning"}
+                showIcon
+                message={
+                  allOk
+                    ? `All ${total} group${total === 1 ? "" : "s"} delivered`
+                    : `${total - withError.length}/${total} delivered · ${withError.length} error${withError.length === 1 ? "" : "s"}${emailsFailed > 0 ? ` · ${emailsFailed} email failure${emailsFailed === 1 ? "" : "s"}` : ""}`
+                }
+                description={
+                  <div style={{ fontSize: 12, marginTop: 6 }}>
+                    <div>
+                      <Text type="secondary">
+                        Slack DMs sent: <strong>{slackSent}/{total}</strong> ·{" "}
+                        Emails sent: <strong>{emailsSent}</strong>
+                        {emailsFailed > 0 ? <> · Emails failed: <strong>{emailsFailed}</strong></> : null}
+                      </Text>
+                    </div>
+                    {withError.length > 0 && (
+                      <div style={{ marginTop: 8 }}>
+                        <Text strong style={{ fontSize: 12, display: "block", marginBottom: 4 }}>Errors:</Text>
+                        <ul style={{ margin: 0, paddingLeft: 18 }}>
+                          {withError.map((d) => (
+                            <li key={d.newMemberEmail}>
+                              <Text type="danger">{d.newMemberName}</Text>{" "}
+                              <Text type="secondary" style={{ fontSize: 11 }}>({d.newMemberEmail})</Text>{" "}
+                              — {d.error}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                }
+              />
+            );
+          })()}
+
           {(() => {
             const { missing, total } = countMembersMissingNearby();
             if (missing === 0 || total === 0) return null;
@@ -861,7 +915,19 @@ export default function GetMatchedPage() {
             );
           })()}
 
-          {slackDeliveries.map((delivery) => {
+          {[...slackDeliveries]
+            .sort((a, b) => {
+              const ca = (a.newMemberCity || "").trim();
+              const cb = (b.newMemberCity || "").trim();
+              // Empty cities sink to the bottom
+              if (!ca && cb) return 1;
+              if (ca && !cb) return -1;
+              // Primary: city A→Z (case-insensitive); secondary: name A→Z
+              const cmp = ca.localeCompare(cb, undefined, { sensitivity: "base" });
+              if (cmp !== 0) return cmp;
+              return (a.newMemberName || "").localeCompare(b.newMemberName || "", undefined, { sensitivity: "base" });
+            })
+            .map((delivery) => {
             const isExpanded = slackExpandedEmail === delivery.newMemberEmail;
             return (
               <Card
@@ -903,75 +969,114 @@ export default function GetMatchedPage() {
                 {isExpanded && (
                   <div onClick={(e) => e.stopPropagation()} style={{ marginTop: 16 }}>
                     {/* Match cards grid */}
-                    {delivery.matches?.length > 0 && (
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
-                        {/* Being matched card */}
-                        <Card size="small" style={{ background: "#f6ffed", borderColor: "#b7eb8f" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                            <div style={{ minWidth: 0, flex: 1 }}>
-                              <Text strong style={{ fontSize: 13 }}>{delivery.newMemberName}</Text>
-                              <br />
-                              <Text type="secondary" style={{ fontSize: 11, wordBreak: "break-all" }}>{delivery.newMemberEmail}</Text>
-                            </div>
-                            <Tag color="green" style={{ flexShrink: 0, marginLeft: 6, fontWeight: 600 }}>Being matched</Tag>
-                          </div>
-                          <MemberCardBody m={{
-                            name: delivery.newMemberName,
-                            email: delivery.newMemberEmail,
-                            postcode: delivery.newMemberPostcode,
-                            city: delivery.newMemberCity,
-                            nearbyLocation: delivery.newMemberNearbyLocation,
-                            active: true,
-                            industry: delivery.newMemberIndustry,
-                            traction: delivery.newMemberTraction,
-                            hasBusinessDomain: false,
-                            businessStage: delivery.newMemberBusinessStage,
-                          }} />
-                        </Card>
+                    {delivery.matches?.length > 0 && (() => {
+                      // Group matches by city, preserving original similarity rank.
+                      // Sort cities: new member's own city first, then alphabetically.
+                      const ranked = delivery.matches.map((m, i) => ({ ...m, originalRank: i + 1 }));
+                      const groups = new Map<string, typeof ranked>();
+                      for (const m of ranked) {
+                        const key = (m.city || "Unknown").trim() || "Unknown";
+                        if (!groups.has(key)) groups.set(key, []);
+                        groups.get(key)!.push(m);
+                      }
+                      const ownCity = (delivery.newMemberCity || "").trim();
+                      const sortedCityKeys = Array.from(groups.keys()).sort((a, b) => {
+                        if (a === ownCity) return -1;
+                        if (b === ownCity) return 1;
+                        return a.localeCompare(b);
+                      });
 
-                        {/* Match cards */}
-                        {delivery.matches.map((match, idx) => (
-                          <Card
-                            key={match.email}
-                            size="small"
-                            style={{
-                              borderColor: match.onSlack ? "#91d5ff" : undefined,
-                              background: match.onSlack ? "#f0f5ff" : undefined,
-                            }}
-                          >
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                              <div style={{ minWidth: 0, flex: 1 }}>
-                                <Text strong style={{ fontSize: 13 }}>#{idx + 1} {match.name}</Text>
-                                <br />
-                                <Text type="secondary" style={{ fontSize: 11, wordBreak: "break-all" }}>{match.email}</Text>
-                              </div>
-                              <Flex gap={4} align="center" style={{ flexShrink: 0, marginLeft: 6 }}>
-                                {match.onSlack && <Tag color="blue"><SlackOutlined /> Slack</Tag>}
-                                <div style={{
-                                  background: scoreColor(match.similarityScore),
-                                  color: "#fff", borderRadius: 6,
-                                  padding: "1px 8px", fontSize: 12, fontWeight: 600,
-                                }}>
-                                  {Math.round(match.similarityScore * 100)}%
+                      return (
+                        <>
+                          {/* Being matched card — top row, alone for emphasis */}
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12, marginBottom: 16 }}>
+                            <Card size="small" style={{ background: "#f6ffed", borderColor: "#b7eb8f" }}>
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                                <div style={{ minWidth: 0, flex: 1 }}>
+                                  <Text strong style={{ fontSize: 13 }}>{delivery.newMemberName}</Text>
+                                  <br />
+                                  <Text type="secondary" style={{ fontSize: 11, wordBreak: "break-all" }}>{delivery.newMemberEmail}</Text>
                                 </div>
-                              </Flex>
-                            </div>
-                            <MemberCardBody m={{
-                              name: match.name,
-                              email: match.email,
-                              postcode: match.postcode,
-                              city: match.city,
-                              nearbyLocation: match.nearbyLocation,
-                              active: true,
-                              industry: match.industry,
-                              traction: match.traction,
-                              hasBusinessDomain: match.hasBusinessDomain,
-                              businessStage: match.businessStage,
-                            }} />
-                          </Card>
-                        ))}
-                      </div>
-                    )}
+                                <Tag color="green" style={{ flexShrink: 0, marginLeft: 6, fontWeight: 600 }}>Being matched</Tag>
+                              </div>
+                              <MemberCardBody m={{
+                                name: delivery.newMemberName,
+                                email: delivery.newMemberEmail,
+                                postcode: delivery.newMemberPostcode,
+                                city: delivery.newMemberCity,
+                                nearbyLocation: delivery.newMemberNearbyLocation,
+                                active: true,
+                                industry: delivery.newMemberIndustry,
+                                traction: delivery.newMemberTraction,
+                                hasBusinessDomain: false,
+                                businessStage: delivery.newMemberBusinessStage,
+                              }} />
+                            </Card>
+                          </div>
+
+                          {/* City-grouped match cards */}
+                          {sortedCityKeys.map((cityKey) => {
+                            const cityMatches = groups.get(cityKey)!;
+                            const isOwnCity = cityKey === ownCity;
+                            return (
+                              <div key={cityKey} style={{ marginBottom: 16 }}>
+                                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                                  <Text strong style={{ fontSize: 13, color: isOwnCity ? "#52c41a" : "#666" }}>
+                                    {cityKey}
+                                  </Text>
+                                  <Text type="secondary" style={{ fontSize: 12 }}>
+                                    {cityMatches.length} match{cityMatches.length === 1 ? "" : "es"}
+                                    {isOwnCity ? " · same city" : ""}
+                                  </Text>
+                                </div>
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
+                                  {cityMatches.map((match) => (
+                                    <Card
+                                      key={match.email}
+                                      size="small"
+                                      style={{
+                                        borderColor: match.onSlack ? "#91d5ff" : undefined,
+                                        background: match.onSlack ? "#f0f5ff" : undefined,
+                                      }}
+                                    >
+                                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                                        <div style={{ minWidth: 0, flex: 1 }}>
+                                          <Text strong style={{ fontSize: 13 }}>#{match.originalRank} {match.name}</Text>
+                                          <br />
+                                          <Text type="secondary" style={{ fontSize: 11, wordBreak: "break-all" }}>{match.email}</Text>
+                                        </div>
+                                        <Flex gap={4} align="center" style={{ flexShrink: 0, marginLeft: 6 }}>
+                                          {match.onSlack && <Tag color="blue"><SlackOutlined /> Slack</Tag>}
+                                          <div style={{
+                                            background: scoreColor(match.similarityScore),
+                                            color: "#fff", borderRadius: 6,
+                                            padding: "1px 8px", fontSize: 12, fontWeight: 600,
+                                          }}>
+                                            {Math.round(match.similarityScore * 100)}%
+                                          </div>
+                                        </Flex>
+                                      </div>
+                                      <MemberCardBody m={{
+                                        name: match.name,
+                                        email: match.email,
+                                        postcode: match.postcode,
+                                        city: match.city,
+                                        nearbyLocation: match.nearbyLocation,
+                                        active: true,
+                                        industry: match.industry,
+                                        traction: match.traction,
+                                        hasBusinessDomain: match.hasBusinessDomain,
+                                        businessStage: match.businessStage,
+                                      }} />
+                                    </Card>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </>
+                      );
+                    })()}
 
                     {/* Editable Slack message */}
                     {delivery.slackMessage && slackPreviewed && (

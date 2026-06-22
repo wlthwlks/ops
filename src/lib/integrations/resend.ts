@@ -12,7 +12,7 @@ export function createResendClient(config: ResendConfig) {
     to: string,
     subject: string,
     html: string,
-    options?: { cc?: string | string[]; replyTo?: string | string[] }
+    options?: { cc?: string | string[]; bcc?: string | string[]; replyTo?: string | string[] }
   ): Promise<{ id: string } | null> {
     try {
       const result = await client.emails.send({
@@ -21,6 +21,7 @@ export function createResendClient(config: ResendConfig) {
         subject,
         html,
         ...(options?.cc ? { cc: options.cc } : {}),
+        ...(options?.bcc ? { bcc: options.bcc } : {}),
         ...(options?.replyTo ? { replyTo: options.replyTo } : {}),
       });
       if (result.error) {

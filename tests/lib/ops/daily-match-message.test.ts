@@ -242,6 +242,85 @@ describe("runDailyMatchMessage", () => {
     }
   });
 
+  it("Cc/Bcc dedup: duplicate match emails appear only once in Cc; oversight that overlaps a match stays in Cc only (not duplicated in Bcc)", async () => {
+    process.env.SLACK_OVERSIGHT_EMAILS = "alice@test.com, oversight@test.com";
+    vi.mocked(createAirtableClient).mockReturnValue(makeAirtableClient([NEW_MEMBER_RECORD]) as any);
+    // Pinecone returns ALICE TWICE (case-variant) plus Bob — Cc must dedupe.
+    vi.mocked(createPineconeClient).mockReturnValue(makePineconeClient({
+      queryResult: [
+        { id: "rec-a1", score: 0.95, metadata: { name: "Alice", email: "Alice@test.com", industry: "Tech", businessStage: "Growth" } },
+        { id: "rec-a2", score: 0.90, metadata: { name: "Alice", email: "alice@test.com", industry: "Tech", businessStage: "Growth" } },
+        { id: "rec-b",  score: 0.85, metadata: { name: "Bob",   email: "bob@test.com",   industry: "Finance", businessStage: "Early" } },
+      ],
+    }) as any);
+    vi.mocked(createSlackClient).mockReturnValue(makeSlackClient({
+      lookupResults: [{ id: "U001" }, { id: "U002" }, { id: "U003" }, { id: "U004" }, null, null],
+    }) as any);
+    const resend = makeResendClient();
+    vi.mocked(createResendClient).mockReturnValue(resend as any);
+
+    const { log, db } = makeCtx();
+    await runDailyMatchMessage("2026-01-01", "2026-01-01", { log, db }, "send");
+
+    const [, , , opts] = resend.sendEmail.mock.calls[0]!;
+    // Cc: alice appears ONCE despite two duplicates from Pinecone, plus bob
+    expect(opts.cc).toEqual(["alice@test.com", "bob@test.com"]);
+    // Bcc: alice@test.com is already in Cc as a match → MUST NOT also appear in Bcc.
+    //       oversight@test.com is not a match → goes to Bcc.
+    expect(opts.bcc).toEqual(["oversight@test.com"]);
+    // Sanity: NO recipient appears in both Cc and Bcc.
+    const ccSet = new Set(opts.cc as string[]);
+    for (const b of (opts.bcc as string[])) {
+      expect(ccSet.has(b)).toBe(false);
+    }
+  });
+
+  it("Cc/Bcc dedup: oversight email that equals the new joiner is dropped entirely (already in To)", async () => {
+    // The new joiner IS the oversight email — should appear ONCE, as To.
+    process.env.SLACK_OVERSIGHT_EMAILS = "new@test.com,realoversight@test.com";
+    vi.mocked(createAirtableClient).mockReturnValue(makeAirtableClient([NEW_MEMBER_RECORD]) as any);
+    vi.mocked(createPineconeClient).mockReturnValue(makePineconeClient() as any);
+    vi.mocked(createSlackClient).mockReturnValue(makeSlackClient({
+      lookupResults: [{ id: "U001" }, { id: "U002" }, { id: "U003" }, null, null],
+    }) as any);
+    const resend = makeResendClient();
+    vi.mocked(createResendClient).mockReturnValue(resend as any);
+
+    const { log, db } = makeCtx();
+    await runDailyMatchMessage("2026-01-01", "2026-01-01", { log, db }, "send");
+
+    const [toArg, , , opts] = resend.sendEmail.mock.calls[0]!;
+    expect(toArg).toBe("new@test.com");
+    expect(opts.cc).toEqual(["alice@test.com", "bob@test.com"]);
+    // Only the OTHER oversight makes it to Bcc; new@test.com is in To only.
+    expect(opts.bcc).toEqual(["realoversight@test.com"]);
+    expect((opts.bcc as string[]).includes("new@test.com")).toBe(false);
+  });
+
+  it("SLACK_OVERSIGHT_EMAILS: oversight users BCC'd on the introduction email, not in Cc or Reply-To", async () => {
+    process.env.SLACK_OVERSIGHT_EMAILS = "oversight1@test.com, oversight2@test.com";
+    vi.mocked(createAirtableClient).mockReturnValue(makeAirtableClient([NEW_MEMBER_RECORD]) as any);
+    vi.mocked(createPineconeClient).mockReturnValue(makePineconeClient() as any);
+    const slack = makeSlackClient({
+      lookupResults: [{ id: "U001" }, { id: "U002" }, { id: "U003" }, null, null],
+    });
+    vi.mocked(createSlackClient).mockReturnValue(slack as any);
+    const resend = makeResendClient();
+    vi.mocked(createResendClient).mockReturnValue(resend as any);
+
+    const { log, db } = makeCtx();
+    await runDailyMatchMessage("2026-01-01", "2026-01-01", { log, db }, "send");
+
+    expect(resend.sendEmail).toHaveBeenCalledTimes(1);
+    const [, , , opts] = resend.sendEmail.mock.calls[0]!;
+    // Cc — visible, matches only
+    expect(opts.cc).toEqual(["alice@test.com", "bob@test.com"]);
+    // Bcc — hidden, oversight only
+    expect(opts.bcc).toEqual(["oversight1@test.com", "oversight2@test.com"]);
+    // Reply-To excludes oversight so they're not exposed in message headers
+    expect(opts.replyTo).toEqual(["new@test.com", "alice@test.com", "bob@test.com"]);
+  });
+
   it("SLACK_OVERSIGHT_EMAILS: oversight users added to DM and looked up via lookupByEmail", async () => {
     process.env.SLACK_OVERSIGHT_EMAILS = "oversight@test.com";
     vi.mocked(createAirtableClient).mockReturnValue(makeAirtableClient([NEW_MEMBER_RECORD]) as any);

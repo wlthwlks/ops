@@ -417,6 +417,8 @@ export const syncToPinecone: Op = {
   description: "Sync members from Airtable to Pinecone for matching. Use /get-matched page for city selection.",
 
   run: async (ctx) => {
-    return runPineconeSync("London", ctx);
+    // One-click run from the /ops dashboard processes every city. Per-city
+    // sync is still available via the /get-matched UI dropdown.
+    return runPineconeSync("All Cities", ctx);
   },
 };

@@ -175,14 +175,36 @@ export async function runDailyMatchMessage(
   const deliveries: DeliveryResult[] = [];
   let slackSentCount = 0;
   let skippedCount = 0;
+  const runStartedAt = Date.now();
+
+  // Per-phase timing helper. Records the elapsed ms in the supplied `timings`
+  // object under `label`, returns whatever the inner promise resolves to.
+  // Throws from inside still propagate normally — we don't swallow.
+  async function timed<T>(label: string, timings: Record<string, number>, fn: () => Promise<T>): Promise<T> {
+    const t0 = Date.now();
+    try {
+      return await fn();
+    } finally {
+      timings[label] = (timings[label] ?? 0) + (Date.now() - t0);
+    }
+  }
+
+  const totalRecords = records.length;
+  let recordIndex = 0;
 
   for (const record of records) {
+    recordIndex++;
     const email = String(record.fields["email"] || "");
     if (!email) continue;
 
     const newMemberName = String(
       record.fields["Name"] || `${record.fields["First Name"] || ""} ${record.fields["Last Name"] || ""}`
     ).trim();
+
+    const tag = `[${recordIndex}/${totalRecords}] ${newMemberName}`;
+    const timings: Record<string, number> = {};
+    const deliveryStartedAt = Date.now();
+    ctx.log(`${tag}: START`);
 
     const newMemberPostcode = String(record.fields["post code"] || "");
     const newMemberCity = String(record.fields["City"] || "");
@@ -213,24 +235,29 @@ export async function runDailyMatchMessage(
 
     try {
       // 2. Find this member in Pinecone
-      const emailLookup = await pinecone.queryByVector(
-        new Array(1536).fill(0),
-        1,
-        { email: { $eq: email.toLowerCase() } }
+      const emailLookup = await timed("pinecone.emailLookup", timings, () =>
+        pinecone.queryByVector(
+          new Array(1536).fill(0),
+          1,
+          { email: { $eq: email.toLowerCase() } }
+        )
       );
 
       if (emailLookup.length === 0) {
         delivery.error = "Not in Pinecone — sync may not have run yet";
-        ctx.log(`  ${newMemberName}: skipped (not in Pinecone)`);
+        ctx.log(`${tag}: skipped (not in Pinecone) — ${Date.now() - deliveryStartedAt}ms`);
         skippedCount++;
         deliveries.push(delivery);
         continue;
       }
 
       const memberId = emailLookup[0].id;
-      const memberRecord = await pinecone.fetchById(memberId);
+      const memberRecord = await timed("pinecone.fetchById", timings, () =>
+        pinecone.fetchById(memberId)
+      );
       if (!memberRecord || memberRecord.values.length === 0) {
         delivery.error = "Vector not found in Pinecone";
+        ctx.log(`${tag}: skipped (vector empty) — ${Date.now() - deliveryStartedAt}ms`);
         skippedCount++;
         deliveries.push(delivery);
         continue;
@@ -242,10 +269,8 @@ export async function runDailyMatchMessage(
         ? { $and: [{ active: { $eq: true } }, { city: { $in: cityNames } }] }
         : { active: { $eq: true } };
 
-      const matchResults = await pinecone.queryByVector(
-        memberRecord.values,
-        6,
-        cityFilter
+      const matchResults = await timed("pinecone.matchSearch", timings, () =>
+        pinecone.queryByVector(memberRecord.values, 6, cityFilter)
       );
 
       const matches = matchResults
@@ -286,19 +311,22 @@ export async function runDailyMatchMessage(
         onSlack: false, // updated below
       }));
 
-      // 4. Resolve Slack user IDs for all members (new + matches)
+      // 4. Resolve Slack user IDs for all members (new + matches) — serial
+      // by design (avoid burst against Slack `users:read.email` rate cap)
       const allEmails = [email, ...matchMembers.map((m) => m.email)];
       const slackUserIds = new Map<string, string>();
 
-      for (const memberEmail of allEmails) {
-        const slackUser = await slack.lookupByEmail(memberEmail);
-        if (slackUser) {
-          slackUserIds.set(memberEmail, slackUser.id);
-          delivery.slackMembersFound.push(memberEmail);
-        } else {
-          delivery.slackMembersMissing.push(memberEmail);
+      await timed("slack.memberLookups", timings, async () => {
+        for (const memberEmail of allEmails) {
+          const slackUser = await slack.lookupByEmail(memberEmail);
+          if (slackUser) {
+            slackUserIds.set(memberEmail, slackUser.id);
+            delivery.slackMembersFound.push(memberEmail);
+          } else {
+            delivery.slackMembersMissing.push(memberEmail);
+          }
         }
-      }
+      });
 
       // Mark which matches are on Slack
       delivery.newMemberOnSlack = slackUserIds.has(email);
@@ -307,7 +335,7 @@ export async function runDailyMatchMessage(
       }
       delivery.matches = deliveryMatches;
 
-      ctx.log(`  ${newMemberName}: ${slackUserIds.size}/${allEmails.length} on Slack`);
+      ctx.log(`${tag}: ${slackUserIds.size}/${allEmails.length} on Slack (lookups ${timings["slack.memberLookups"] ?? 0}ms)`);
 
       // 5. Send Slack group DM to members on Slack
       // The DM includes the actual matched members plus any oversight recipients
@@ -334,33 +362,37 @@ export async function runDailyMatchMessage(
           wasOnSlack: slackUserIds.has(String(m.metadata.email || "")),
         }));
         try {
-          const recorded = await recordMatchEvent({
-            db,
-            requestId: perEventRequestId,
-            mode,
-            dryRun: false,
-            newMember: {
-              email,
-              postcode: newMemberPostcode || undefined,
-              city: newMemberCity || undefined,
-              industry: newMemberIndustry || undefined,
-            },
-            matches: trackedMatches,
-          });
+          const recorded = await timed("db.recordMatchEvent", timings, () =>
+            recordMatchEvent({
+              db,
+              requestId: perEventRequestId,
+              mode,
+              dryRun: false,
+              newMember: {
+                email,
+                postcode: newMemberPostcode || undefined,
+                city: newMemberCity || undefined,
+                industry: newMemberIndustry || undefined,
+              },
+              matches: trackedMatches,
+            })
+          );
           matchEventId = recorded.matchEventId;
         } catch (recordErr) {
-          const msg = recordErr instanceof Error ? recordErr.message : String(recordErr);
-          ctx.log(`  ${newMemberName}: WARN recordMatchEvent failed — ${msg}`);
+          const msg = recordErr instanceof Error ? (recordErr.stack || recordErr.message) : String(recordErr);
+          ctx.log(`${tag}: WARN recordMatchEvent failed — ${msg}`);
         }
       }
 
       const sendSlackUserIds = new Map<string, string>(slackUserIds);
-      if (doSend) {
-        for (const oversightEmail of slackOversightRecipients) {
-          if (sendSlackUserIds.has(oversightEmail)) continue;
-          const looked = await slack.lookupByEmail(oversightEmail);
-          if (looked) sendSlackUserIds.set(oversightEmail, looked.id);
-        }
+      if (doSend && slackOversightRecipients.size > 0) {
+        await timed("slack.oversightLookups", timings, async () => {
+          for (const oversightEmail of slackOversightRecipients) {
+            if (sendSlackUserIds.has(oversightEmail)) continue;
+            const looked = await slack.lookupByEmail(oversightEmail);
+            if (looked) sendSlackUserIds.set(oversightEmail, looked.id);
+          }
+        });
       }
 
       // Generate the message for preview/sending
@@ -395,34 +427,40 @@ export async function runDailyMatchMessage(
         const slackIds = Array.from(sendSlackUserIds.values());
         // Use edited message if provided, otherwise use generated one
         const finalMessage = editedMessages?.[email] ?? msg.body;
-        const { channelId } = await slack.conversationsOpen(slackIds);
-        const { ts: slackMessageTs } = await slack.postMessage(channelId, finalMessage);
+        const { channelId } = await timed("slack.conversationsOpen", timings, () =>
+          slack.conversationsOpen(slackIds)
+        );
+        const { ts: slackMessageTs } = await timed("slack.postMessage", timings, () =>
+          slack.postMessage(channelId, finalMessage)
+        );
 
         delivery.slackSent = true;
         delivery.slackChannelId = channelId;
         slackSentCount++;
         const oversightInGroup = Array.from(slackOversightRecipients).filter((e) => sendSlackUserIds.has(e));
         const oversightNote = oversightInGroup.length > 0 ? ` (incl. ${oversightInGroup.length} oversight)` : "";
-        ctx.log(`  ${newMemberName}: Slack group DM sent (${slackIds.length} members${oversightNote})`);
+        ctx.log(`${tag}: Slack group DM sent (${slackIds.length} members${oversightNote}) — open=${timings["slack.conversationsOpen"] ?? 0}ms post=${timings["slack.postMessage"] ?? 0}ms`);
 
         // Record Slack delivery metadata on the match_event. Best-effort —
         // never let a DB write failure mask a successful Slack send.
         if (shouldTrack && matchEventId) {
           try {
-            await recordSlackDelivery(db, matchEventId, {
-              slackChannelId: channelId,
-              slackMessageTs,
-              slackRecipientCount: slackIds.length,
-            });
+            await timed("db.recordSlackDelivery", timings, () =>
+              recordSlackDelivery(db, matchEventId!, {
+                slackChannelId: channelId,
+                slackMessageTs,
+                slackRecipientCount: slackIds.length,
+              })
+            );
           } catch (slackRecErr) {
-            const msg = slackRecErr instanceof Error ? slackRecErr.message : String(slackRecErr);
-            ctx.log(`  ${newMemberName}: WARN recordSlackDelivery failed — ${msg}`);
+            const m = slackRecErr instanceof Error ? (slackRecErr.stack || slackRecErr.message) : String(slackRecErr);
+            ctx.log(`${tag}: WARN recordSlackDelivery failed — ${m}`);
           }
         }
       } else if (sendSlackUserIds.size >= 2 && mode === "preview") {
-        ctx.log(`  ${newMemberName}: ${sendSlackUserIds.size} eligible for Slack DM (preview only)`);
+        ctx.log(`${tag}: ${sendSlackUserIds.size} eligible for Slack DM (preview only)`);
       } else {
-        ctx.log(`  ${newMemberName}: Slack skipped (<2 members on Slack)`);
+        ctx.log(`${tag}: Slack skipped (<2 members on Slack)`);
       }
 
       // 6. Send a SINGLE introduction email to the new member (To:) with all
@@ -445,70 +483,99 @@ export async function runDailyMatchMessage(
             .map((m) => (m.email || "").toLowerCase())
             .filter((e) => e && e !== toEmail)
         ));
+        // Oversight BCC: same list that powers Slack oversight. Hidden from
+        // matched members — they don't appear in any visible header. Dedup
+        // against the visible To + Cc.
+        const bccEmails = Array.from(slackOversightRecipients)
+          .map((e) => e.toLowerCase())
+          .filter((e) => e !== toEmail && !ccEmails.includes(e));
 
-        // Reply-To routes replies AWAY from the donotreply sender and TO the
-        // human recipients. Including the new joiner + matches means hitting
-        // Reply or Reply-All in any client lands the reply with the group,
-        // not the unmonitored donotreply inbox.
+        // Reply-To covers the VISIBLE recipients only (new joiner + matches).
+        // Oversight is invisible — leaving them out of Reply-To keeps them
+        // unexposed in message headers. They still receive the email and can
+        // manually reply if they want to join the thread.
         const replyToList = [toEmail, ...ccEmails];
 
-        const result = await resend.sendEmail(
-          toEmail,
-          "Your WLTH WLKS Connections Are Here!",
-          emailBody,
-          {
-            ...(ccEmails.length > 0 ? { cc: ccEmails } : {}),
-            replyTo: replyToList,
-          }
+        const result = await timed("resend.sendEmail", timings, () =>
+          resend.sendEmail(
+            toEmail,
+            "Your WLTH WLKS Connections Are Here!",
+            emailBody,
+            {
+              ...(ccEmails.length > 0 ? { cc: ccEmails } : {}),
+              ...(bccEmails.length > 0 ? { bcc: bccEmails } : {}),
+              replyTo: replyToList,
+            }
+          )
         );
 
-        const allRecipients: Array<{ email: string; role: "new_member" | "match" }> = [
+        const allRecipients: Array<{ email: string; role: "new_member" | "match" | "oversight" }> = [
           { email: toEmail, role: "new_member" },
           ...ccEmails.map((e) => ({ email: e, role: "match" as const })),
+          ...bccEmails.map((e) => ({ email: e, role: "oversight" as const })),
         ];
 
         if (result) {
           for (const r of allRecipients) delivery.emailsSent.push(r.email);
+          const oversightNote = bccEmails.length > 0
+            ? ` (BCC ${bccEmails.length} oversight)`
+            : "";
           ctx.log(
-            `  ${newMemberName}: email sent — To: ${toEmail}` +
-              (ccEmails.length > 0 ? `, Cc: ${ccEmails.join(", ")}` : "")
+            `${tag}: email sent in ${timings["resend.sendEmail"] ?? 0}ms — To: ${toEmail}` +
+              (ccEmails.length > 0 ? `, Cc: ${ccEmails.join(", ")}` : "") +
+              oversightNote
           );
         } else {
           for (const r of allRecipients) delivery.emailsFailed.push(r.email);
-          ctx.log(`  ${newMemberName}: email FAILED (1 send, ${allRecipients.length} recipients)`);
+          ctx.log(`${tag}: email FAILED in ${timings["resend.sendEmail"] ?? 0}ms (1 send, ${allRecipients.length} recipients)`);
         }
 
         // Record one row per recipient (sharing the same resend_message_id) so
         // per-person webhook engagement can attach correctly in Phase 2.
         if (shouldTrack && matchEventId) {
-          for (const r of allRecipients) {
-            try {
-              await recordEmailDelivery(db, matchEventId, {
-                recipientEmail: r.email,
-                recipientRole: r.role,
-                resendMessageId: result?.id,
-                status: result ? "sent" : "failed",
-                error: result ? undefined : "Resend returned no id",
-              });
-            } catch (emailRecErr) {
-              const msg = emailRecErr instanceof Error ? emailRecErr.message : String(emailRecErr);
-              ctx.log(`  ${newMemberName}: WARN recordEmailDelivery failed for ${r.email} — ${msg}`);
+          await timed("db.recordEmailDeliveries", timings, async () => {
+            for (const r of allRecipients) {
+              try {
+                await recordEmailDelivery(db, matchEventId!, {
+                  recipientEmail: r.email,
+                  recipientRole: r.role,
+                  resendMessageId: result?.id,
+                  status: result ? "sent" : "failed",
+                  error: result ? undefined : "Resend returned no id",
+                });
+              } catch (emailRecErr) {
+                const m = emailRecErr instanceof Error ? (emailRecErr.stack || emailRecErr.message) : String(emailRecErr);
+                ctx.log(`${tag}: WARN recordEmailDelivery failed for ${r.email} — ${m}`);
+              }
             }
-          }
+          });
         }
       }
     } catch (err) {
       delivery.error = err instanceof Error ? err.message : "Unknown error";
-      ctx.log(`  ${newMemberName}: ERROR — ${delivery.error}`);
+      // Include the stack trace verbatim so the operator can see exactly
+      // which line tripped — invaluable when a single delivery in a batch
+      // silently misbehaves.
+      const stack = err instanceof Error ? (err.stack || err.message) : String(err);
+      ctx.log(`${tag}: ERROR — ${delivery.error}\n${stack}`);
     }
+
+    // Per-delivery timing footer: every phase + total.
+    const deliveryTotalMs = Date.now() - deliveryStartedAt;
+    const phaseSummary = Object.entries(timings)
+      .map(([k, v]) => `${k}=${v}ms`)
+      .join(" ");
+    ctx.log(`${tag}: DONE in ${deliveryTotalMs}ms — ${phaseSummary || "(no phases)"}`);
 
     deliveries.push(delivery);
   }
 
   const emailTotal = deliveries.reduce((n, d) => n + d.emailsSent.length, 0);
+  const runTotalMs = Date.now() - runStartedAt;
+  const avgMs = deliveries.length > 0 ? Math.round(runTotalMs / deliveries.length) : 0;
   const summary = mode === "preview"
-    ? `${deliveries.length} member(s) matched, ${deliveries.filter((d) => !d.error).length} ready to send, ${skippedCount} skipped`
-    : `${deliveries.length} member(s) processed, ${slackSentCount} Slack DM(s) sent, ${emailTotal} email(s) sent, ${skippedCount} skipped`;
+    ? `${deliveries.length} member(s) matched, ${deliveries.filter((d) => !d.error).length} ready to send, ${skippedCount} skipped — ${runTotalMs}ms (avg ${avgMs}ms)`
+    : `${deliveries.length} member(s) processed, ${slackSentCount} Slack DM(s) sent, ${emailTotal} email(s) sent, ${skippedCount} skipped — ${runTotalMs}ms (avg ${avgMs}ms)`;
   ctx.log(`Done: ${summary}`);
 
   return { success: true, summary, deliveries };

@@ -177,7 +177,7 @@ export default function RemoveMembersPage() {
                     >
                       Bulk Slack User Deactivation Extension
                     </a>
-                    , then paste in this license key: <Text code copyable>EA3C50CF-8C3A-42B6-95F4-BFA275D207EF</Text>
+                    , then paste in this license key: <Text code copyable>073CDBB7-F489-4904-8983-7E29542E1B1C</Text>
                   </span>
                 ),
               },

@@ -240,7 +240,7 @@ export async function recordEmailDelivery(
   matchEventId: string,
   d: {
     recipientEmail: string;
-    recipientRole: "new_member" | "match";
+    recipientRole: "new_member" | "match" | "oversight";
     resendMessageId?: string;
     status: "sent" | "failed";
     error?: string;
