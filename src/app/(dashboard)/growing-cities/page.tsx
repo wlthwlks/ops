@@ -21,6 +21,7 @@ interface ApiResponse {
 }
 
 function tierColor(tier: string): string {
+  if (tier === "Top") return "#722ed1";
   if (tier === "Nearly There") return "#52c41a";
   if (tier === "Growing") return "#1890ff";
   return "#faad14";
@@ -49,6 +50,12 @@ export default function GrowingCitiesPage() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  // Cities with 50+ members — already past the "Nearly There" graduation bar
+  const topLargest = (response?.listedCities ?? [])
+    .filter((c) => c.count > 50)
+    .map((c) => ({ ...c, tier: "Top" }))
+    .sort((a, b) => b.count - a.count);
 
   // Tracked cities 10–50, split into tiers
   const fastestGrowing = (response?.listedCities ?? [])
@@ -164,7 +171,26 @@ export default function GrowingCitiesPage() {
                   />
                 </Card>
               )}
+              {topLargest.length > 0 && (
+                <Card>
+                  <Statistic
+                    title="Top Cities (50+)"
+                    value={topLargest.length}
+                    valueStyle={{ color: tierColor("Top") }}
+                  />
+                </Card>
+              )}
             </Flex>
+
+            {/* Top Largest Cities — graduated past the 50-member bar */}
+            {topLargest.length > 0 && (
+              <Card
+                title={<Text strong style={{ color: tierColor("Top") }}>Top Largest Cities (50+ members)</Text>}
+                size="small"
+              >
+                <Column {...makeTierChart(topLargest, "Top")} height={320} />
+              </Card>
+            )}
 
             {/* Fastest Growing Tracked Cities — split into tier charts */}
             {fastestGrowing.length > 0 && (
