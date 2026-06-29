@@ -18,7 +18,7 @@ export const maxDuration = 300;
  */
 export async function POST(request: NextRequest) {
   const body = await request.json();
-  const { startDate, endDate, mode = "preview", emails, editedMessages, editedEmails, requestId } = body;
+  const { startDate, endDate, mode = "preview", emails, editedMessages, editedEmails, requestId, excludedMatches } = body;
 
   if (!emails?.length && (!startDate || !endDate)) {
     return NextResponse.json(
@@ -42,7 +42,8 @@ export async function POST(request: NextRequest) {
     emails,
     editedMessages,
     editedEmails,
-    requestId
+    requestId,
+    excludedMatches
   );
 
   return NextResponse.json({ ...result, logs });

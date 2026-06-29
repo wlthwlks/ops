@@ -13,6 +13,19 @@ import {
   recordEmailDelivery,
   type MatchInput,
 } from "@/lib/matchmake/record";
+import { getRecentlyMatchedEmails, MATCH_LOCK_DAYS } from "@/lib/matchmake/recent-matches";
+import { selectFreshMatches } from "@/lib/matchmake/select-fresh-matches";
+
+/** Target number of matches we try to suggest per new member. */
+const MATCH_TARGET = 5;
+/**
+ * How many candidates to pull from Pinecone before filtering. Set large so a
+ * city's deeper bench is available to substitute from once self, the 30-day
+ * lock, this batch's other new joiners, and already-used members are removed —
+ * this is what keeps "members matched more than once" at zero without
+ * under-filling whenever the city actually has enough people.
+ */
+const CANDIDATE_POOL_SIZE = 250;
 
 /**
  * Resolve a raw city string to the list of all city names in its group.
@@ -62,6 +75,8 @@ export interface DeliveryMatchMember {
   hasBusinessDomain: boolean;
   similarityScore: number;
   onSlack: boolean;
+  availability: string;
+  topics: string;
 }
 
 export interface DeliveryResult {
@@ -73,8 +88,21 @@ export interface DeliveryResult {
   newMemberTraction: string;
   newMemberNearbyLocation: string;
   newMemberBusinessStage: string;
+  newMemberAvailability: string;
+  newMemberTopics: string;
   newMemberOnSlack: boolean;
   matches: DeliveryMatchMember[];
+  /** How many fresh matches we aimed for (MATCH_TARGET). */
+  freshMatchTarget: number;
+  /** How many matches were actually suggested after the 30-day lock + batch dedup. */
+  freshMatchCount: number;
+  /**
+   * How many higher-ranked candidates were skipped because they were already
+   * matched within the last MATCH_LOCK_DAYS days (the 30-day lock displaced them).
+   */
+  recentlyMatchedExcluded: number;
+  /** True when fewer than MATCH_TARGET fresh matches were available. */
+  underfilled: boolean;
   slackMembersFound: string[];
   slackMembersMissing: string[];
   slackSent: boolean;
@@ -84,6 +112,12 @@ export interface DeliveryResult {
   emailsSent: string[];
   emailsFailed: string[];
   error: string | null;
+  /**
+   * Slack-specific failure (e.g. token/workspace `account_inactive`). Kept
+   * separate from `error` so a Slack outage doesn't block the email send or
+   * blank the matches — it's a warning, not a hard delivery failure.
+   */
+  slackError: string | null;
 }
 
 export interface MatchMessageResult {
@@ -97,6 +131,9 @@ export interface MatchMessageResult {
  *
  * @param mode - "preview" to match + resolve Slack without sending, "send" to deliver
  * @param emails - optional list of specific emails to process (instead of date range)
+ * @param excludedMatches - per-new-member map of match emails the operator
+ *   un-ticked in the preview. Those members are dropped from the Slack DM +
+ *   email recipients AND never recorded to the DB. No backfill — curating down.
  */
 export async function runDailyMatchMessage(
   startDate: string,
@@ -106,7 +143,8 @@ export async function runDailyMatchMessage(
   emails?: string[],
   editedMessages?: Record<string, string>,
   editedEmails?: Record<string, string>,
-  requestId?: string
+  requestId?: string,
+  excludedMatches?: Record<string, string[]>
 ): Promise<MatchMessageResult> {
   // Defensive: UI should supply a requestId for non-preview modes so DB
   // tracking is idempotent end-to-end. Fall back to a fresh UUID and log a
@@ -177,6 +215,50 @@ export async function runDailyMatchMessage(
   let skippedCount = 0;
   const runStartedAt = Date.now();
 
+  // 30-day repeat-matching lock. Fetch the set of every member who already
+  // participated (as new joiner or as a match) in a real send within the
+  // rolling window — they're excluded from being suggested again. Best-effort:
+  // if the lookup fails we log and proceed with an empty set rather than block
+  // matching. Applies in preview too so the operator previews the real result;
+  // the query reads dry_run=false, so previews never pollute the history.
+  let recentlyMatched = new Set<string>();
+  try {
+    recentlyMatched = await getRecentlyMatchedEmails(db, MATCH_LOCK_DAYS);
+    ctx.log(`30-day lock: ${recentlyMatched.size} member(s) matched in the last ${MATCH_LOCK_DAYS} days are excluded`);
+  } catch (lockErr) {
+    const msg = lockErr instanceof Error ? (lockErr.stack || lockErr.message) : String(lockErr);
+    ctx.log(`WARN: could not load 30-day match lock — proceeding without it. ${msg}`);
+  }
+
+  // Within a single batch run, every member appears in at most ONE
+  // introduction group. This set tracks everyone already spoken for:
+  //   • seeded up front with EVERY new joiner in this batch, so a joiner is
+  //     never also pulled in as someone else's match (the main source of
+  //     "matched more than once"); and
+  //   • each selected match is added as we go, so no existing member is reused
+  //     across two groups.
+  // Combined with a deep CANDIDATE_POOL_SIZE, this drives cross-group
+  // duplicates to zero while still filling MATCH_TARGET wherever the city has
+  // the bench for it. (Trade-off: two new joiners are not introduced to each
+  // other within the same batch — each instead gets a group of other members.)
+  const usedInBatch = new Set<string>();
+  for (const r of records) {
+    const joinerEmail = String(r.fields["email"] || "").toLowerCase();
+    if (joinerEmail) usedInBatch.add(joinerEmail);
+  }
+
+  // Operator's per-match exclusions from the preview: new-member email →
+  // set of match emails to drop (lowercased). Empty unless supplied on send.
+  const excludedMatchLookup = new Map<string, Set<string>>();
+  if (excludedMatches) {
+    for (const [newMemberEmail, matchEmails] of Object.entries(excludedMatches)) {
+      excludedMatchLookup.set(
+        newMemberEmail.toLowerCase(),
+        new Set(matchEmails.map((e) => e.toLowerCase()))
+      );
+    }
+  }
+
   // Per-phase timing helper. Records the elapsed ms in the supplied `timings`
   // object under `label`, returns whatever the inner promise resolves to.
   // Throws from inside still propagate normally — we don't swallow.
@@ -220,8 +302,14 @@ export async function runDailyMatchMessage(
       newMemberTraction,
       newMemberNearbyLocation: "",
       newMemberBusinessStage: "",
+      newMemberAvailability: String(record.fields["Availability"] || ""),
+      newMemberTopics: String(record.fields["Topics to Discuss"] || ""),
       newMemberOnSlack: false,
       matches: [],
+      freshMatchTarget: MATCH_TARGET,
+      freshMatchCount: 0,
+      recentlyMatchedExcluded: 0,
+      underfilled: false,
       slackMembersFound: [],
       slackMembersMissing: [],
       slackSent: false,
@@ -231,6 +319,7 @@ export async function runDailyMatchMessage(
       emailsSent: [],
       emailsFailed: [],
       error: null,
+      slackError: null,
     };
 
     try {
@@ -263,25 +352,78 @@ export async function runDailyMatchMessage(
         continue;
       }
 
-      // 3. Find top 5 matches — filter to same city group
+      // 3. Find matches — filter to same city group. Over-fetch a candidate
+      // pool so we can substitute past the self-match, the 30-day lock, and
+      // members already used earlier in this batch.
       const cityNames = getCityGroupNames(newMemberCity);
       const cityFilter = cityNames.length > 0
         ? { $and: [{ active: { $eq: true } }, { city: { $in: cityNames } }] }
         : { active: { $eq: true } };
 
       const matchResults = await timed("pinecone.matchSearch", timings, () =>
-        pinecone.queryByVector(memberRecord.values, 6, cityFilter)
+        pinecone.queryByVector(memberRecord.values, CANDIDATE_POOL_SIZE, cityFilter)
       );
 
-      const matches = matchResults
-        .filter((m) => m.id !== memberId)
-        .slice(0, 5);
+      // Walk candidates best-first, taking the first MATCH_TARGET that are
+      // fresh: not the member themselves, not locked by the 30-day rule, and
+      // not already used in this batch. `recentlyMatchedExcluded` counts how
+      // many ranked candidates the lock displaced so the UI can surface
+      // "repeats prevented".
+      const { matches: freshMatches, recentlyMatchedExcluded } = selectFreshMatches(matchResults, {
+        memberId,
+        recentlyMatched,
+        usedInBatch,
+        target: MATCH_TARGET,
+      });
 
-      if (matches.length === 0) {
-        delivery.error = "No matches found";
+      delivery.freshMatchTarget = MATCH_TARGET;
+      delivery.freshMatchCount = freshMatches.length;
+      delivery.recentlyMatchedExcluded = recentlyMatchedExcluded;
+      delivery.underfilled = freshMatches.length < MATCH_TARGET;
+
+      if (freshMatches.length === 0) {
+        delivery.error =
+          recentlyMatchedExcluded > 0
+            ? `No fresh matches — all candidates matched in the last ${MATCH_LOCK_DAYS} days`
+            : "No matches found";
         skippedCount++;
         deliveries.push(delivery);
         continue;
+      }
+
+      // Apply the operator's per-match exclusions (un-ticked in the preview).
+      // Excluded members are dropped from recipients AND never recorded — and
+      // are NOT added to usedInBatch, so they stay available for other members.
+      const excludedForMember = excludedMatchLookup.get(email.toLowerCase());
+      const matches =
+        excludedForMember && excludedForMember.size > 0
+          ? freshMatches.filter((m) => !excludedForMember.has(String(m.metadata.email || "").toLowerCase()))
+          : freshMatches;
+
+      if (matches.length < freshMatches.length) {
+        ctx.log(`${tag}: ${freshMatches.length - matches.length} match(es) excluded by operator`);
+      }
+
+      if (matches.length === 0) {
+        delivery.error = "All matches excluded by operator";
+        skippedCount++;
+        deliveries.push(delivery);
+        continue;
+      }
+
+      // Reserve the selected matches so no other member in this batch reuses
+      // them — enforces "each existing member matched at most once per batch".
+      for (const m of matches) {
+        const e = String(m.metadata.email || "").toLowerCase();
+        if (e) usedInBatch.add(e);
+      }
+
+      if (delivery.underfilled) {
+        ctx.log(
+          `${tag}: only ${matches.length}/${MATCH_TARGET} fresh matches` +
+            (recentlyMatchedExcluded > 0 ? ` (${recentlyMatchedExcluded} excluded by 30-day lock)` : "") +
+            " — sending fewer"
+        );
       }
 
       // Populate new member's Pinecone metadata
@@ -294,6 +436,8 @@ export async function runDailyMatchMessage(
         industry: String(m.metadata.industry || ""),
         businessStage: String(m.metadata.businessStage || ""),
         nearbyLocation: String(m.metadata.nearbyLocation || ""),
+        availability: String(m.metadata.availability || ""),
+        topics: String(m.metadata.topics || ""),
       }));
 
       // Build rich match data for UI cards
@@ -309,20 +453,43 @@ export async function runDailyMatchMessage(
         hasBusinessDomain: Boolean(m.metadata.hasBusinessDomain),
         similarityScore: Math.round(m.score * 100) / 100,
         onSlack: false, // updated below
+        availability: String(m.metadata.availability || ""),
+        topics: String(m.metadata.topics || ""),
       }));
 
+      // Assign matches to the delivery NOW — before any Slack work — so a
+      // Slack outage (e.g. an invalid bot token returning `account_inactive`)
+      // can never blank out the computed matches in the UI. The dm.onSlack
+      // flags below mutate these same objects in place.
+      delivery.matches = deliveryMatches;
+
       // 4. Resolve Slack user IDs for all members (new + matches) — serial
-      // by design (avoid burst against Slack `users:read.email` rate cap)
+      // by design (avoid burst against Slack `users:read.email` rate cap).
+      // Token/workspace-level failures (account_inactive, invalid_auth, …) are
+      // captured once into `slackError` and treated as "not on Slack" rather
+      // than aborting the whole delivery — matches + email preview must still
+      // render and email must still be sendable when Slack is down.
       const allEmails = [email, ...matchMembers.map((m) => m.email)];
       const slackUserIds = new Map<string, string>();
 
       await timed("slack.memberLookups", timings, async () => {
         for (const memberEmail of allEmails) {
-          const slackUser = await slack.lookupByEmail(memberEmail);
-          if (slackUser) {
-            slackUserIds.set(memberEmail, slackUser.id);
-            delivery.slackMembersFound.push(memberEmail);
-          } else {
+          try {
+            const slackUser = await slack.lookupByEmail(memberEmail);
+            if (slackUser) {
+              slackUserIds.set(memberEmail, slackUser.id);
+              delivery.slackMembersFound.push(memberEmail);
+            } else {
+              delivery.slackMembersMissing.push(memberEmail);
+            }
+          } catch (lookupErr) {
+            // Non-`users_not_found` error — almost always token/workspace level
+            // and identical for every email. Record once, mark missing, carry on.
+            const msg = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
+            if (!delivery.slackError) {
+              delivery.slackError = msg;
+              ctx.log(`${tag}: WARN Slack lookup failed — ${msg} (treating members as not-on-Slack; matches/email unaffected)`);
+            }
             delivery.slackMembersMissing.push(memberEmail);
           }
         }
@@ -333,7 +500,6 @@ export async function runDailyMatchMessage(
       for (const dm of deliveryMatches) {
         dm.onSlack = slackUserIds.has(dm.email);
       }
-      delivery.matches = deliveryMatches;
 
       ctx.log(`${tag}: ${slackUserIds.size}/${allEmails.length} on Slack (lookups ${timings["slack.memberLookups"] ?? 0}ms)`);
 
@@ -389,8 +555,15 @@ export async function runDailyMatchMessage(
         await timed("slack.oversightLookups", timings, async () => {
           for (const oversightEmail of slackOversightRecipients) {
             if (sendSlackUserIds.has(oversightEmail)) continue;
-            const looked = await slack.lookupByEmail(oversightEmail);
-            if (looked) sendSlackUserIds.set(oversightEmail, looked.id);
+            try {
+              const looked = await slack.lookupByEmail(oversightEmail);
+              if (looked) sendSlackUserIds.set(oversightEmail, looked.id);
+            } catch (oversightErr) {
+              // Token/workspace-level Slack failure — don't block the email send.
+              const msg = oversightErr instanceof Error ? oversightErr.message : String(oversightErr);
+              if (!delivery.slackError) delivery.slackError = msg;
+              ctx.log(`${tag}: WARN Slack oversight lookup failed — ${msg}`);
+            }
           }
         });
       }
@@ -402,6 +575,8 @@ export async function runDailyMatchMessage(
         industry: String(record.fields["Industry"] || ""),
         businessStage: String(memberRecord.metadata.businessStage || ""),
         nearbyLocation: String(memberRecord.metadata.nearbyLocation || ""),
+        availability: delivery.newMemberAvailability,
+        topics: delivery.newMemberTopics,
       };
 
       const msg = generateMatchMessage({
@@ -478,22 +653,23 @@ export async function runDailyMatchMessage(
         }).body;
 
         const toEmail = email.toLowerCase();
+        // Matched members are Cc'd (visible) so the group can see each other and
+        // reply-all. Only the included (ticked) matches are here, since
+        // matchMembers is already the filtered set.
         const ccEmails = Array.from(new Set(
           matchMembers
             .map((m) => (m.email || "").toLowerCase())
             .filter((e) => e && e !== toEmail)
         ));
-        // Oversight BCC: same list that powers Slack oversight. Hidden from
-        // matched members — they don't appear in any visible header. Dedup
-        // against the visible To + Cc.
+        // Oversight BCC: hidden from matched members — they don't appear in any
+        // visible header. Dedup against the visible To + Cc.
         const bccEmails = Array.from(slackOversightRecipients)
           .map((e) => e.toLowerCase())
           .filter((e) => e !== toEmail && !ccEmails.includes(e));
 
         // Reply-To covers the VISIBLE recipients only (new joiner + matches).
         // Oversight is invisible — leaving them out of Reply-To keeps them
-        // unexposed in message headers. They still receive the email and can
-        // manually reply if they want to join the thread.
+        // unexposed in message headers.
         const replyToList = [toEmail, ...ccEmails];
 
         const result = await timed("resend.sendEmail", timings, () =>
@@ -517,9 +693,7 @@ export async function runDailyMatchMessage(
 
         if (result) {
           for (const r of allRecipients) delivery.emailsSent.push(r.email);
-          const oversightNote = bccEmails.length > 0
-            ? ` (BCC ${bccEmails.length} oversight)`
-            : "";
+          const oversightNote = bccEmails.length > 0 ? ` (BCC ${bccEmails.length} oversight)` : "";
           ctx.log(
             `${tag}: email sent in ${timings["resend.sendEmail"] ?? 0}ms — To: ${toEmail}` +
               (ccEmails.length > 0 ? `, Cc: ${ccEmails.join(", ")}` : "") +
@@ -571,11 +745,16 @@ export async function runDailyMatchMessage(
   }
 
   const emailTotal = deliveries.reduce((n, d) => n + d.emailsSent.length, 0);
+  const repeatsPrevented = deliveries.reduce((n, d) => n + d.recentlyMatchedExcluded, 0);
+  const underfilledCount = deliveries.filter((d) => d.underfilled && !d.error).length;
+  const lockNote =
+    (repeatsPrevented > 0 ? `, ${repeatsPrevented} repeat(s) prevented` : "") +
+    (underfilledCount > 0 ? `, ${underfilledCount} under-filled` : "");
   const runTotalMs = Date.now() - runStartedAt;
   const avgMs = deliveries.length > 0 ? Math.round(runTotalMs / deliveries.length) : 0;
   const summary = mode === "preview"
-    ? `${deliveries.length} member(s) matched, ${deliveries.filter((d) => !d.error).length} ready to send, ${skippedCount} skipped — ${runTotalMs}ms (avg ${avgMs}ms)`
-    : `${deliveries.length} member(s) processed, ${slackSentCount} Slack DM(s) sent, ${emailTotal} email(s) sent, ${skippedCount} skipped — ${runTotalMs}ms (avg ${avgMs}ms)`;
+    ? `${deliveries.length} member(s) matched, ${deliveries.filter((d) => !d.error).length} ready to send, ${skippedCount} skipped${lockNote} — ${runTotalMs}ms (avg ${avgMs}ms)`
+    : `${deliveries.length} member(s) processed, ${slackSentCount} Slack DM(s) sent, ${emailTotal} email(s) sent, ${skippedCount} skipped${lockNote} — ${runTotalMs}ms (avg ${avgMs}ms)`;
   ctx.log(`Done: ${summary}`);
 
   return { success: true, summary, deliveries };

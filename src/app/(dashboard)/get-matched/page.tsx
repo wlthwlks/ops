@@ -94,6 +94,8 @@ interface MemberFields {
   traction: string;
   hasBusinessDomain: boolean;
   businessStage: string;
+  availability?: string;
+  topics?: string;
 }
 
 interface MatchedMember extends MemberFields {
@@ -240,6 +242,12 @@ function MemberCardBody({ m }: { m: MemberFields }) {
       </LabelRow>
       <LabelRow label="Industry">
         <Text style={{ fontSize: 13 }}>{ind || "—"}</Text>
+      </LabelRow>
+      <LabelRow label="Availability">
+        <Text style={{ fontSize: 13 }}>{String(m.availability || "—")}</Text>
+      </LabelRow>
+      <LabelRow label="Topics">
+        <Text style={{ fontSize: 13 }}>{String(m.topics || "—")}</Text>
       </LabelRow>
       <LabelRow label="Business Email">
         <Tag color={m.hasBusinessDomain ? "green" : "default"} style={{ margin: 0 }}>
@@ -442,6 +450,8 @@ export default function GetMatchedPage() {
     hasBusinessDomain: boolean;
     similarityScore: number;
     onSlack: boolean;
+    availability?: string;
+    topics?: string;
   }
   interface SlackDelivery {
     newMemberName: string;
@@ -452,8 +462,15 @@ export default function GetMatchedPage() {
     newMemberTraction: string;
     newMemberNearbyLocation: string;
     newMemberBusinessStage: string;
+    newMemberAvailability?: string;
+    newMemberTopics?: string;
     newMemberOnSlack: boolean;
     matches: SlackDeliveryMatch[];
+    // Repeat-matching prevention metadata (optional — older responses omit them).
+    freshMatchTarget?: number;
+    freshMatchCount?: number;
+    recentlyMatchedExcluded?: number;
+    underfilled?: boolean;
     slackMembersFound: string[];
     slackMembersMissing: string[];
     slackSent: boolean;
@@ -463,6 +480,7 @@ export default function GetMatchedPage() {
     emailsSent: string[];
     emailsFailed: string[];
     error: string | null;
+    slackError?: string | null;
   }
   const [slackDeliveries, setSlackDeliveries] = useState<SlackDelivery[]>([]);
   const [slackSummary, setSlackSummary] = useState<string | null>(null);
@@ -476,6 +494,10 @@ export default function GetMatchedPage() {
   // Emails the operator has un-ticked on the preview list — they will be
   // skipped when "Send All" runs. Reset on every fresh preview.
   const [excludedEmails, setExcludedEmails] = useState<Set<string>>(new Set());
+  // Individual matches the operator has un-ticked within a delivery. Keyed by
+  // `${newMemberEmail}|${matchEmail}` (lowercased). Excluded matches are dropped
+  // from the intro recipients AND from the DB registry. Reset on every preview.
+  const [excludedMatchKeys, setExcludedMatchKeys] = useState<Set<string>>(new Set());
 
   // Bumped after a non-preview send completes so the KPI cards refetch and
   // reflect the just-finished batch (Matches sent today, Last send, etc.).
@@ -515,6 +537,43 @@ export default function GetMatchedPage() {
     return { missing, total };
   }
 
+  /**
+   * How many distinct community members appear in more than one delivery
+   * across this batch — counting both roles (the new joiner and the matched
+   * members). With repeat-prevention active this should normally be 0; a
+   * non-zero value flags a member being surfaced twice (e.g. a batch peer who
+   * is also someone else's suggested match) and is worth an operator's eye.
+   */
+  function countMembersMatchedMultipleTimes(): number {
+    const counts = new Map<string, number>();
+    for (const d of slackDeliveries) {
+      const emails = new Set<string>();
+      const ne = (d.newMemberEmail || "").trim().toLowerCase();
+      if (ne) emails.add(ne);
+      for (const m of d.matches ?? []) {
+        const me = (m.email || "").trim().toLowerCase();
+        if (me) emails.add(me);
+      }
+      for (const e of emails) counts.set(e, (counts.get(e) ?? 0) + 1);
+    }
+    let dupes = 0;
+    for (const n of counts.values()) if (n > 1) dupes += 1;
+    return dupes;
+  }
+
+  /**
+   * Total ranked candidates that were skipped because they had already been
+   * matched within the 30-day window — i.e. repeats the lock prevented.
+   */
+  function countRepeatsPrevented(): number {
+    return slackDeliveries.reduce((n, d) => n + (d.recentlyMatchedExcluded ?? 0), 0);
+  }
+
+  /** Deliveries that ended up with fewer fresh matches than the target. */
+  function countUnderfilledDeliveries(): number {
+    return slackDeliveries.filter((d) => d.underfilled && !d.error).length;
+  }
+
   async function callMatchIntros(mode: "preview" | "send" | "send-slack" | "send-email") {
     const isPreview = mode === "preview";
     if (isPreview) {
@@ -524,6 +583,7 @@ export default function GetMatchedPage() {
       setSlackEditedEmails({});
       setEmailHtmlExpanded({});
       setExcludedEmails(new Set());
+      setExcludedMatchKeys(new Set());
     } else {
       setSlackSending(true);
     }
@@ -538,12 +598,21 @@ export default function GetMatchedPage() {
       const bodyObj: Record<string, unknown> = { mode };
       if (!isPreview) {
         bodyObj.requestId = crypto.randomUUID();
-        if (Object.keys(slackEditedMessages).length > 0) {
-          bodyObj.editedMessages = slackEditedMessages;
-        }
-        if (Object.keys(slackEditedEmails).length > 0) {
-          bodyObj.editedEmails = slackEditedEmails;
-        }
+
+        const excludedMatches = buildExcludedMatchesPayload();
+        // Deliveries with per-match exclusions must regenerate their message
+        // server-side from the filtered set — otherwise the preview text
+        // (which still names the excluded member) would be sent verbatim. So
+        // drop those deliveries from the edited-content maps.
+        const regenerate = new Set(Object.keys(excludedMatches));
+        const keepEntries = (m: Record<string, string>) =>
+          Object.fromEntries(Object.entries(m).filter(([email]) => !regenerate.has(email)));
+
+        const editedMessages = keepEntries(slackEditedMessages);
+        const editedEmails = keepEntries(slackEditedEmails);
+        if (Object.keys(editedMessages).length > 0) bodyObj.editedMessages = editedMessages;
+        if (Object.keys(editedEmails).length > 0) bodyObj.editedEmails = editedEmails;
+        if (Object.keys(excludedMatches).length > 0) bodyObj.excludedMatches = excludedMatches;
       }
 
       // On a non-preview send, scope to the un-excluded subset of previewed
@@ -580,15 +649,13 @@ export default function GetMatchedPage() {
       setSlackSummary(data.summary);
       setSlackLogs(data.logs || []);
       if (isPreview) {
-        // Populate editable messages from generated previews
-        const msgs: Record<string, string> = {};
-        const emails: Record<string, string> = {};
-        for (const d of data.deliveries || []) {
-          if (d.slackMessage) msgs[d.newMemberEmail] = d.slackMessage;
-          if (d.emailPreview) emails[d.newMemberEmail] = d.emailPreview;
-        }
-        setSlackEditedMessages(msgs);
-        setSlackEditedEmails(emails);
+        // Don't pre-fill the edit maps — the editable areas default to the
+        // LIVE-rendered copy (slackCopyFor / emailCopyFor), which reflects the
+        // ticked members. An entry is only added when the operator actually
+        // types. On send, untouched deliveries are regenerated server-side
+        // (with real @-mentions + exclusions applied).
+        setSlackEditedMessages({});
+        setSlackEditedEmails({});
         setSlackPreviewed(true);
       } else {
         message.success(data.summary);
@@ -630,6 +697,106 @@ export default function GetMatchedPage() {
     } else {
       setExcludedEmails(new Set());
     }
+  }
+
+  // ─── Per-match exclusion (curate which suggested members get introduced) ───
+  function matchKey(newMemberEmail: string, matchEmail: string): string {
+    return `${newMemberEmail.toLowerCase()}|${matchEmail.toLowerCase()}`;
+  }
+
+  function isMatchExcluded(newMemberEmail: string, matchEmail: string): boolean {
+    return excludedMatchKeys.has(matchKey(newMemberEmail, matchEmail));
+  }
+
+  function toggleMatchExcluded(newMemberEmail: string, matchEmail: string) {
+    setExcludedMatchKeys((prev) => {
+      const next = new Set(prev);
+      const key = matchKey(newMemberEmail, matchEmail);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+    // Drop any manual edits for this delivery so the live-rendered copy (which
+    // now excludes the toggled member) is what shows — and what gets sent.
+    setSlackEditedMessages((prev) => {
+      if (!(newMemberEmail in prev)) return prev;
+      const next = { ...prev };
+      delete next[newMemberEmail];
+      return next;
+    });
+    setSlackEditedEmails((prev) => {
+      if (!(newMemberEmail in prev)) return prev;
+      const next = { ...prev };
+      delete next[newMemberEmail];
+      return next;
+    });
+  }
+
+  // ─── Live-rendered message previews (only ticked members appear) ───
+  // Built client-side from the delivery's structured data so toggling a match
+  // instantly re-renders the Slack + email copy without a server round-trip.
+  // The actual sent copy is regenerated server-side from the same included set
+  // (with real Slack @-mentions), so the preview matches what goes out.
+  function includedMatchesFor(d: SlackDelivery) {
+    return (d.matches ?? [])
+      .filter((m) => !isMatchExcluded(d.newMemberEmail, m.email))
+      .map((m) => ({
+        name: m.name,
+        email: m.email,
+        industry: m.industry || "",
+        businessStage: m.businessStage || "",
+        nearbyLocation: m.nearbyLocation || "",
+        availability: m.availability || "",
+        topics: m.topics || "",
+      }));
+  }
+
+  function deliveryNewMemberMsg(d: SlackDelivery) {
+    return {
+      name: d.newMemberName,
+      email: d.newMemberEmail,
+      industry: d.newMemberIndustry || "",
+      businessStage: d.newMemberBusinessStage || "",
+      nearbyLocation: d.newMemberNearbyLocation || "",
+      availability: d.newMemberAvailability || "",
+      topics: d.newMemberTopics || "",
+    };
+  }
+
+  function renderSlackPreview(d: SlackDelivery): string {
+    const inc = includedMatchesFor(d);
+    if (inc.length === 0) return "(All matches excluded — this group will be skipped.)";
+    return generateMatchMessage({ newMember: deliveryNewMemberMsg(d), matches: inc, format: "slack" }).body;
+  }
+
+  function renderEmailPreview(d: SlackDelivery): string {
+    const inc = includedMatchesFor(d);
+    if (inc.length === 0) return '<p style="color:#999">All matches excluded — this group will be skipped.</p>';
+    return generateMatchMessage({ newMember: deliveryNewMemberMsg(d), matches: inc, format: "html", isOnSlack: d.newMemberOnSlack }).body;
+  }
+
+  // Operator edit wins; otherwise live-rendered (preview) or server copy (post-send).
+  function slackCopyFor(d: SlackDelivery): string {
+    return slackEditedMessages[d.newMemberEmail] ?? (slackPreviewed ? renderSlackPreview(d) : (d.slackMessage ?? ""));
+  }
+  function emailCopyFor(d: SlackDelivery): string {
+    return slackEditedEmails[d.newMemberEmail] ?? (slackPreviewed ? renderEmailPreview(d) : (d.emailPreview ?? ""));
+  }
+
+  /**
+   * Build the per-new-member map of excluded match emails to send to the
+   * server. Only includes deliveries that aren't themselves excluded.
+   */
+  function buildExcludedMatchesPayload(): Record<string, string[]> {
+    const out: Record<string, string[]> = {};
+    for (const d of slackDeliveries) {
+      if (excludedEmails.has(d.newMemberEmail)) continue;
+      const dropped = (d.matches ?? [])
+        .map((m) => m.email)
+        .filter((mEmail) => isMatchExcluded(d.newMemberEmail, mEmail));
+      if (dropped.length > 0) out[d.newMemberEmail] = dropped;
+    }
+    return out;
   }
 
   async function handleBatchMatch() {
@@ -788,7 +955,7 @@ export default function GetMatchedPage() {
         <div>
           <Title level={3} style={{ margin: 0 }}>
             <SlackOutlined style={{ marginRight: 8 }} />
-            Send Slack Introductions
+            Send Slack and Email Introductions
           </Title>
           <Text type="secondary">
             Load members by email or date range, preview matches, then approve to send Slack group DMs.
@@ -865,6 +1032,20 @@ export default function GetMatchedPage() {
                       {excludedEmails.size > 0 && (
                         <>
                           {" "}· <Text type="warning" style={{ fontSize: 12 }}>{excludedEmails.size} excluded</Text>
+                        </>
+                      )}
+                      {countRepeatsPrevented() > 0 && (
+                        <>
+                          {" "}· <Text type="success" style={{ fontSize: 12 }}>
+                            {countRepeatsPrevented()} repeat{countRepeatsPrevented() === 1 ? "" : "s"} prevented (30-day lock)
+                          </Text>
+                        </>
+                      )}
+                      {countMembersMatchedMultipleTimes() > 0 && (
+                        <>
+                          {" "}· <Text type="warning" style={{ fontSize: 12 }}>
+                            {countMembersMatchedMultipleTimes()} member{countMembersMatchedMultipleTimes() === 1 ? "" : "s"} matched more than once
+                          </Text>
                         </>
                       )}
                     </Text>
@@ -965,6 +1146,38 @@ export default function GetMatchedPage() {
             );
           })()}
 
+          {(() => {
+            const underfilled = countUnderfilledDeliveries();
+            if (underfilled === 0) return null;
+            const examples = slackDeliveries
+              .filter((d) => d.underfilled && !d.error)
+              .slice(0, 8);
+            return (
+              <Alert
+                type="warning"
+                showIcon
+                icon={<WarningOutlined />}
+                message={`${underfilled} member${underfilled === 1 ? " has" : "s have"} fewer than ${examples[0]?.freshMatchTarget ?? 5} fresh matches`}
+                description={
+                  <>
+                    The 30-day rule means each existing member is only matched once a month, so the local pool of fresh candidates ran thin. These deliveries will send with the matches available rather than re-using recently-matched members.
+                    <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                      {examples.map((d) => (
+                        <li key={d.newMemberEmail} style={{ fontSize: 12 }}>
+                          <Text>{d.newMemberName}</Text>{" "}
+                          <Text type="secondary" style={{ fontSize: 11 }}>
+                            ({d.freshMatchCount ?? d.matches.length}/{d.freshMatchTarget ?? 5} matches
+                            {(d.recentlyMatchedExcluded ?? 0) > 0 ? `, ${d.recentlyMatchedExcluded} excluded by lock` : ""})
+                          </Text>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                }
+              />
+            );
+          })()}
+
           {[...slackDeliveries]
             .sort((a, b) => {
               const ca = (a.newMemberCity || "").trim();
@@ -1014,6 +1227,7 @@ export default function GetMatchedPage() {
                     )}
                     {delivery.newMemberOnSlack ? <Tag color="blue" style={{ margin: 0 }}><SlackOutlined /> Slack</Tag> : <Tag style={{ margin: 0 }}>Not on Slack</Tag>}
                     {delivery.error && <Tag color="red" style={{ margin: 0 }}>{delivery.error}</Tag>}
+                    {delivery.slackError && <Tag color="orange" style={{ margin: 0 }}>Slack unavailable: {delivery.slackError}</Tag>}
                     {delivery.slackSent && <Tag color="green" style={{ margin: 0 }}>Slack Sent</Tag>}
                     {delivery.emailsSent?.length > 0 && <Tag color="green" style={{ margin: 0 }}>{delivery.emailsSent.length} Email(s)</Tag>}
                     {!delivery.slackSent && !delivery.error && slackPreviewed && !excludedEmails.has(delivery.newMemberEmail) && delivery.slackMembersFound.length >= 2 && (
@@ -1070,6 +1284,8 @@ export default function GetMatchedPage() {
                                 traction: delivery.newMemberTraction,
                                 hasBusinessDomain: false,
                                 businessStage: delivery.newMemberBusinessStage,
+                                availability: delivery.newMemberAvailability,
+                                topics: delivery.newMemberTopics,
                               }} />
                             </Card>
                           </div>
@@ -1090,22 +1306,36 @@ export default function GetMatchedPage() {
                                   </Text>
                                 </div>
                                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
-                                  {cityMatches.map((match) => (
+                                  {cityMatches.map((match) => {
+                                    const matchExcluded = slackPreviewed && isMatchExcluded(delivery.newMemberEmail, match.email);
+                                    return (
                                     <Card
                                       key={match.email}
                                       size="small"
                                       style={{
-                                        borderColor: match.onSlack ? "#91d5ff" : undefined,
-                                        background: match.onSlack ? "#f0f5ff" : undefined,
+                                        borderColor: matchExcluded ? "#ffccc7" : match.onSlack ? "#91d5ff" : undefined,
+                                        background: matchExcluded ? "#fff1f0" : match.onSlack ? "#f0f5ff" : undefined,
+                                        opacity: matchExcluded ? 0.6 : 1,
                                       }}
                                     >
                                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
-                                        <div style={{ minWidth: 0, flex: 1 }}>
-                                          <Text strong style={{ fontSize: 13 }}>#{match.originalRank} {match.name}</Text>
-                                          <br />
-                                          <Text type="secondary" style={{ fontSize: 11, wordBreak: "break-all" }}>{match.email}</Text>
+                                        <div style={{ minWidth: 0, flex: 1, display: "flex", gap: 6, alignItems: "flex-start" }}>
+                                          {slackPreviewed && (
+                                            <Checkbox
+                                              checked={!matchExcluded}
+                                              onChange={() => toggleMatchExcluded(delivery.newMemberEmail, match.email)}
+                                              title={matchExcluded ? "Excluded — won't be introduced or recorded" : "Included in this introduction"}
+                                              style={{ marginTop: 2 }}
+                                            />
+                                          )}
+                                          <div style={{ minWidth: 0 }}>
+                                            <Text strong delete={matchExcluded} style={{ fontSize: 13 }}>#{match.originalRank} {match.name}</Text>
+                                            <br />
+                                            <Text type="secondary" style={{ fontSize: 11, wordBreak: "break-all" }}>{match.email}</Text>
+                                          </div>
                                         </div>
                                         <Flex gap={4} align="center" style={{ flexShrink: 0, marginLeft: 6 }}>
+                                          {matchExcluded && <Tag color="red" style={{ margin: 0 }}>Excluded</Tag>}
                                           {match.onSlack && <Tag color="blue"><SlackOutlined /> Slack</Tag>}
                                           <div style={{
                                             background: scoreColor(match.similarityScore),
@@ -1127,9 +1357,12 @@ export default function GetMatchedPage() {
                                         traction: match.traction,
                                         hasBusinessDomain: match.hasBusinessDomain,
                                         businessStage: match.businessStage,
+                                        availability: match.availability,
+                                        topics: match.topics,
                                       }} />
                                     </Card>
-                                  ))}
+                                    );
+                                  })}
                                 </div>
                               </div>
                             );
@@ -1146,7 +1379,7 @@ export default function GetMatchedPage() {
                           Slack message (editable):
                         </Text>
                         <Input.TextArea
-                          value={slackEditedMessages[delivery.newMemberEmail] ?? delivery.slackMessage}
+                          value={slackCopyFor(delivery)}
                           onChange={(e) => setSlackEditedMessages((prev) => ({ ...prev, [delivery.newMemberEmail]: e.target.value }))}
                           autoSize={{ minRows: 6, maxRows: 16 }}
                           style={{ fontFamily: "monospace", fontSize: 12, lineHeight: "18px" }}
@@ -1171,7 +1404,7 @@ export default function GetMatchedPage() {
                           label: <Text type="secondary" style={{ fontSize: 12 }}>Slack message sent</Text>,
                           children: (
                             <pre style={{ margin: 0, fontSize: 12, lineHeight: "18px", whiteSpace: "pre-wrap", background: "#f5f5f5", padding: 12, borderRadius: 6 }}>
-                              {slackEditedMessages[delivery.newMemberEmail] ?? delivery.slackMessage}
+                              {slackCopyFor(delivery)}
                             </pre>
                           ),
                         }]}
@@ -1204,12 +1437,12 @@ export default function GetMatchedPage() {
                         <div
                           style={{ border: "1px solid #f0f0f0", borderRadius: 6, padding: 16, background: "#fff", fontSize: 13, lineHeight: "20px" }}
                           dangerouslySetInnerHTML={{
-                            __html: slackEditedEmails[delivery.newMemberEmail] ?? delivery.emailPreview,
+                            __html: emailCopyFor(delivery),
                           }}
                         />
                         {slackPreviewed && emailHtmlExpanded[delivery.newMemberEmail] && (
                           <Input.TextArea
-                            value={slackEditedEmails[delivery.newMemberEmail] ?? delivery.emailPreview}
+                            value={emailCopyFor(delivery)}
                             onChange={(e) =>
                               setSlackEditedEmails((prev) => ({
                                 ...prev,

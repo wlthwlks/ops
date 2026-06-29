@@ -49,6 +49,13 @@ function closeProximityLocations(nearbyLocation: string): string {
  *   ARR / business stage 30% — repeated for weight
  *   Industry relevance  20% — industry
  *
+ * Optional, low-weight signals appended only when the member supplied them
+ * (sparse free-text Airtable fields — see docs):
+ *   Topics to discuss — affinity signal, repeated twice
+ *   Availability      — logistics signal, mentioned once
+ * Members without these get a string byte-identical to the base form, so
+ * their vectors don't move when re-embedded.
+ *
  * Repetition in the embedding input amplifies that dimension's influence
  * on the resulting vector, approximating the desired weighting.
  */
@@ -56,6 +63,8 @@ export function buildEmbeddingText(member: {
   nearbyLocation: string;
   businessStage: string;
   industry: string;
+  topics?: string;
+  availability?: string;
 }): string {
   const sections: string[] = [];
 
@@ -75,6 +84,19 @@ export function buildEmbeddingText(member: {
   const industry = member.industry || "business";
   sections.push(`Industry: ${industry.toLowerCase()}.`);
   sections.push(`Sector: ${industry.toLowerCase()}.`);
+
+  // Topics to discuss — affinity, repeated twice (only when present)
+  const topics = member.topics?.trim();
+  if (topics) {
+    sections.push(`Wants to discuss: ${topics}.`);
+    sections.push(`Interested in: ${topics}.`);
+  }
+
+  // Availability — logistics, single mention (only when present)
+  const availability = member.availability?.trim();
+  if (availability) {
+    sections.push(`Availability: ${availability}.`);
+  }
 
   return sections.join(" ");
 }

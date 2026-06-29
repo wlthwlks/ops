@@ -64,6 +64,8 @@ export async function GET(request: NextRequest) {
       businessStage: string;
       hasBusinessDomain: boolean;
       active: boolean;
+      availability: string;
+      topics: string;
     } | null;
     matches: Array<{
       id: string;
@@ -77,6 +79,8 @@ export async function GET(request: NextRequest) {
       nearbyLocation: string;
       hasBusinessDomain: boolean;
       active: boolean;
+      availability: string;
+      topics: string;
       similarityScore: number;
     }>;
   }
@@ -135,6 +139,8 @@ export async function GET(request: NextRequest) {
       businessStage: String(memberRecord.metadata.businessStage || ""),
       hasBusinessDomain: Boolean(memberRecord.metadata.hasBusinessDomain),
       active: Boolean(memberRecord.metadata.active),
+      availability: String(memberRecord.metadata.availability || ""),
+      topics: String(memberRecord.metadata.topics || ""),
     };
 
     // Filter matches to same city group
@@ -179,6 +185,8 @@ export async function GET(request: NextRequest) {
         nearbyLocation: String(m.metadata.nearbyLocation || ""),
         hasBusinessDomain: Boolean(m.metadata.hasBusinessDomain),
         active: Boolean(m.metadata.active),
+        availability: String(m.metadata.availability || ""),
+        topics: String(m.metadata.topics || ""),
         similarityScore: Math.round(m.score * 100) / 100,
       }));
   }

@@ -70,6 +70,27 @@ function buildGroupDescription(
   return `${list}. Each of you brings a different perspective, which makes for great conversations.`;
 }
 
+interface CoordEntry {
+  first: string;
+  text: string;
+}
+
+const memberFirst = (m: MessageMember) => String(m.name).split(" ")[0];
+
+/** Members (new + matches) who supplied free-text availability. */
+function availabilityEntries(members: MessageMember[]): CoordEntry[] {
+  return members
+    .map((m) => ({ first: memberFirst(m), text: (m.availability ?? "").trim() }))
+    .filter((e) => e.text.length > 0);
+}
+
+/** Members (new + matches) who supplied free-text topics to discuss. */
+function topicEntries(members: MessageMember[]): CoordEntry[] {
+  return members
+    .map((m) => ({ first: memberFirst(m), text: (m.topics ?? "").trim() }))
+    .filter((e) => e.text.length > 0);
+}
+
 /**
  * Format a list of names: "Alice", "Alice and Bob", "Alice, Bob and Carol"
  */
@@ -151,6 +172,18 @@ function buildPlaintextMessage(p: {
     lines.push(`You're all based around ${p.meetingSpots.join(", ")} — great spots to grab a coffee and connect.`);
     lines.push("");
   }
+  const availP = availabilityEntries([p.newMember, ...p.matches]);
+  if (availP.length > 0) {
+    lines.push("Here's when people are free to meet — find a slot that works for everyone:");
+    for (const e of availP) lines.push(`- ${e.first}: ${e.text}`);
+    lines.push("");
+  }
+  const topicsP = topicEntries([p.newMember, ...p.matches]);
+  if (topicsP.length > 0) {
+    lines.push("Topics they'd like to discuss:");
+    for (const e of topicsP) lines.push(`- ${e.first}: ${e.text}`);
+    lines.push("");
+  }
   lines.push("We'd love for you to meet up and share what you're working on. Sometimes the best ideas come from a conversation with someone on a similar journey.");
   lines.push("");
   lines.push("Looking forward to seeing you connect!");
@@ -180,6 +213,18 @@ function buildSlackMessage(p: {
   lines.push("");
   if (p.meetingSpots.length > 0) {
     lines.push(`:round_pushpin: You're all based around ${p.meetingSpots.join(", ")} — great spots to grab a coffee and connect.`);
+    lines.push("");
+  }
+  const availS = availabilityEntries([p.newMember, ...p.matches]);
+  if (availS.length > 0) {
+    lines.push(":calendar: Here's when people are free to meet — find a slot that works for everyone:");
+    for (const e of availS) lines.push(`• *${e.first}*: ${e.text}`);
+    lines.push("");
+  }
+  const topicsS = topicEntries([p.newMember, ...p.matches]);
+  if (topicsS.length > 0) {
+    lines.push(":speech_balloon: Topics they'd like to discuss:");
+    for (const e of topicsS) lines.push(`• *${e.first}*: ${e.text}`);
     lines.push("");
   }
   lines.push("We'd love for you to meet up and share what you're working on. Sometimes the best ideas come from a conversation with someone on a similar journey. :handshake:");
@@ -213,12 +258,11 @@ const EMAIL_TEMPLATE = `
 
   {{MEETING_SPOTS}}
 
+  {{COORDINATION}}
+
   <p>We'd love for you to meet up and share what you're working on. Sometimes the best ideas come from a conversation with someone on a similar journey.</p>
 
   {{SLACK_SECTION}}
-
-  <p style="margin-top: 20px;"><strong>Contact details:</strong></p>
-  <ul style="padding-left: 20px;">{{CONTACT_LIST}}</ul>
 
   <p>Looking forward to seeing you connect!</p>
 
@@ -248,9 +292,20 @@ function buildHtmlMessage(p: {
     ? `<p>Some of your matches are already on our Slack community. <a href="${esc(p.slackInviteUrl)}" style="color: #1890ff; text-decoration: underline; font-weight: 600;">Join the WLTH WLKS Slack</a> to connect with them directly.</p>`
     : "";
 
-  const contactList = p.matches.map((m) =>
-    `<li>${esc(String(m.name).split(" ")[0])} — <a href="mailto:${esc(m.email)}" style="color: #1890ff;">${esc(m.email)}</a></li>`
-  ).join("");
+  // Coordination block — availability + topics, only when someone supplied them.
+  const allForCoord = [p.newMember, ...p.matches];
+  const availH = availabilityEntries(allForCoord);
+  const topicsH = topicEntries(allForCoord);
+  const coordParts: string[] = [];
+  if (availH.length > 0) {
+    const items = availH.map((e) => `<li><strong>${esc(e.first)}</strong>: ${esc(e.text)}</li>`).join("");
+    coordParts.push(`<p style="margin-bottom: 4px;">Here's when people are free to meet — find a slot that works for everyone:</p><ul style="padding-left: 20px; margin-top: 0;">${items}</ul>`);
+  }
+  if (topicsH.length > 0) {
+    const items = topicsH.map((e) => `<li><strong>${esc(e.first)}</strong>: ${esc(e.text)}</li>`).join("");
+    coordParts.push(`<p style="margin-bottom: 4px;">Topics they'd like to discuss:</p><ul style="padding-left: 20px; margin-top: 0;">${items}</ul>`);
+  }
+  const coordination = coordParts.join("\n");
 
   // Kick-off CTA addressed to the new joiner — references the suggested spots
   // when we surfaced them, otherwise just nudges them to propose times.
@@ -262,8 +317,8 @@ function buildHtmlMessage(p: {
     .replace("{{FIRST_NAME}}", esc(p.memberFirstName))
     .replace("{{GROUP_DESCRIPTION}}", esc(groupDesc))
     .replace("{{MEETING_SPOTS}}", meetingSpots)
+    .replace("{{COORDINATION}}", coordination)
     .replace("{{SLACK_SECTION}}", slackSection)
-    .replace("{{CONTACT_LIST}}", contactList)
     .replace("{{KICKOFF_INVITE}}", kickoffInvite);
 
   return { body: html, recipients: p.recipients };

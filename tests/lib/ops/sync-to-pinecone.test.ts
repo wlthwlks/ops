@@ -221,6 +221,59 @@ describe("runPineconeSync", () => {
     expect(formulasUsed.some((f: string) => f.includes('{Cancellation date} = ""'))).toBe(true);
   });
 
+  it("re-embeds when Availability changed but reuses stored location (NO Google call)", async () => {
+    // Same city/postcode + nearbyLocation present, but the member now has a
+    // new Availability value → must re-embed (vector text changes) WITHOUT
+    // re-hitting geocode/places.
+    const record = {
+      id: "r1",
+      fields: {
+        email: "a@test.com",
+        Name: "Alice",
+        "post code": "EC1V",
+        City: "London",
+        Industry: "Tech",
+        Revenue: "50k",
+        Availability: "Weekday mornings",
+        "Topics to Discuss": "pricing",
+      },
+    };
+    vi.mocked(createAirtableClient).mockReturnValue(makeAirtable([record]) as any);
+    const existingMeta = new Map([
+      ["r1", { city: "london", postcode: "ec1v", nearbyLocation: "Shoreditch, Old Street", industry: "Tech", traction: "50k", availability: "", topics: "" }],
+    ]);
+    vi.mocked(createPineconeClient).mockReturnValue(makePinecone(existingMeta) as any);
+
+    const ctx = makeCtx();
+    const result = await runPineconeSync("London", ctx);
+
+    expect(result.success).toBe(true);
+    expect(embedTexts).toHaveBeenCalledOnce();          // re-embedded
+    expect(geocode).not.toHaveBeenCalled();              // location reused
+    expect(findNearbyPlaces).not.toHaveBeenCalled();
+    const upserted = vi.mocked(createPineconeClient).mock.results[0]!.value.upsertVectors.mock.calls[0]![0];
+    expect(upserted[0].metadata.nearbyLocation).toBe("Shoreditch, Old Street");
+    expect(upserted[0].metadata.availability).toBe("Weekday mornings");
+    expect(upserted[0].metadata.topics).toBe("pricing");
+  });
+
+  it("still geocodes (Google) when city/postcode actually changed", async () => {
+    const record = {
+      id: "r1",
+      fields: { email: "a@test.com", Name: "Alice", "post code": "SW1A", City: "London", Industry: "Tech", Revenue: "50k" },
+    };
+    vi.mocked(createAirtableClient).mockReturnValue(makeAirtable([record]) as any);
+    const existingMeta = new Map([
+      ["r1", { city: "london", postcode: "ec1v", nearbyLocation: "OldArea", industry: "Tech", traction: "50k" }],
+    ]);
+    vi.mocked(createPineconeClient).mockReturnValue(makePinecone(existingMeta) as any);
+
+    const ctx = makeCtx();
+    await runPineconeSync("London", ctx);
+
+    expect(geocode).toHaveBeenCalled();                  // postcode changed → fresh lookup
+  });
+
   it("returns failure when credentials missing", async () => {
     delete process.env.OPENAI_API_KEY;
     const ctx = makeCtx();

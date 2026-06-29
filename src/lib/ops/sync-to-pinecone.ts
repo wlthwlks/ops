@@ -52,6 +52,8 @@ interface EnrichedMember {
   traction: string;
   hasBusinessDomain: boolean;
   businessStage: string;
+  availability: string;
+  topics: string;
   embeddingText: string;
 }
 
@@ -62,12 +64,18 @@ interface EnrichedMember {
  * If the new geocode/places lookup yields an empty string (rate limit, API
  * key missing, no places found, transient error) we fall back to it rather
  * than wiping good data.
+ *
+ * `reuseLocation` — when true (the re-embed was triggered by a non-location
+ * change such as Availability/Topics), we reuse the stored `fallbackNearby`
+ * and SKIP the Google geocode/places calls entirely. Location is only ever
+ * geocoded when it's genuinely new or has moved.
  */
 async function enrichMember(
   record: AirtableRecord,
   geocodeCache: Map<string, string>,
   ctx: OpContext,
-  fallbackNearby = ""
+  fallbackNearby = "",
+  reuseLocation = false
 ): Promise<EnrichedMember | null> {
   const f = record.fields;
   const email = String(f["email"] || "");
@@ -77,12 +85,18 @@ async function enrichMember(
   const city = String(f["City"] || "");
   const industry = String(f["Industry"] || "");
   const traction = String(f["Revenue"] || "");
+  const availability = String(f["Availability"] || "");
+  const topics = String(f["Topics to Discuss"] || "");
 
   const businessStage = toBusinessStage(traction);
   const hasBizDomain = hasBusinessDomain(email);
 
   let nearbyLocation = "";
-  if (postcode) {
+  if (reuseLocation && fallbackNearby) {
+    // Re-embed driven by Availability/Topics, not location — reuse what's
+    // already in Pinecone and make zero Google calls.
+    nearbyLocation = fallbackNearby;
+  } else if (postcode) {
     const outcode = extractOutcode(postcode);
     const cachedNearby = geocodeCache.get(outcode);
     if (cachedNearby !== undefined) {
@@ -121,6 +135,8 @@ async function enrichMember(
     nearbyLocation,
     businessStage,
     industry,
+    topics,
+    availability,
   });
 
   return {
@@ -135,6 +151,8 @@ async function enrichMember(
     traction,
     hasBusinessDomain: hasBizDomain,
     businessStage,
+    availability,
+    topics,
     embeddingText,
   };
 }
@@ -262,15 +280,18 @@ export async function runPineconeSync(
   ctx.log(`Found ${existingMeta.size} existing record(s) in Pinecone`);
 
   // ─── Step 4: Classify members into new/changed/unchanged ───
-  const needsReEmbed: AirtableRecord[] = [];   // new or city/postcode changed → full re-geocode + embed
-  const metadataOnly: AirtableRecord[] = [];    // exists, location unchanged → update metadata, keep vector
+  // `reuseLocation` rides along with each re-embed record: true means the
+  // re-embed was triggered by a non-location change (Availability/Topics)
+  // so enrichMember reuses the stored nearbyLocation and skips Google.
+  const needsReEmbed: Array<{ record: AirtableRecord; reuseLocation: boolean }> = [];
+  const metadataOnly: AirtableRecord[] = [];    // exists, vector unchanged → update metadata, keep vector
   const unchanged: string[] = [];               // for logging
 
   for (const record of allActiveRecords) {
     const existing = existingMeta.get(record.id);
     if (!existing) {
-      // New member — not in Pinecone yet
-      needsReEmbed.push(record);
+      // New member — not in Pinecone yet. Geocode from scratch.
+      needsReEmbed.push({ record, reuseLocation: false });
       continue;
     }
 
@@ -281,11 +302,23 @@ export async function runPineconeSync(
 
     const existingNearby = String(existing.nearbyLocation || "");
 
+    // Availability/Topics feed the embedding vector, so a change there means
+    // re-embed — but the location is unchanged, so reuse it (no Google).
+    const currentAvailability = String(record.fields["Availability"] || "");
+    const currentTopics = String(record.fields["Topics to Discuss"] || "");
+    const existingAvailability = String(existing.availability || "");
+    const existingTopics = String(existing.topics || "");
+    const vectorTextChanged =
+      currentAvailability !== existingAvailability || currentTopics !== existingTopics;
+
     if (currentCity !== existingCity || currentPostcode !== existingPostcode || !existingNearby) {
       // Location changed or nearbyLocation missing — needs geocoding + new embedding
-      needsReEmbed.push(record);
+      needsReEmbed.push({ record, reuseLocation: false });
+    } else if (vectorTextChanged) {
+      // Availability/Topics changed — re-embed but reuse the stored location.
+      needsReEmbed.push({ record, reuseLocation: true });
     } else {
-      // Location same — check if other metadata changed
+      // Vector unchanged — check if other (non-vector) metadata changed
       const currentIndustry = String(record.fields["Industry"] || "");
       const currentTraction = String(record.fields["Revenue"] || "");
       const existingIndustry = String(existing.industry || "");
@@ -309,11 +342,12 @@ export async function runPineconeSync(
     ctx.log(`Enriching ${needsReEmbed.length} member(s) needing re-embed...`);
     const enriched: EnrichedMember[] = [];
 
-    for (const record of needsReEmbed) {
+    for (const { record, reuseLocation } of needsReEmbed) {
       // Pass the existing nearbyLocation (if any) as fallback so an empty
-      // new lookup never wipes good data already in Pinecone.
+      // new lookup never wipes good data already in Pinecone. When
+      // reuseLocation is set we use it directly and skip Google.
       const fallbackNearby = String(existingMeta.get(record.id)?.nearbyLocation || "");
-      const member = await enrichMember(record, geocodeCache, ctx, fallbackNearby);
+      const member = await enrichMember(record, geocodeCache, ctx, fallbackNearby, reuseLocation);
       if (member) enriched.push(member);
     }
 
@@ -336,6 +370,8 @@ export async function runPineconeSync(
           traction: member.traction,
           hasBusinessDomain: member.hasBusinessDomain,
           businessStage: member.businessStage,
+          availability: member.availability,
+          topics: member.topics,
         },
       }));
 
@@ -382,6 +418,8 @@ export async function runPineconeSync(
           traction,
           hasBusinessDomain: hasBusinessDomain(email),
           businessStage: toBusinessStage(traction),
+          availability: String(f["Availability"] || ""),
+          topics: String(f["Topics to Discuss"] || ""),
         },
       });
     }

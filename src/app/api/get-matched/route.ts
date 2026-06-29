@@ -95,6 +95,8 @@ export async function GET(request: NextRequest) {
       traction: memberRecord.metadata.traction,
       hasBusinessDomain: memberRecord.metadata.hasBusinessDomain,
       businessStage: memberRecord.metadata.businessStage,
+      availability: memberRecord.metadata.availability ?? "",
+      topics: memberRecord.metadata.topics ?? "",
     },
     matches: filtered.map((m) => ({
       id: m.id,
@@ -108,6 +110,8 @@ export async function GET(request: NextRequest) {
       traction: m.metadata.traction,
       hasBusinessDomain: m.metadata.hasBusinessDomain,
       businessStage: m.metadata.businessStage,
+      availability: m.metadata.availability ?? "",
+      topics: m.metadata.topics ?? "",
       similarityScore: Math.round(m.score * 100) / 100,
     })),
   });

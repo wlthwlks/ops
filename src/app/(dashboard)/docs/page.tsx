@@ -335,6 +335,34 @@ function MatchmakingDataModel() {
         </Text>
       </div>
 
+      <Alert
+        type="info"
+        showIcon
+        message="Repeat-matching prevention (30-day lock)"
+        description={
+          <Paragraph style={{ margin: 0 }}>
+            Before suggesting matches, the engine (
+            <code>src/lib/matchmake/recent-matches.ts</code> →{" "}
+            <code>src/lib/ops/daily-match-message.ts</code>) loads every member
+            who already <strong>participated in a real send</strong> — as the new
+            joiner <em>or</em> as a suggested match (&ldquo;any
+            participation&rdquo;) — within a rolling <strong>30 days</strong>,
+            queried from <code>match_events</code> + <code>match_event_matches</code>{" "}
+            (<code>dry_run = false</code>, not soft-deleted). Those members are
+            skipped and the next-best fresh candidates take their place, so no
+            existing member is matched more than once a month. Within a single
+            run <strong>every member appears in at most one group</strong> — each
+            new joiner in the batch is also excluded from being another joiner&rsquo;s
+            match, so nobody is introduced twice (the candidate pool is pulled
+            deep from Pinecone to refill). When a city runs out of fresh
+            candidates the delivery <strong>sends fewer matches and is
+            flagged</strong> rather than re-using someone — never silently
+            breaking the rule. Previews apply the lock too (so you see the real
+            result) but never count toward the history.
+          </Paragraph>
+        }
+      />
+
       {dbTables.map((t) => (
         <Card
           key={t.name}

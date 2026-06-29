@@ -114,6 +114,7 @@ const { createPineconeClient } = await import("@/lib/integrations/pinecone");
 const { createSlackClient } = await import("@/lib/integrations/slack");
 const { createResendClient } = await import("@/lib/integrations/resend");
 const { generateMatchMessage } = await import("@/lib/messaging/generate-match-message");
+const { recordMatchEvent } = await import("@/lib/matchmake/record");
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
@@ -185,7 +186,7 @@ describe("runDailyMatchMessage", () => {
       cc: ["alice@test.com", "bob@test.com"],
       replyTo: ["new@test.com", "alice@test.com", "bob@test.com"],
     });
-    // But emailsSent still tracks 3 recipients (audit-friendly).
+    // emailsSent still tracks 3 recipients (audit-friendly).
     expect(d.emailsSent).toHaveLength(3);
   });
 
@@ -342,6 +343,132 @@ describe("runDailyMatchMessage", () => {
     // conversationsOpen should include the oversight user ID
     const openArgs = slack.conversationsOpen.mock.calls[0][0] as string[];
     expect(openArgs).toContain("U-OVERSIGHT");
+  });
+
+  it("Slack token failure (account_inactive) degrades gracefully: matches + email still populate, slackError set, no hard error", async () => {
+    vi.mocked(createAirtableClient).mockReturnValue(makeAirtableClient([NEW_MEMBER_RECORD]) as any);
+    vi.mocked(createPineconeClient).mockReturnValue(makePineconeClient() as any);
+    // Every Slack lookup throws the workspace-level error, like a revoked/removed bot token.
+    const slack = {
+      lookupByEmail: vi.fn().mockRejectedValue(new Error("Slack API error: account_inactive")),
+      conversationsOpen: vi.fn(),
+      postMessage: vi.fn(),
+    };
+    vi.mocked(createSlackClient).mockReturnValue(slack as any);
+    const resend = makeResendClient();
+    vi.mocked(createResendClient).mockReturnValue(resend as any);
+
+    const { log, db } = makeCtx();
+    const result = await runDailyMatchMessage("2026-01-01", "2026-01-01", { log, db }, "send");
+
+    expect(result.success).toBe(true);
+    const d = result.deliveries[0];
+    // Matches are NOT blanked by the Slack failure.
+    expect(d.matches).toHaveLength(2);
+    // Email preview still rendered and email still sent.
+    expect(d.emailPreview).toBe("generated-message");
+    expect(resend.sendEmail).toHaveBeenCalledTimes(1);
+    // Slack failure surfaced as a soft warning, not a hard delivery error.
+    expect(d.slackError).toContain("account_inactive");
+    expect(d.error).toBeNull();
+    // Nobody resolved on Slack → no DM attempted.
+    expect(d.slackSent).toBe(false);
+    expect(slack.conversationsOpen).not.toHaveBeenCalled();
+    // All members recorded as missing-on-Slack.
+    expect(d.slackMembersFound).toHaveLength(0);
+    expect(d.slackMembersMissing.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("excludedMatches: un-ticked member is dropped from recipients AND the DB registry", async () => {
+    vi.mocked(createAirtableClient).mockReturnValue(makeAirtableClient([NEW_MEMBER_RECORD]) as any);
+    // Default Pinecone returns alice + bob.
+    vi.mocked(createPineconeClient).mockReturnValue(makePineconeClient() as any);
+    const slack = makeSlackClient({ lookupResults: [{ id: "U001" }, { id: "U002" }, { id: "U003" }] });
+    vi.mocked(createSlackClient).mockReturnValue(slack as any);
+    const resend = makeResendClient();
+    vi.mocked(createResendClient).mockReturnValue(resend as any);
+
+    const { log, db } = makeCtx();
+    const result = await runDailyMatchMessage(
+      "2026-01-01", "2026-01-01", { log, db }, "send",
+      undefined, undefined, undefined, "req-excl",
+      { "new@test.com": ["alice@test.com"] } // un-tick Alice
+    );
+
+    expect(result.success).toBe(true);
+    const d = result.deliveries[0];
+    // Only Bob remains in the delivery's matches.
+    expect(d.matches.map((m) => m.email)).toEqual(["bob@test.com"]);
+    // Email Cc excludes Alice (only Bob is introduced).
+    const [, , , opts] = resend.sendEmail.mock.calls[0]!;
+    expect(opts.cc).toEqual(["bob@test.com"]);
+    // DB registry: recorded matches exclude Alice.
+    const recordArg = vi.mocked(recordMatchEvent).mock.calls[0]![0];
+    expect(recordArg.matches.map((m: { email: string }) => m.email)).toEqual(["bob@test.com"]);
+  });
+
+  it("excludedMatches: excluding every match skips the delivery (no send, no record)", async () => {
+    vi.mocked(createAirtableClient).mockReturnValue(makeAirtableClient([NEW_MEMBER_RECORD]) as any);
+    vi.mocked(createPineconeClient).mockReturnValue(makePineconeClient() as any);
+    vi.mocked(createSlackClient).mockReturnValue(makeSlackClient() as any);
+    const resend = makeResendClient();
+    vi.mocked(createResendClient).mockReturnValue(resend as any);
+
+    const { log, db } = makeCtx();
+    const result = await runDailyMatchMessage(
+      "2026-01-01", "2026-01-01", { log, db }, "send",
+      undefined, undefined, undefined, "req-excl-all",
+      { "new@test.com": ["alice@test.com", "bob@test.com"] }
+    );
+
+    const d = result.deliveries[0];
+    expect(d.error).toBe("All matches excluded by operator");
+    expect(resend.sendEmail).not.toHaveBeenCalled();
+    expect(vi.mocked(recordMatchEvent)).not.toHaveBeenCalled();
+  });
+
+  it("no member matched more than once: a batch joiner is never used as another joiner's match", async () => {
+    const PEER_RECORD = {
+      id: "rec-B",
+      fields: { email: "peer@test.com", Name: "Peer", "post code": "EC1V 9HX", City: "London", Industry: "Tech", Revenue: "50k" },
+    };
+    vi.mocked(createAirtableClient).mockReturnValue(
+      makeAirtableClient([NEW_MEMBER_RECORD, PEER_RECORD]) as any
+    );
+
+    // queryByVector call order: A email-lookup, A match-search, B email-lookup, B match-search.
+    const queryByVector = vi
+      .fn()
+      .mockResolvedValueOnce([{ id: "rec-A", score: 1, metadata: { email: "new@test.com" } }])
+      .mockResolvedValueOnce([
+        { id: "rec-B", score: 0.99, metadata: { name: "Peer", email: "peer@test.com", industry: "Tech", businessStage: "Growth" } },
+        { id: "rec-alice", score: 0.95, metadata: { name: "Alice", email: "alice@test.com", industry: "Tech", businessStage: "Growth" } },
+      ])
+      .mockResolvedValueOnce([{ id: "rec-B", score: 1, metadata: { email: "peer@test.com" } }])
+      .mockResolvedValueOnce([
+        { id: "rec-A", score: 0.99, metadata: { name: "New", email: "new@test.com", industry: "Tech", businessStage: "Growth" } },
+        { id: "rec-carol", score: 0.9, metadata: { name: "Carol", email: "carol@test.com", industry: "Tech", businessStage: "Growth" } },
+      ]);
+    vi.mocked(createPineconeClient).mockReturnValue({
+      queryByVector,
+      fetchById: vi.fn().mockResolvedValue({ id: "x", values: new Array(1536).fill(0.1), metadata: { nearbyLocation: "", businessStage: "Growth" } }),
+      deleteByIds: vi.fn(), upsertVectors: vi.fn(), fetchMetadataByIds: vi.fn(),
+    } as any);
+    // Everyone off Slack keeps preview simple.
+    vi.mocked(createSlackClient).mockReturnValue({
+      lookupByEmail: vi.fn().mockResolvedValue(null),
+      conversationsOpen: vi.fn(), postMessage: vi.fn(),
+    } as any);
+    vi.mocked(createResendClient).mockReturnValue(makeResendClient() as any);
+
+    const { log, db } = makeCtx();
+    const result = await runDailyMatchMessage("2026-01-01", "2026-01-01", { log, db }, "preview");
+
+    const byEmail = Object.fromEntries(result.deliveries.map((d) => [d.newMemberEmail, d]));
+    // A's matches exclude the other joiner (peer@) — only the non-joiner alice@ remains.
+    expect(byEmail["new@test.com"].matches.map((m) => m.email)).toEqual(["alice@test.com"]);
+    // B's matches exclude the other joiner (new@) — only the non-joiner carol@ remains.
+    expect(byEmail["peer@test.com"].matches.map((m) => m.email)).toEqual(["carol@test.com"]);
   });
 
   it("result shape matches MatchMessageResult contract", async () => {
