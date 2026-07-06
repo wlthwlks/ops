@@ -286,11 +286,14 @@ function buildHtmlMessage(p: {
     ? `<p>You're all based around ${esc(p.meetingSpots.join(", "))} — great spots to grab a coffee and connect.</p>`
     : "";
 
-  const slackSection = p.isOnSlack
-    ? `<p>We've also added you to a Slack group message so you can all start chatting right away.</p>`
-    : p.slackInviteUrl
-    ? `<p>Some of your matches are already on our Slack community. <a href="${esc(p.slackInviteUrl)}" style="color: #1890ff; text-decoration: underline; font-weight: 600;">Join the WLTH WLKS Slack</a> to connect with them directly.</p>`
+  // Always include the Slack join link in the email (when configured), on top
+  // of the group-DM note for members already on Slack.
+  const slackJoin = p.slackInviteUrl
+    ? `<p>Not on our Slack community yet? <a href="${esc(p.slackInviteUrl)}" style="color: #1890ff; text-decoration: underline; font-weight: 600;">Join the WLTH WLKS Slack</a> to connect with everyone directly.</p>`
     : "";
+  const slackSection = (p.isOnSlack
+    ? `<p>We've also added you to a Slack group message so you can all start chatting right away.</p>`
+    : "") + slackJoin;
 
   // Coordination block — availability + topics, only when someone supplied them.
   const allForCoord = [p.newMember, ...p.matches];

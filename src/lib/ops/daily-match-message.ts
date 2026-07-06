@@ -124,6 +124,8 @@ export interface MatchMessageResult {
   success: boolean;
   summary: string;
   deliveries: DeliveryResult[];
+  /** Slack join URL used in the intro emails — surfaced so the UI preview matches the sent copy. */
+  slackInviteUrl?: string;
 }
 
 /**
@@ -757,7 +759,7 @@ export async function runDailyMatchMessage(
     : `${deliveries.length} member(s) processed, ${slackSentCount} Slack DM(s) sent, ${emailTotal} email(s) sent, ${skippedCount} skipped${lockNote} — ${runTotalMs}ms (avg ${avgMs}ms)`;
   ctx.log(`Done: ${summary}`);
 
-  return { success: true, summary, deliveries };
+  return { success: true, summary, deliveries, slackInviteUrl: slackInviteUrl || undefined };
 }
 
 /**

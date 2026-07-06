@@ -483,6 +483,9 @@ export default function GetMatchedPage() {
     slackError?: string | null;
   }
   const [slackDeliveries, setSlackDeliveries] = useState<SlackDelivery[]>([]);
+  // Slack join URL returned by the preview, so the live email preview shows the
+  // same join link that the sent email includes.
+  const [slackInviteUrl, setSlackInviteUrl] = useState<string>("");
   const [slackSummary, setSlackSummary] = useState<string | null>(null);
   const [slackError, setSlackError] = useState<string | null>(null);
   const [slackLogs, setSlackLogs] = useState<string[]>([]);
@@ -646,6 +649,7 @@ export default function GetMatchedPage() {
       }
 
       setSlackDeliveries(data.deliveries || []);
+      setSlackInviteUrl(data.slackInviteUrl || "");
       setSlackSummary(data.summary);
       setSlackLogs(data.logs || []);
       if (isPreview) {
@@ -772,7 +776,7 @@ export default function GetMatchedPage() {
   function renderEmailPreview(d: SlackDelivery): string {
     const inc = includedMatchesFor(d);
     if (inc.length === 0) return '<p style="color:#999">All matches excluded — this group will be skipped.</p>';
-    return generateMatchMessage({ newMember: deliveryNewMemberMsg(d), matches: inc, format: "html", isOnSlack: d.newMemberOnSlack }).body;
+    return generateMatchMessage({ newMember: deliveryNewMemberMsg(d), matches: inc, format: "html", isOnSlack: d.newMemberOnSlack, slackInviteUrl: slackInviteUrl || undefined }).body;
   }
 
   // Operator edit wins; otherwise live-rendered (preview) or server copy (post-send).
