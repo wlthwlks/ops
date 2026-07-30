@@ -8,7 +8,15 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "airtable:update-intro-fields": "npx tsx scripts/update-intro-fields.ts",
+    "airtable:import-history": "npx tsx scripts/import-introduction-history.ts",
+    "airtable:backfill-service-access": "npx tsx scripts/backfill-service-access-until.ts",
+    "airtable:reconcile-stripe-customers": "npx tsx scripts/reconcile-stripe-customer-ids.ts",
+    "airtable:historical-stripe-repair": "npx tsx scripts/sync-paying-stripe-members-to-airtable.ts",
+    "airtable:repair-city-relations": "npx tsx scripts/repair-city-channel-relations.ts"
   },
   "dependencies": {
     "@ant-design/charts": "^2.6.7",
@@ -20,17 +28,20 @@
     "antd": "^6.3.5",
     "better-sqlite3": "^12.9.0",
     "drizzle-orm": "^0.45.2",
+    "luxon": "^3.7.2",
     "next": "16.2.3",
     "node-cron": "^4.2.1",
     "openai": "^6.38.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "resend": "^6.12.4"
+    "resend": "^6.12.4",
+    "stripe": "^22.3.2"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.1",
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",
+    "@types/luxon": "^3.7.2",
     "@types/node": "^20",
     "@types/node-cron": "^3.0.11",
     "@types/react": "^19",

@@ -1,0 +1,534 @@
+{
+  "version": 1,
+  "description": "Reviewed Members → Cities → Slack channels relationship repair mapping. Automatic writes use only this config + exact normalized matches.",
+  "tables": {
+    "members": "MEMBERS",
+    "cities": "ALL CITIES",
+    "slackChannels": "SLACK CHANNELS"
+  },
+  "fields": {
+    "memberCityLegacy": "City",
+    "memberCityLink": "City relation",
+    "cityName": "City",
+    "cityCountry": "Country",
+    "cityChannels": "Slack channels",
+    "channelName": "Name",
+    "channelCities": "Cities",
+    "channelStatus": "Channel status/donut",
+    "channelSlackId": "Slack Channel ID"
+  },
+  "cityRenames": [
+    {
+      "from": "Forth Worth",
+      "to": "Fort Worth"
+    },
+    {
+      "from": "Dalray Beach",
+      "to": "Delray Beach"
+    },
+    {
+      "from": "Lawrencewille",
+      "to": "Lawrenceville"
+    },
+    {
+      "from": "Mcallen",
+      "to": "McAllen"
+    },
+    {
+      "from": "Da nang",
+      "to": "Da Nang"
+    },
+    {
+      "from": "São Paulo ",
+      "to": "São Paulo"
+    },
+    {
+      "from": "València ",
+      "to": "València"
+    },
+    {
+      "from": "Nuremberg ",
+      "to": "Nuremberg"
+    },
+    {
+      "from": "Stellenbosch ",
+      "to": "Stellenbosch"
+    },
+    {
+      "from": "Davidson ",
+      "to": "Davidson"
+    }
+  ],
+  "countryOverrides": [
+    {
+      "city": "Drogheda",
+      "country": "Ireland"
+    }
+  ],
+  "aliases": {
+    "la": "Los Angeles",
+    "los angeles": "Los Angeles",
+    "london": "London",
+    "greater london": "London",
+    "uk": "London",
+    "united kingdom": "London",
+    "united kindom": "London",
+    "mexico city": "Mexico City",
+    "cdmx": "Mexico City",
+    "sao paul": "São Paulo",
+    "sao paulo": "São Paulo",
+    "são paulo": "São Paulo",
+    "charlotte": "Charlotte",
+    "forth worth": "Fort Worth",
+    "fort worth": "Fort Worth",
+    "dalray beach": "Delray Beach",
+    "delray beach": "Delray Beach",
+    "lawrencewille": "Lawrenceville",
+    "lawrenceville": "Lawrenceville",
+    "st petersburg": "St. Petersburg",
+    "st. petersburg": "St. Petersburg",
+    "orange park": "Orange Park",
+    "newport beach, ca": "Newport Beach",
+    "newport beach": "Newport Beach",
+    "fairfax, va": "Fairfax",
+    "fairfax": "Fairfax",
+    "boulder city, nv": "Boulder City",
+    "boulder city": "Boulder City",
+    "berkley": "Berkeley",
+    "berkeley": "Berkeley",
+    "mcallen": "McAllen",
+    "da nang": "Da Nang",
+    "nyc": "New York",
+    "new york city": "New York",
+    "sf": "San Francisco",
+    "san fran": "San Francisco"
+  },
+  "citiesToCreate": [
+    {
+      "city": "Akron",
+      "country": "United States"
+    },
+    {
+      "city": "Bellevue Hill",
+      "country": "Australia"
+    },
+    {
+      "city": "Berkeley",
+      "country": "United States"
+    },
+    {
+      "city": "Blue Springs",
+      "country": "United States"
+    },
+    {
+      "city": "Boulder City",
+      "country": "United States"
+    },
+    {
+      "city": "Brooklyn",
+      "country": "United States"
+    },
+    {
+      "city": "Devon",
+      "country": "United Kingdom"
+    },
+    {
+      "city": "Doylestown",
+      "country": "United States"
+    },
+    {
+      "city": "Elizabeth",
+      "country": "United States"
+    },
+    {
+      "city": "Euless",
+      "country": "United States"
+    },
+    {
+      "city": "Fairfax",
+      "country": "United States"
+    },
+    {
+      "city": "Glen Allen",
+      "country": "United States"
+    },
+    {
+      "city": "Laguna Beach",
+      "country": "United States"
+    },
+    {
+      "city": "Lane Cove",
+      "country": "Australia"
+    },
+    {
+      "city": "Long Island",
+      "country": "United States"
+    },
+    {
+      "city": "Miami Beach",
+      "country": "United States"
+    },
+    {
+      "city": "Mississauga",
+      "country": "Canada"
+    },
+    {
+      "city": "Oakland",
+      "country": "United States"
+    },
+    {
+      "city": "Oakville",
+      "country": "Canada"
+    },
+    {
+      "city": "Palm Beach Gardens",
+      "country": "United States"
+    },
+    {
+      "city": "Redondo Beach",
+      "country": "United States"
+    },
+    {
+      "city": "Richmond Hill",
+      "country": "Canada"
+    },
+    {
+      "city": "Summerville",
+      "country": "United States"
+    },
+    {
+      "city": "Sunnyvale",
+      "country": "United States"
+    },
+    {
+      "city": "Sunshine Coast",
+      "country": "Australia"
+    },
+    {
+      "city": "Uki",
+      "country": "Australia"
+    },
+    {
+      "city": "Vacaville",
+      "country": "United States"
+    },
+    {
+      "city": "Venice",
+      "country": "United States"
+    },
+    {
+      "city": "Westminster, VA",
+      "country": "United States"
+    },
+    {
+      "city": "Whitby",
+      "country": "Canada"
+    },
+    {
+      "city": "Fort Worth",
+      "country": "United States"
+    },
+    {
+      "city": "Delray Beach",
+      "country": "United States"
+    },
+    {
+      "city": "Lawrenceville",
+      "country": "United States"
+    },
+    {
+      "city": "McAllen",
+      "country": "United States"
+    },
+    {
+      "city": "Da Nang",
+      "country": "Vietnam"
+    },
+    {
+      "city": "St. Petersburg",
+      "country": "United States"
+    },
+    {
+      "city": "Orange Park",
+      "country": "United States"
+    },
+    {
+      "city": "Newport Beach",
+      "country": "United States"
+    },
+    {
+      "city": "Parker",
+      "country": "United States"
+    },
+    {
+      "city": "Littleton",
+      "country": "United States"
+    },
+    {
+      "city": "Arvada",
+      "country": "United States"
+    },
+    {
+      "city": "Encinitas",
+      "country": "United States"
+    },
+    {
+      "city": "Escondido",
+      "country": "United States"
+    },
+    {
+      "city": "Carlsbad",
+      "country": "United States"
+    },
+    {
+      "city": "Oceanside",
+      "country": "United States"
+    },
+    {
+      "city": "Temecula Valley",
+      "country": "United States"
+    },
+    {
+      "city": "Menlo Park",
+      "country": "United States"
+    },
+    {
+      "city": "Los Gatos",
+      "country": "United States"
+    },
+    {
+      "city": "San Rafael",
+      "country": "United States"
+    },
+    {
+      "city": "Palo Alto",
+      "country": "United States"
+    },
+    {
+      "city": "Etobicoke",
+      "country": "Canada"
+    },
+    {
+      "city": "Burlington, Ontario",
+      "country": "Canada"
+    },
+    {
+      "city": "Windsor, UK",
+      "country": "United Kingdom"
+    },
+    {
+      "city": "Maidstone",
+      "country": "United Kingdom"
+    },
+    {
+      "city": "St Albans",
+      "country": "United Kingdom"
+    },
+    {
+      "city": "Burnaby",
+      "country": "Canada"
+    },
+    {
+      "city": "Surrey",
+      "country": "Canada"
+    },
+    {
+      "city": "Sarasota",
+      "country": "United States"
+    },
+    {
+      "city": "Robina",
+      "country": "Australia"
+    },
+    {
+      "city": "Hope Island",
+      "country": "Australia"
+    },
+    {
+      "city": "Byron Bay",
+      "country": "Australia"
+    },
+    {
+      "city": "Lauderdale-by-the-Sea",
+      "country": "United States"
+    },
+    {
+      "city": "Boynton Beach",
+      "country": "United States"
+    },
+    {
+      "city": "Palm Beach",
+      "country": "United States"
+    },
+    {
+      "city": "Colorado Springs",
+      "country": "United States"
+    },
+    {
+      "city": "Gilbert",
+      "country": "United States"
+    }
+  ],
+  "channelCityLinks": {
+    "🔒wlth-wlks-denver": [
+      "Denver",
+      "Boulder",
+      "Colorado Springs",
+      "Parker",
+      "Littleton",
+      "Arvada"
+    ],
+    "🔒wlth-wlks-dallas": [
+      "Dallas",
+      "Fort Worth",
+      "Euless"
+    ],
+    "🔒wlth-wlks-miami": [
+      "Miami",
+      "Miami Beach",
+      "Fort Lauderdale",
+      "Lauderdale-by-the-Sea",
+      "Boca Raton",
+      "Boynton Beach",
+      "Palm Beach",
+      "Palm Beach Gardens",
+      "Delray Beach"
+    ],
+    "🔒wlth-wlks-phoenix": [
+      "Phoenix",
+      "Scottsdale",
+      "Gilbert"
+    ],
+    "🔒wlth-wlks-toronto": [
+      "Toronto",
+      "Etobicoke",
+      "Whitby",
+      "Oakville",
+      "Mississauga",
+      "Burlington, Ontario",
+      "Richmond Hill"
+    ],
+    "🔒wlth-wlks-san-diego-metro": [
+      "San Diego",
+      "Encinitas",
+      "Escondido",
+      "Carlsbad",
+      "Oceanside",
+      "Temecula Valley"
+    ],
+    "🔒wlth-wlks-san-francisco-bay-area": [
+      "San Francisco",
+      "Palo Alto",
+      "Menlo Park",
+      "Sunnyvale",
+      "Los Gatos",
+      "Oakland",
+      "Berkeley",
+      "San Rafael"
+    ],
+    "🔒wlth-wlks-new-york-metro": [
+      "New York",
+      "Brooklyn",
+      "Long Island",
+      "Elizabeth"
+    ],
+    "🔒wlth-wlks-greater-london": [
+      "London",
+      "Windsor, UK",
+      "Maidstone",
+      "St Albans"
+    ],
+    "🔒wlth-wlks-sydney": [
+      "Sydney",
+      "Lane Cove",
+      "Bellevue Hill"
+    ],
+    "🔒wlth-wlks-vancouver": [
+      "Vancouver",
+      "Burnaby",
+      "Surrey"
+    ],
+    "🔒wlth-wlks-tampa": [
+      "Tampa",
+      "Sarasota",
+      "St. Petersburg",
+      "Venice"
+    ],
+    "🔒wlth-wlks-brisbane-and-gold-coast": [
+      "Brisbane",
+      "Gold Coast",
+      "Sunshine Coast",
+      "Robina",
+      "Hope Island",
+      "Byron Bay",
+      "Uki"
+    ],
+    "🔒wlth-wlks-los-angeles-so-cal-metro": [
+      "Los Angeles",
+      "Laguna Beach",
+      "Redondo Beach"
+    ],
+    "🔒wlth-wlks-charlotte": [
+      "Charlotte"
+    ],
+    "🔒wlth-wlks-mexico-city": [
+      "Mexico City"
+    ],
+    "🔒wlth-wlks-sao-paulo": [
+      "São Paulo"
+    ],
+    "🔒wlth-wlks-virtual": [
+      "Virtual",
+      "Bangalore",
+      "Louisville",
+      "Honolulu",
+      "McAllen",
+      "Berlin",
+      "Nuremberg",
+      "València",
+      "Juneau",
+      "Cairns",
+      "Florence",
+      "Phu Quoc",
+      "Da Nang",
+      "Lagos",
+      "Tokyo",
+      "Hobart",
+      "San Luis Obispo",
+      "Pulaski"
+    ]
+  },
+  "virtualFallbackCities": [
+    "Bangalore",
+    "Louisville",
+    "Honolulu",
+    "McAllen",
+    "Berlin",
+    "Nuremberg",
+    "València",
+    "Juneau",
+    "Cairns",
+    "Florence",
+    "Phu Quoc",
+    "Da Nang",
+    "Lagos",
+    "Tokyo",
+    "Hobart",
+    "San Luis Obispo",
+    "Pulaski"
+  ],
+  "recordOverrides": {},
+  "duplicateCityNames": [
+    "São Paulo"
+  ],
+  "invalidMemberCityValues": [
+    "",
+    "na",
+    "n/a",
+    "none",
+    "null",
+    "-",
+    "tbd",
+    "unknown"
+  ]
+}

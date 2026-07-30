@@ -1,5 +1,5 @@
 import { AntdRegistry } from "@ant-design/nextjs-registry";
-import { ConfigProvider } from "antd";
+import { App, ConfigProvider } from "antd";
 import { ClerkProvider } from "@clerk/nextjs";
 
 export const metadata = {
@@ -24,7 +24,7 @@ export default function RootLayout({
                 },
               }}
             >
-              {children}
+              <App>{children}</App>
             </ConfigProvider>
           </AntdRegistry>
         </ClerkProvider>

@@ -15,7 +15,7 @@ import type { AppDb } from "@/db";
  * (members, match_events, match_event_matches, email_deliveries).
  * The opt-in keeps the existing op_runs-only tests fast.
  */
-export async function createTestDb(options?: { matchmake?: boolean }) {
+export async function createTestDb(options?: { matchmake?: boolean; introduction?: boolean }) {
   const client = new PGlite();
   const db = drizzle(client, { schema });
 
@@ -27,7 +27,17 @@ export async function createTestDb(options?: { matchmake?: boolean }) {
       finished_at TIMESTAMPTZ,
       status TEXT NOT NULL DEFAULT 'running',
       log TEXT NOT NULL DEFAULT '',
-      summary TEXT
+      summary TEXT,
+      variant TEXT,
+      parameters_json TEXT,
+      progress_current INTEGER,
+      progress_total INTEGER,
+      error TEXT,
+      operator_clerk_user_id TEXT,
+      runtime_mode TEXT,
+      checkpoint_json TEXT,
+      cancellation_requested TEXT DEFAULT '0',
+      idempotency_key TEXT
     );
   `);
 
@@ -118,6 +128,88 @@ export async function createTestDb(options?: { matchmake?: boolean }) {
       ALTER TABLE email_deliveries
         ADD CONSTRAINT email_deliveries_match_event_id_fk
         FOREIGN KEY (match_event_id) REFERENCES match_events (id) ON DELETE CASCADE;
+    `);
+  }
+
+  if (options?.introduction) {
+    await client.exec(`
+      CREATE TABLE introduction_runs (
+        id TEXT PRIMARY KEY NOT NULL,
+        request_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        cycle_date DATE,
+        mode TEXT NOT NULL,
+        dry_run BOOLEAN NOT NULL DEFAULT FALSE,
+        status TEXT NOT NULL DEFAULT 'planned',
+        plan_hash TEXT,
+        due_only BOOLEAN DEFAULT FALSE,
+        initiated_by TEXT,
+        summary TEXT,
+        error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        expires_at TIMESTAMPTZ,
+        started_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        CONSTRAINT introduction_runs_request_id_unique UNIQUE (request_id)
+      );
+
+      CREATE TABLE introduction_groups (
+        id TEXT PRIMARY KEY NOT NULL,
+        run_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        cycle_id TEXT,
+        channel_record_id TEXT,
+        city_record_id TEXT,
+        city_name TEXT,
+        slack_channel_id TEXT,
+        group_fingerprint TEXT NOT NULL,
+        delivery_key TEXT UNIQUE,
+        status TEXT NOT NULL DEFAULT 'planned',
+        message_snapshot TEXT,
+        slack_conversation_id TEXT,
+        slack_message_ts TEXT,
+        send_error TEXT,
+        tracking_error TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        sent_at TIMESTAMPTZ
+      );
+
+      CREATE TABLE introduction_group_members (
+        id TEXT PRIMARY KEY NOT NULL,
+        group_id TEXT NOT NULL,
+        member_id TEXT,
+        airtable_record_id TEXT,
+        email_snapshot TEXT NOT NULL,
+        slack_user_id TEXT,
+        role TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE TABLE introduction_reservations (
+        member_key TEXT PRIMARY KEY NOT NULL,
+        group_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
+      CREATE UNIQUE INDEX intro_runs_request_id_idx ON introduction_runs (request_id);
+      CREATE INDEX intro_groups_fingerprint_idx ON introduction_groups (group_fingerprint);
+      CREATE UNIQUE INDEX group_members_group_airtable_idx ON introduction_group_members (group_id, airtable_record_id);
+      CREATE INDEX intro_reservations_expires_at_idx ON introduction_reservations (expires_at);
+
+      ALTER TABLE introduction_groups
+        ADD CONSTRAINT intro_groups_run_id_fk
+        FOREIGN KEY (run_id) REFERENCES introduction_runs (id);
+
+      ALTER TABLE introduction_group_members
+        ADD CONSTRAINT intro_group_members_group_id_fk
+        FOREIGN KEY (group_id) REFERENCES introduction_groups (id) ON DELETE CASCADE;
+
+      ALTER TABLE introduction_reservations
+        ADD CONSTRAINT intro_reservations_group_id_fk
+        FOREIGN KEY (group_id) REFERENCES introduction_groups (id);
     `);
   }
 

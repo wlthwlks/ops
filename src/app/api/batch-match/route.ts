@@ -43,7 +43,7 @@ export async function GET(request: NextRequest) {
 
   const formula = `AND({Membership} = "Active", {Payment} = "Paid", ${dateFilter})`;
 
-  const records = await airtable.listRecords("Members", {
+  const records = await airtable.listRecords("MEMBERS", {
     filterByFormula: formula,
     sort: [{ field: "Date joined", direction: "desc" }],
   });

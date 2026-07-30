@@ -45,7 +45,7 @@ export const donutTracker: Op = {
         person2: pairing.person2,
         pairedAt: new Date(parseFloat(pairing.ts) * 1000).toISOString(),
       });
-      await airtable.createRecords("Donut Pairings", [{
+      await airtable.createRecords("DONUT DATA", [{
         fields: {
           Person1: pairing.person1,
           Person2: pairing.person2,

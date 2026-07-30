@@ -103,88 +103,25 @@ describe("GET /api/get-daily-new-customers-for-cities", () => {
   });
 });
 
-describe("GET /api/remove-members", () => {
+vi.mock("@/lib/ops/auth", () => ({
+  requireOpsViewer: vi.fn().mockResolvedValue({
+    userId: "user_test",
+    role: "viewer",
+    mode: "read_only",
+  }),
+}));
+
+describe("GET /api/remove-members (deprecated)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    for (const [k, v] of Object.entries(BASE_ENV)) process.env[k] = v;
   });
 
-  it("returns 400 when startDate or endDate missing", async () => {
-    vi.mocked(createAirtableClient).mockReturnValue({
-      listRecords: vi.fn().mockResolvedValue([]),
-    } as any);
+  it("returns 410 Gone with redirect to Slack Access removal queue", async () => {
     const res = await getRemoved(req("http://localhost/api/remove-members?startDate=2026-01-01"));
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(410);
     const body = await res.json();
     expect(body.success).toBe(false);
-  });
-
-  it("response JSON has top-level fields: success, total, startDate, endDate, data", async () => {
-    vi.mocked(createAirtableClient).mockReturnValue({
-      listRecords: vi.fn().mockResolvedValue([
-        {
-          id: "r1",
-          fields: {
-            "First Name": "Alice", "Last Name": "Smith",
-            email: "alice@test.com", City: "London",
-            "phone number": "07700000000",
-            "Cancellation date": "2026-05-01",
-          },
-        },
-      ]),
-    } as any);
-
-    const res = await getRemoved(req("http://localhost/api/remove-members?startDate=2026-01-01&endDate=2026-01-31"));
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.success).toBe(true);
-    expect(typeof body.total).toBe("number");
-    expect(typeof body.startDate).toBe("string");
-    expect(typeof body.endDate).toBe("string");
-    expect(Array.isArray(body.data)).toBe(true);
-  });
-
-  it("each cancelled member record has id, name, surname, email, city, phone, cancelledDate", async () => {
-    vi.mocked(createAirtableClient).mockReturnValue({
-      listRecords: vi.fn().mockResolvedValue([
-        {
-          id: "r1",
-          fields: {
-            "First Name": "Alice", "Last Name": "Smith",
-            email: "alice@test.com", City: "London",
-            "phone number": "07700000000",
-            "Cancellation date": "2026-05-01",
-          },
-        },
-      ]),
-    } as any);
-
-    const res = await getRemoved(req("http://localhost/api/remove-members?startDate=2026-01-01&endDate=2026-01-31"));
-    const body = await res.json();
-    const member = body.data[0];
-
-    expect(member).toHaveProperty("id");
-    expect(member).toHaveProperty("name");
-    expect(member).toHaveProperty("surname");
-    expect(member).toHaveProperty("email");
-    expect(member).toHaveProperty("city");
-    expect(member).toHaveProperty("phone");
-    expect(member).toHaveProperty("cancelledDate");
-    expect(member.email).toBe("alice@test.com");
-    expect(member.cancelledDate).toBe("2026-05-01");
-  });
-
-  it("members without email are filtered out of response", async () => {
-    vi.mocked(createAirtableClient).mockReturnValue({
-      listRecords: vi.fn().mockResolvedValue([
-        { id: "r1", fields: { "First Name": "No", "Last Name": "Email", email: "", City: "London", "phone number": "", "Cancellation date": "2026-05-01" } },
-        { id: "r2", fields: { "First Name": "Has", "Last Name": "Email", email: "has@test.com", City: "London", "phone number": "", "Cancellation date": "2026-05-01" } },
-      ]),
-    } as any);
-
-    const res = await getRemoved(req("http://localhost/api/remove-members?startDate=2026-01-01&endDate=2026-01-31"));
-    const body = await res.json();
-    expect(body.total).toBe(1);
-    expect(body.data[0].email).toBe("has@test.com");
+    expect(body.code).toBe("DEPRECATED");
+    expect(body.redirect).toBe("/members/slack-access?tab=removal");
   });
 });

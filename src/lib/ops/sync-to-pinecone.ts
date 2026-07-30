@@ -201,7 +201,7 @@ export async function runPineconeSync(
     ? buildAllCancelledFilter()
     : buildCancelledFilter(cityGroups[0]);
 
-  const cancelledRecords = await airtable.listRecords("Members", {
+  const cancelledRecords = await airtable.listRecords("MEMBERS", {
     filterByFormula: cancelledFilter,
     fields: ["email", "City", "Cancellation date"],
   });
@@ -225,7 +225,7 @@ export async function runPineconeSync(
   ctx.log("Reconciling Pinecone against Airtable Active+Paid+No-cancel set...");
   const [pineconeIds, activeAirtableRecords] = await Promise.all([
     pinecone.listAllIds(),
-    airtable.listRecords("Members", {
+    airtable.listRecords("MEMBERS", {
       filterByFormula: buildAllCitiesFilter(),
       fields: ["email"],
     }),
@@ -247,13 +247,13 @@ export async function runPineconeSync(
 
   if (isAllCities) {
     ctx.log("Fetching all active+paid members from Airtable...");
-    allActiveRecords = await airtable.listRecords("Members", {
+    allActiveRecords = await airtable.listRecords("MEMBERS", {
       filterByFormula: buildAllCitiesFilter(),
     });
   } else {
     for (const cityGroup of cityGroups) {
       ctx.log(`Fetching active members for ${cityGroup.label}...`);
-      const records = await airtable.listRecords("Members", {
+      const records = await airtable.listRecords("MEMBERS", {
         filterByFormula: buildCityFilter(cityGroup),
       });
       allActiveRecords.push(...records);

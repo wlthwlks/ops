@@ -1,8 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/cron",
-      "schedule": "*/15 * * * *"
+      "path": "/api/cron/recurring-intros",
+      "schedule": "0 * * * *"
     }
   ]
 }
