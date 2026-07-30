@@ -120,9 +120,10 @@ const groups: ServiceGroup[] = [
         url: "https://app.slack.com/app-settings/T0ASD0GD8E4/A0B7861TNM9/collaborators",
       },
       {
-        name: "Slack bulk operations — LemonSqueezy",
-        description: "License & orders for the Bulk Slack User Deactivation Chrome extension (used on /remove-members)",
-        url: "https://app.lemonsqueezy.com/my-orders/login",
+        name: "Slack Access — removal queue",
+        description:
+          "Expired-access removal queue lives at /members/slack-access?tab=removal (CSV export + Slack Admin fallback). Ordinary bot tokens cannot deactivate workspace users.",
+        url: "/members/slack-access?tab=removal",
       },
     ],
   },

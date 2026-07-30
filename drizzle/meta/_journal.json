@@ -8,6 +8,34 @@
       "when": 1780920386118,
       "tag": "0000_loose_blacklash",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1781550000000,
+      "tag": "0001_add_introduction_ledger",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782600000000,
+      "tag": "0002_ops_dashboard",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783300000000,
+      "tag": "0003_ops_centre_and_slack_actions",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784000000000,
+      "tag": "0004_forms_webhooks",
+      "breakpoints": true
     }
   ]
 }

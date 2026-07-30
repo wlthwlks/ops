@@ -32,11 +32,11 @@ export async function GET() {
   const excludeFilter = buildExcludeAllCitiesFilter();
 
   const [unlistedRecords, listedRecords] = await Promise.all([
-    client.listRecords("Members", {
+    client.listRecords("MEMBERS", {
       filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", ${excludeFilter})`,
       sort: [{ field: "Date joined", direction: "desc" }],
     }),
-    client.listRecords("Members", {
+    client.listRecords("MEMBERS", {
       filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", NOT(${excludeFilter}))`,
     }),
   ]);

@@ -39,6 +39,8 @@ reports/
 
 # local data
 data/
+tmp/
+reports/
 
 # vercel
 .vercel

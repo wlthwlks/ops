@@ -94,7 +94,7 @@ export async function GET(request: NextRequest) {
   for (const cityGroup of citiesToFetch) {
     const cityFilter = buildCityFilter(cityGroup);
 
-    const records = await client.listRecords("Members", {
+    const records = await client.listRecords("MEMBERS", {
       filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", ${cityFilter}, ${dateFilter})`,
       sort: [{ field: "Date joined", direction: "desc" }],
     });
@@ -137,7 +137,7 @@ export async function GET(request: NextRequest) {
 
   // Fetch "Other" members: get ALL active+paid for the date range, then exclude already-matched emails
   if (!cityParam) {
-    const allRecords = await client.listRecords("Members", {
+    const allRecords = await client.listRecords("MEMBERS", {
       filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", ${dateFilter})`,
       sort: [{ field: "Date joined", direction: "desc" }],
     });

@@ -29,7 +29,7 @@ export const memberExport: Op = {
     });
 
     ctx.log("Fetching all members from Airtable...");
-    const records = await airtable.listRecords("Members");
+    const records = await airtable.listRecords("MEMBERS");
     ctx.log(`Fetched ${records.length} member(s)`);
 
     if (records.length === 0) {

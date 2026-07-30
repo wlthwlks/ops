@@ -192,7 +192,7 @@ export async function runDailyMatchMessage(
     ctx.log(`Looking up ${emails.length} specific email(s)...`);
     const emailConditions = emails.map((e) => `{email} = "${e.toLowerCase()}"`);
     const formula = `AND({Membership} = "Active", {Payment} = "Paid", OR(${emailConditions.join(", ")}))`;
-    records = await airtable.listRecords("Members", { filterByFormula: formula });
+    records = await airtable.listRecords("MEMBERS", { filterByFormula: formula });
     ctx.log(`Found ${records.length} member(s) matching the email(s)`);
   } else {
     const dateFilter =
@@ -201,7 +201,7 @@ export async function runDailyMatchMessage(
         : `AND(IS_AFTER(CREATED_TIME(), DATEADD("${startDate}", -1, "days")), IS_BEFORE(CREATED_TIME(), DATEADD("${endDate}", 1, "days")))`;
     const formula = `AND({Membership} = "Active", {Payment} = "Paid", ${dateFilter})`;
     ctx.log(`Fetching new members for ${startDate} to ${endDate}...`);
-    records = await airtable.listRecords("Members", {
+    records = await airtable.listRecords("MEMBERS", {
       filterByFormula: formula,
       sort: [{ field: "Date joined", direction: "desc" }],
     });
@@ -632,6 +632,35 @@ export async function runDailyMatchMessage(
           } catch (slackRecErr) {
             const m = slackRecErr instanceof Error ? (slackRecErr.stack || slackRecErr.message) : String(slackRecErr);
             ctx.log(`${tag}: WARN recordSlackDelivery failed — ${m}`);
+          }
+        }
+
+        // Best-effort: create an Airtable Match-group record for custom matching.
+        // Never blocks delivery — failures are logged and ignored.
+        if (shouldTrack && airtableToken && airtableBase) {
+          try {
+            const atClient = createAirtableClient({ apiKey: airtableToken, baseId: airtableBase });
+            const allEmailsForAt = [email, ...matchMembers.map((m) => (m.email || "").toLowerCase()).filter(Boolean)];
+            const emailConditions = allEmailsForAt.map((e) => `{email} = "${e}"`);
+            const atMembers = await atClient.listRecords("MEMBERS", {
+              filterByFormula: `OR(${emailConditions.join(", ")})`,
+            });
+            const atRecordIds = atMembers.map((r) => r.id);
+            if (atRecordIds.length >= 2) {
+              await atClient.createRecords("MATCH GROUPS", [{
+                fields: {
+                  Source: "Custom",
+                  "Member 1": atRecordIds,
+                  "Introduction date": new Date().toISOString().slice(0, 10),
+                  Status: "Done/Sent",
+                  "Slack Conversation ID": channelId,
+                  "Slack Message Timestamp": slackMessageTs,
+                },
+              }]);
+            }
+          } catch (atGroupErr) {
+            const m = atGroupErr instanceof Error ? (atGroupErr.stack || atGroupErr.message) : String(atGroupErr);
+            ctx.log(`${tag}: WARN best-effort Airtable Match-group record failed — ${m}`);
           }
         }
       } else if (sendSlackUserIds.size >= 2 && mode === "preview") {
