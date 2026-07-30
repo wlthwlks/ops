@@ -87,8 +87,10 @@ export async function getOpRuns(slug: string, limit = 20): Promise<OpRun[]> {
       ORDER BY started_at DESC
       LIMIT ${limit}
     `);
-    const list = (rows as { rows?: unknown[] }).rows ?? (rows as unknown[]);
-    return (list as Array<Record<string, unknown>>).map((r) => ({
+    const list = (Array.isArray(rows)
+      ? rows
+      : ((rows as { rows?: unknown[] }).rows ?? [])) as Array<Record<string, unknown>>;
+    return list.map((r) => ({
       id: Number(r.id),
       opSlug: String(r.op_slug),
       startedAt: new Date(String(r.started_at)),

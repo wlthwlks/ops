@@ -15,6 +15,12 @@ describe("auth edge entry public routes", () => {
     expect(path).not.toBe("");
     const src = readFileSync(path, "utf8");
     expect(src).toContain("/api/webhooks/stripe");
+    expect(src).toContain("/api/webhooks/memberstack");
+    expect(src).toContain("/api/onboarding");
+    expect(src).toContain("/api/member");
+    expect(src).toContain("/api/reference-data");
+    expect(src).toContain("/api/forms");
     expect(src).toContain("/api/cron");
   });
 });
+

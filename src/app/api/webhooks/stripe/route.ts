@@ -15,6 +15,9 @@ import {
   getInvoicePaidAtUnix,
   syncInvoicePaidToAirtable,
 } from "@/lib/billing/webhook-invoice-sync";
+import { recordWebhookEvent, updateWebhookEventStatus } from "@/lib/forms/webhooks/store";
+import { handleExpandedStripeEvent } from "@/lib/forms/webhooks/stripe-lifecycle";
+import { getFormFeatureFlags } from "@/lib/forms/feature-flags";
 
 export const runtime = "nodejs";
 
@@ -42,143 +45,185 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid webhook signature" }, { status: 400 });
   }
 
-  if (event.type !== "invoice.paid") {
+  // Persist event envelope (best-effort)
+  const stored = await recordWebhookEvent({
+    provider: "stripe",
+    providerEventId: event.id,
+    eventType: event.type,
+    livemode: event.livemode,
+    signatureVerified: true,
+    payload: { id: event.id, type: event.type },
+  });
+  if (stored.duplicate && stored.status === "SUCCEEDED") {
+    return NextResponse.json({
+      received: true,
+      duplicate: true,
+      processed: false,
+      status: "SUCCEEDED",
+    });
+  }
+
+  // —— Existing production path: invoice.paid (always on) ——
+  if (event.type === "invoice.paid") {
+    try {
+      const membershipPriceIds = getConfiguredMembershipPriceIds({ requireConfigured: true });
+      const stripe = getStripeClient();
+
+      const invoiceFromEvent = event.data.object as Stripe.Invoice;
+      const invoiceId = invoiceFromEvent.id;
+      if (!invoiceId) {
+        return NextResponse.json(
+          { received: true, processed: false, status: "ignored", reason: "Invoice missing id" },
+          { status: 200 }
+        );
+      }
+
+      const invoice = await stripe.invoices.retrieve(invoiceId);
+      if (invoice.status !== "paid") {
+        return NextResponse.json({
+          received: true,
+          processed: false,
+          eventType: event.type,
+          invoiceId,
+          status: "ignored",
+          reason: `Invoice status is ${invoice.status ?? "unknown"}, not paid`,
+        });
+      }
+
+      const stripeCustomerId = getStripeCustomerId(invoice.customer);
+      if (!stripeCustomerId) {
+        return NextResponse.json({
+          received: true,
+          processed: false,
+          eventType: event.type,
+          invoiceId,
+          status: "ignored",
+          reason: "No Stripe Customer ID on invoice",
+        });
+      }
+
+      const lines = await listAllInvoiceLines(stripe, invoiceId);
+      const paidThrough = paidThroughFromInvoiceLines(lines, membershipPriceIds);
+      if (!paidThrough) {
+        return NextResponse.json({
+          received: true,
+          processed: false,
+          eventType: event.type,
+          invoiceId,
+          stripeCustomerId,
+          status: "ignored",
+          reason: "No qualifying membership price found",
+        });
+      }
+
+      const airtableToken = process.env.AIRTABLE_GET_DATA_TOKEN;
+      const airtableBase = process.env.AIRTABLE_BASE_ID;
+      if (!airtableToken || !airtableBase) {
+        return NextResponse.json({ error: "Airtable not configured" }, { status: 500 });
+      }
+
+      const airtable = createAirtableClient({ apiKey: airtableToken, baseId: airtableBase });
+      const sync = await syncInvoicePaidToAirtable({
+        airtable,
+        stripe,
+        stripeCustomerId,
+        paidThrough,
+        stripeInvoiceId: invoiceId,
+        stripeEventId: event.id,
+        invoicePaidAtUnix: getInvoicePaidAtUnix(invoice),
+        invoiceCreatedUnix: typeof invoice.created === "number" ? invoice.created : null,
+        dryRun: false,
+      });
+
+      console.log(
+        JSON.stringify({
+          event: "stripe_webhook_invoice_paid",
+          stripeEventId: event.id,
+          status: sync.status,
+          shouldRetry: sync.shouldRetry,
+          durationMs: Date.now() - started,
+        })
+      );
+
+      await updateWebhookEventStatus(stored.id, sync.shouldRetry ? "PENDING_DEPENDENCY" : "SUCCEEDED", {
+        processedAt: sync.shouldRetry ? null : new Date(),
+      });
+
+      const body = {
+        received: true,
+        processed: true,
+        eventType: event.type,
+        invoiceId,
+        stripeCustomerId,
+        airtableRecordsMatched: sync.airtableRecordsMatched,
+        airtableRecordsUpdated: sync.airtableRecordsUpdated,
+        paidThrough: sync.paidThrough,
+        status: sync.status,
+        shouldRetry: sync.shouldRetry,
+        linkedStripeCustomerId: sync.linkedStripeCustomerId,
+        duplicateAirtableRecords: sync.duplicateAirtableRecords,
+        reason: sync.reason,
+      };
+
+      if (sync.shouldRetry) {
+        return NextResponse.json(body, { status: 503 });
+      }
+      return NextResponse.json(body);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(
+        JSON.stringify({
+          event: "stripe_webhook_processing_failed",
+          stripeEventId: event.id,
+          error: msg,
+        })
+      );
+      await updateWebhookEventStatus(stored.id, "FAILED");
+      return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+    }
+  }
+
+  // —— Expanded lifecycle (feature-flagged) ——
+  const flags = getFormFeatureFlags();
+  if (!flags.newStripeWebhooksEnabled) {
+    await updateWebhookEventStatus(stored.id, "IGNORED");
     return NextResponse.json({
       received: true,
       processed: false,
       eventType: event.type,
       status: "ignored",
-      reason: "Event type not handled",
+      reason: "Event type not handled (NEW_STRIPE_WEBHOOKS_ENABLED=false)",
     });
   }
 
   try {
-    const membershipPriceIds = getConfiguredMembershipPriceIds({ requireConfigured: true });
-    const stripe = getStripeClient();
-
-    const invoiceFromEvent = event.data.object as Stripe.Invoice;
-    const invoiceId = invoiceFromEvent.id;
-    if (!invoiceId) {
-      return NextResponse.json(
-        { received: true, processed: false, status: "ignored", reason: "Invoice missing id" },
-        { status: 200 }
-      );
-    }
-
-    const invoice = await stripe.invoices.retrieve(invoiceId);
-    if (invoice.status !== "paid") {
-      return NextResponse.json({
-        received: true,
-        processed: false,
-        eventType: event.type,
-        invoiceId,
-        status: "ignored",
-        reason: `Invoice status is ${invoice.status ?? "unknown"}, not paid`,
-      });
-    }
-
-    const stripeCustomerId = getStripeCustomerId(invoice.customer);
-    if (!stripeCustomerId) {
-      return NextResponse.json({
-        received: true,
-        processed: false,
-        eventType: event.type,
-        invoiceId,
-        status: "ignored",
-        reason: "No Stripe Customer ID on invoice",
-      });
-    }
-
-    const lines = await listAllInvoiceLines(stripe, invoiceId);
-    const paidThrough = paidThroughFromInvoiceLines(lines, membershipPriceIds);
-    if (!paidThrough) {
-      return NextResponse.json({
-        received: true,
-        processed: false,
-        eventType: event.type,
-        invoiceId,
-        stripeCustomerId,
-        status: "ignored",
-        reason: "No qualifying membership price found",
-      });
-    }
-
-    const airtableToken = process.env.AIRTABLE_GET_DATA_TOKEN;
-    const airtableBase = process.env.AIRTABLE_BASE_ID;
-    if (!airtableToken || !airtableBase) {
-      console.error(
-        JSON.stringify({
-          event: "stripe_webhook_missing_airtable_config",
-          stripeEventId: event.id,
-          invoiceId,
-        })
-      );
-      return NextResponse.json({ error: "Airtable not configured" }, { status: 500 });
-    }
-
-    const airtable = createAirtableClient({ apiKey: airtableToken, baseId: airtableBase });
-    const sync = await syncInvoicePaidToAirtable({
-      airtable,
-      stripe,
-      stripeCustomerId,
-      paidThrough,
-      stripeInvoiceId: invoiceId,
-      stripeEventId: event.id,
-      invoicePaidAtUnix: getInvoicePaidAtUnix(invoice),
-      invoiceCreatedUnix: typeof invoice.created === "number" ? invoice.created : null,
-      dryRun: false,
+    const result = await handleExpandedStripeEvent(event);
+    const status =
+      result.status === "pending_dependency"
+        ? "PENDING_DEPENDENCY"
+        : result.processed
+          ? "SUCCEEDED"
+          : "IGNORED";
+    await updateWebhookEventStatus(stored.id, status, {
+      processedAt: status === "SUCCEEDED" ? new Date() : null,
     });
-
-    console.log(
-      JSON.stringify({
-        event: "stripe_webhook_invoice_paid",
-        stripeEventId: event.id,
-        stripeEventType: event.type,
-        stripeInvoiceId: invoiceId,
-        stripeCustomerId,
-        status: sync.status,
-        shouldRetry: sync.shouldRetry,
-        recordsMatched: sync.airtableRecordsMatched,
-        recordsUpdated: sync.airtableRecordsUpdated,
-        linkedStripeCustomerId: sync.linkedStripeCustomerId,
-        paidThrough: sync.paidThrough,
-        durationMs: Date.now() - started,
-      })
-    );
-
-    const body = {
+    return NextResponse.json({
       received: true,
-      processed: true,
+      processed: result.processed,
       eventType: event.type,
-      invoiceId,
-      stripeCustomerId,
-      airtableRecordsMatched: sync.airtableRecordsMatched,
-      airtableRecordsUpdated: sync.airtableRecordsUpdated,
-      paidThrough: sync.paidThrough,
-      status: sync.status,
-      shouldRetry: sync.shouldRetry,
-      linkedStripeCustomerId: sync.linkedStripeCustomerId,
-      duplicateAirtableRecords: sync.duplicateAirtableRecords,
-      reason: sync.reason,
-    };
-
-    // 503 only while Make/Memberstack may still create the Member (Stripe retries).
-    if (sync.shouldRetry) {
-      return NextResponse.json(body, { status: 503 });
-    }
-
-    return NextResponse.json(body);
+      status: result.status,
+      reason: result.reason,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    await updateWebhookEventStatus(stored.id, "FAILED");
     console.error(
       JSON.stringify({
-        event: "stripe_webhook_processing_failed",
+        event: "stripe_webhook_expanded_failed",
         stripeEventId: event.id,
-        stripeEventType: event.type,
         error: msg,
-        durationMs: Date.now() - started,
       })
     );
-    return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
+    return NextResponse.json({ error: "Expanded webhook processing failed" }, { status: 500 });
   }
 }

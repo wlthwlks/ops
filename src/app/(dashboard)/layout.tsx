@@ -14,6 +14,8 @@ import {
   DollarOutlined,
   ToolOutlined,
   UnorderedListOutlined,
+  WarningOutlined,
+  BarChartOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
@@ -71,6 +73,16 @@ const NAV: NavItem[] = [
     label: "System",
     children: [
       { key: "/ops", icon: <ToolOutlined />, label: "Operations" },
+      {
+        key: "/ops/webhook-errors",
+        icon: <WarningOutlined />,
+        label: "Webhook errors",
+      },
+      {
+        key: "/ops/form-analytics",
+        icon: <BarChartOutlined />,
+        label: "Form analytics",
+      },
       { key: "/docs", icon: <BookOutlined />, label: "Docs & Access" },
     ],
   },
@@ -81,6 +93,8 @@ function selectedKey(pathname: string): string {
   if (pathname.startsWith("/members/slack-access")) return "/members/slack-access";
   if (pathname.startsWith("/members/billing")) return "/members/billing";
   if (pathname.startsWith("/members")) return "/members";
+  if (pathname.startsWith("/ops/webhook-errors")) return "/ops/webhook-errors";
+  if (pathname.startsWith("/ops/form-analytics")) return "/ops/form-analytics";
   if (pathname.startsWith("/ops")) return "/ops";
   if (pathname.startsWith("/recurring-intros")) return "/recurring-intros";
   if (pathname.startsWith("/get-matched")) return "/get-matched";

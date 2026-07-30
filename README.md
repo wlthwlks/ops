@@ -582,3 +582,14 @@ npx vitest run tests/lib/ops/recurring-city-intros.test.ts   # 37 core tests
 ```
 
 See `tests/lib/introduction/` for reservation, history, quality, and service-access tests (13 tests). See `tests/lib/ops/recurring-city-intros.test.ts` for 37 core orchestrator tests.
+
+## Forms / Make replacement (Tally)
+
+Vercel-hosted signup and update-details widgets plus Memberstack/Stripe webhooks.
+
+- Docs: `docs/forms-architecture.md`, `docs/webflow-embed.md`, `docs/production-rollout.md`
+- Feature flags default **off** — see `.env.example`
+- Build widgets: `npm run widgets:build`
+- OPS: `/ops/webhook-errors`, `/ops/form-analytics`
+- Matching / introductions are **not** modified by this subsystem
+

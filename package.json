@@ -16,29 +16,42 @@
     "airtable:backfill-service-access": "npx tsx scripts/backfill-service-access-until.ts",
     "airtable:reconcile-stripe-customers": "npx tsx scripts/reconcile-stripe-customer-ids.ts",
     "airtable:historical-stripe-repair": "npx tsx scripts/sync-paying-stripe-members-to-airtable.ts",
-    "airtable:repair-city-relations": "npx tsx scripts/repair-city-channel-relations.ts"
+    "airtable:repair-city-relations": "npx tsx scripts/repair-city-channel-relations.ts",
+    "widgets:build": "WIDGET=signup vite build --config widgets/vite.config.ts && WIDGET=update-details vite build --config widgets/vite.config.ts",
+    "widgets:build:signup": "WIDGET=signup vite build --config widgets/vite.config.ts",
+    "widgets:build:update": "WIDGET=update-details vite build --config widgets/vite.config.ts",
+    "forms:city-alias-dry-run": "npx tsx scripts/report-city-alias-dry-run.ts",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@ant-design/charts": "^2.6.7",
     "@ant-design/icons": "^6.1.1",
     "@ant-design/nextjs-registry": "^1.3.0",
     "@clerk/nextjs": "^7.2.2",
+    "@hookform/resolvers": "^5.5.7",
     "@neondatabase/serverless": "^1.1.0",
     "@pinecone-database/pinecone": "^7.2.0",
+    "@stepperize/react": "^7.0.0",
     "antd": "^6.3.5",
     "better-sqlite3": "^12.9.0",
     "drizzle-orm": "^0.45.2",
+    "framer-motion": "^12.43.0",
+    "libphonenumber-js": "^1.13.10",
     "luxon": "^3.7.2",
     "next": "16.2.3",
     "node-cron": "^4.2.1",
     "openai": "^6.38.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "react-hook-form": "^7.83.0",
     "resend": "^6.12.4",
-    "stripe": "^22.3.2"
+    "stripe": "^22.3.2",
+    "svix": "^1.99.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.1",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/luxon": "^3.7.2",
@@ -54,6 +67,7 @@
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5",
+    "vite": "^8.2.0",
     "vitest": "^4.1.4"
   }
 }
