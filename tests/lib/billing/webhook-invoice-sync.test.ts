@@ -158,31 +158,11 @@ describe("syncInvoicePaidToAirtable", () => {
     expect(stripe.customers.retrieve).not.toHaveBeenCalled();
   });
 
-  it("links blank Stripe Customer ID on unique email match then updates", async () => {
+  it("does not email-match or link blank Stripe Customer ID", async () => {
     const airtable = mockAirtable({
       byCustomerId: [],
       byEmail: [{ id: "rec_e", fields: { email: "a@b.com" } }],
     });
-    // After link, second lookup by customer id should find the record
-    let listCalls = 0;
-    airtable.listRecords.mockImplementation(async (_t: string, opts?: { filterByFormula?: string }) => {
-      const f = opts?.filterByFormula || "";
-      listCalls++;
-      if (f.includes("Stripe Customer ID")) {
-        // first call empty; after link simulation, still empty until we mock — updateServiceAccess
-        // will list again. Simulate: after first customer-id miss, email hit, then after link
-        // customer-id finds record.
-        if (listCalls === 1) return [];
-        return [
-          {
-            id: "rec_e",
-            fields: { [STRIPE_CUSTOMER_ID_FIELD]: "cus_1" },
-          },
-        ];
-      }
-      return [{ id: "rec_e", fields: { email: "a@b.com" } }];
-    });
-
     const stripe = mockStripe({ id: "cus_1", email: "a@b.com" });
     const r = await syncInvoicePaidToAirtable({
       airtable,
@@ -193,63 +173,19 @@ describe("syncInvoicePaidToAirtable", () => {
       invoicePaidAtUnix: paidAt,
     });
 
-    expect(r.linkedStripeCustomerId).toBe(true);
-    expect(r.status).toBe("linked_and_updated");
-    expect(r.shouldRetry).toBe(false);
+    expect(r.linkedStripeCustomerId).toBe(false);
+    expect(r.status).toBe("member_registration_pending");
+    expect(r.shouldRetry).toBe(true);
+    expect(airtable.updateRecordsBatched).not.toHaveBeenCalled();
     expect(airtable.createRecords).not.toHaveBeenCalled();
-    const linkCall = airtable.updateRecordsBatched.mock.calls.find(
-      (c) => c[1]?.[0]?.fields?.[STRIPE_CUSTOMER_ID_FIELD] === "cus_1"
+    // Must not query by email on webhook path
+    const formulas = airtable.listRecords.mock.calls.map(
+      (c) => (c[1] as { filterByFormula?: string } | undefined)?.filterByFormula || ""
     );
-    expect(linkCall).toBeTruthy();
-  });
-
-  it("returns email_conflict without writing when multiple emails", async () => {
-    const airtable = mockAirtable({
-      byCustomerId: [],
-      byEmail: [
-        { id: "r1", fields: { email: "a@b.com" } },
-        { id: "r2", fields: { email: "a@b.com" } },
-      ],
-    });
-    const stripe = mockStripe({ id: "cus_1", email: "a@b.com" });
-    const r = await syncInvoicePaidToAirtable({
-      airtable,
-      stripe,
-      stripeCustomerId: "cus_1",
-      paidThrough,
-      stripeInvoiceId: "in_1",
-      invoicePaidAtUnix: paidAt,
-    });
-    expect(r.status).toBe("email_conflict");
-    expect(r.shouldRetry).toBe(false);
-    expect(airtable.updateRecordsBatched).not.toHaveBeenCalled();
-    expect(airtable.createRecords).not.toHaveBeenCalled();
-  });
-
-  it("returns stripe_customer_id_conflict when email member has other cus id", async () => {
-    const airtable = mockAirtable({
-      byCustomerId: [],
-      byEmail: [
-        {
-          id: "r1",
-          fields: {
-            email: "a@b.com",
-            [STRIPE_CUSTOMER_ID_FIELD]: "cus_OTHER",
-          },
-        },
-      ],
-    });
-    const stripe = mockStripe({ id: "cus_1", email: "a@b.com" });
-    const r = await syncInvoicePaidToAirtable({
-      airtable,
-      stripe,
-      stripeCustomerId: "cus_1",
-      paidThrough,
-      stripeInvoiceId: "in_1",
-      invoicePaidAtUnix: paidAt,
-    });
-    expect(r.status).toBe("stripe_customer_id_conflict");
-    expect(airtable.updateRecordsBatched).not.toHaveBeenCalled();
+    expect(formulas.every((f) => !f.includes("LOWER") && !f.includes("email"))).toBe(
+      true
+    );
+    expect(stripe.customers.retrieve).not.toHaveBeenCalled();
   });
 
   it("returns 503-intent (shouldRetry) when member missing inside window", async () => {
@@ -266,9 +202,10 @@ describe("syncInvoicePaidToAirtable", () => {
     expect(r.status).toBe("member_registration_pending");
     expect(r.shouldRetry).toBe(true);
     expect(airtable.createRecords).not.toHaveBeenCalled();
+    expect(airtable.updateRecordsBatched).not.toHaveBeenCalled();
   });
 
-  it("does not retry after window expires", async () => {
+  it("returns stripe_member_not_found after retry window expires", async () => {
     const airtable = mockAirtable({ byCustomerId: [], byEmail: [] });
     const stripe = mockStripe({ id: "cus_1", email: "new@b.com" });
     const r = await syncInvoicePaidToAirtable({
@@ -279,9 +216,10 @@ describe("syncInvoicePaidToAirtable", () => {
       stripeInvoiceId: "in_1",
       invoicePaidAtUnix: Math.floor(Date.now() / 1000) - 48 * 3600,
     });
-    expect(r.status).toBe("member_registration_pending");
+    expect(r.status).toBe("stripe_member_not_found");
     expect(r.shouldRetry).toBe(false);
     expect(airtable.createRecords).not.toHaveBeenCalled();
+    expect(airtable.updateRecordsBatched).not.toHaveBeenCalled();
   });
 
   it("never creates members", async () => {

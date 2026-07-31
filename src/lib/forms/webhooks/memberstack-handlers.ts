@@ -17,28 +17,94 @@ function normalizeEventType(type: string): string {
   return type.toLowerCase().replace(/_/g, ".");
 }
 
-function pickMember(payload: Record<string, unknown>) {
-  const data = (payload.data as Record<string, unknown>) || payload;
-  const member = (data.member as Record<string, unknown>) || data;
-  const id = String(member.id || member.memberId || data.memberId || "").trim();
-  const email = String(member.email || (member.auth as { email?: string })?.email || "")
+/**
+ * Memberstack webhook envelopes vary:
+ * - payload.data
+ * - payload.payload  (current documented member.created shape)
+ * - root payload
+ * Nested member may be at .member or the object itself.
+ */
+export function unwrapMemberstackEnvelope(
+  payload: Record<string, unknown>
+): Record<string, unknown> {
+  if (payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)) {
+    return payload.data as Record<string, unknown>;
+  }
+  if (
+    payload.payload &&
+    typeof payload.payload === "object" &&
+    !Array.isArray(payload.payload)
+  ) {
+    return payload.payload as Record<string, unknown>;
+  }
+  return payload;
+}
+
+export function pickMember(payload: Record<string, unknown>) {
+  const data = unwrapMemberstackEnvelope(payload);
+  const member =
+    data.member && typeof data.member === "object" && !Array.isArray(data.member)
+      ? (data.member as Record<string, unknown>)
+      : data;
+
+  const auth =
+    member.auth && typeof member.auth === "object"
+      ? (member.auth as Record<string, unknown>)
+      : {};
+  const custom =
+    (member.customFields as Record<string, unknown>) ||
+    (member.custom_fields as Record<string, unknown>) ||
+    {};
+
+  const id = String(
+    member.id || member.memberId || data.memberId || data.id || ""
+  ).trim();
+  const email = String(
+    member.email || auth.email || data.email || ""
+  )
     .trim()
     .toLowerCase();
-  const custom = (member.customFields as Record<string, unknown>) || {};
+
+  const stripeFromMember = String(
+    member.stripeCustomerId ||
+      member.stripe_customer_id ||
+      (member.stripe as { customerId?: string } | undefined)?.customerId ||
+      ""
+  ).trim();
+  const stripeFromData = String(
+    data.stripeCustomerId ||
+      data.stripe_customer_id ||
+      (data.stripe as { customerId?: string } | undefined)?.customerId ||
+      ""
+  ).trim();
+
   return {
     id,
     email,
-    firstName: String(custom["first-name"] || custom.firstName || member.firstName || "").trim(),
-    lastName: String(custom["last-name"] || custom.lastName || member.lastName || "").trim(),
-    planId: String(
-      data.planId || (data.plan as { id?: string })?.id || member.planId || ""
-    ).trim(),
-    stripeCustomerId: String(
-      member.stripeCustomerId ||
-        data.stripeCustomerId ||
-        (data.stripe as { customerId?: string })?.customerId ||
+    firstName: String(
+      custom["first-name"] ||
+        custom.firstName ||
+        custom["first_name"] ||
+        member.firstName ||
+        member.first_name ||
         ""
     ).trim(),
+    lastName: String(
+      custom["last-name"] ||
+        custom.lastName ||
+        custom["last_name"] ||
+        member.lastName ||
+        member.last_name ||
+        ""
+    ).trim(),
+    planId: String(
+      data.planId ||
+        data.plan_id ||
+        (data.plan as { id?: string } | undefined)?.id ||
+        member.planId ||
+        ""
+    ).trim(),
+    stripeCustomerId: stripeFromMember || stripeFromData,
   };
 }
 
