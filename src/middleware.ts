@@ -3,9 +3,16 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 const isPublicRoute = createRouteMatcher([
   "/sign-in(.*)",
   "/sign-up(.*)",
+
+  // Public health check
+  "/api/health(.*)",
+
+  // Protected by their own secrets/signatures
   "/api/cron(.*)",
   "/api/webhooks/stripe(.*)",
   "/api/webhooks/memberstack(.*)",
+
+  // Public APIs used by the Webflow widgets
   "/api/onboarding(.*)",
   "/api/member(.*)",
   "/api/reference-data(.*)",
