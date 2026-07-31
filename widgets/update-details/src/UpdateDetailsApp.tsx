@@ -2,6 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { widgetApi } from "../../shared/api";
+import {
+  logMemberstackDiagnostics,
+  tryResolveSessionAccessToken,
+} from "../../shared/memberstack-auth";
 
 const profileSchema = z.object({
   firstName: z.string().trim().min(1, "Required").max(80),
@@ -26,30 +31,8 @@ const profileSchema = z.object({
 
 type ProfileForm = z.infer<typeof profileSchema>;
 
-async function resolveToken(): Promise<string | null> {
-  const w = window as unknown as {
-    $memberstackDom?: {
-      getMemberCookie?: () => Promise<{ accessToken?: string; token?: string } | null>;
-    };
-  };
-  try {
-    const c = await w.$memberstackDom?.getMemberCookie?.();
-    return c?.accessToken || c?.token || null;
-  } catch {
-    return null;
-  }
-}
-
 async function api(base: string, path: string, opts: RequestInit & { token?: string } = {}) {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(opts.headers as Record<string, string>),
-  };
-  if (opts.token) headers["X-Memberstack-Token"] = opts.token;
-  const res = await fetch(`${base}${path}`, { ...opts, headers });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.message || res.statusText);
-  return json;
+  return widgetApi(base, path, opts) as Promise<Record<string, unknown>>;
 }
 
 function FieldError({ message }: { message?: string }) {
@@ -104,7 +87,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   useEffect(() => {
     void (async () => {
       try {
-        const t = await resolveToken();
+        logMemberstackDiagnostics("update_details_mount");
+        const t = await tryResolveSessionAccessToken();
         if (!t) {
           setError("Please log in with Memberstack to update your details.");
           setLoading(false);
@@ -116,8 +100,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           api(props.apiBase, "/api/member/profile", { token: t }),
           api(props.apiBase, "/api/member/billing-status", { token: t }),
         ]);
-        setRefData(ref);
-        const p = profileRes.profile;
+        setRefData(ref as typeof refData extends infer R ? Exclude<R, null> : never);
+        const p = (profileRes.profile || {}) as Record<string, string>;
         form.reset({
           firstName: p.firstName || "",
           lastName: p.lastName || "",
@@ -134,7 +118,15 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           ninetyDayGoal: p.ninetyDayGoal || "",
           connectionType: p.connectionType || "",
         });
-        setBilling(bill.billing);
+        setBilling(
+          (bill.billing || null) as {
+            membership: string;
+            payment: string;
+            serviceAccessUntil: string;
+            cancelAtPeriodEnd: boolean;
+            cancellationEffectiveAt: string;
+          } | null
+        );
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load profile");
       } finally {

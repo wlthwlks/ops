@@ -14,6 +14,12 @@ import {
   type BusinessForm,
   type LocationForm,
 } from "../../shared/widget-schemas";
+import { widgetApi } from "../../shared/api";
+import {
+  authenticateEmailPassword,
+  logMemberstackDiagnostics,
+  tryResolveSessionAccessToken,
+} from "../../shared/memberstack-auth";
 
 const { useStepper } = defineStepper([
   { id: "account" },
@@ -92,40 +98,7 @@ async function api(
   path: string,
   opts: RequestInit & { token?: string } = {}
 ) {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(opts.headers as Record<string, string>),
-  };
-  if (opts.token) headers["X-Memberstack-Token"] = opts.token;
-  const res = await fetch(`${base}${path}`, { ...opts, headers });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.message || res.statusText || "Request failed");
-  return json;
-}
-
-async function resolveMemberstackToken(): Promise<string | null> {
-  const w = window as unknown as {
-    $memberstackDom?: {
-      getMemberCookie?: () => Promise<{ accessToken?: string; token?: string } | null>;
-      getCurrentMember?: () => Promise<{ data?: { auth?: { accessToken?: string } } }>;
-    };
-  };
-  if (!w.$memberstackDom) return null;
-  try {
-    if (w.$memberstackDom.getMemberCookie) {
-      const c = await w.$memberstackDom.getMemberCookie();
-      if (c?.accessToken) return c.accessToken;
-      if (c?.token) return c.token;
-    }
-    if (w.$memberstackDom.getCurrentMember) {
-      const m = await w.$memberstackDom.getCurrentMember();
-      const t = m?.data?.auth?.accessToken;
-      if (t) return t;
-    }
-  } catch {
-    return null;
-  }
-  return null;
+  return widgetApi(base, path, opts) as Promise<Record<string, unknown>>;
 }
 
 function FieldError({ message }: { message?: string }) {
@@ -190,30 +163,42 @@ export function SignupApp(props: { apiBase: string }) {
   useEffect(() => {
     void (async () => {
       try {
+        logMemberstackDiagnostics("widget_mount");
         const [cfg, ref] = await Promise.all([
           api(props.apiBase, "/api/forms/config"),
           api(props.apiBase, "/api/reference-data/onboarding"),
         ]);
-        setConfig(cfg);
-        setRefData(ref);
-        const t = await resolveMemberstackToken();
+        setConfig(cfg as { membershipPriceId: string; homeUrl: string });
+        setRefData(ref as unknown as RefData);
+
+        // Session resume only via documented cookie/session API when available
+        const t = await tryResolveSessionAccessToken();
+        logMemberstackDiagnostics("session_resume", {
+          tokenFound: Boolean(t),
+          tokenType: t ? typeof t : "none",
+        });
         if (t) {
           setToken(t);
-          const status = await api(props.apiBase, "/api/onboarding/status", { token: t });
-          const map: Record<string, string> = {
-            LOCATION: "location",
-            BUSINESS: "business",
-            PAYMENT_PENDING: "payment",
-            PAYMENT_CONFIRMED: "success",
-            GOAL: "goal",
-            HELP_WANTED: "help",
-            EXPERTISE: "expertise",
-            CONNECTION: "connection",
-            COMPLETE: "done",
-          };
-          const resume = map[status.resumeStage];
-          if (resume) await stepper.goTo(resume as never);
+          try {
+            const status = await api(props.apiBase, "/api/onboarding/status", { token: t });
+            const map: Record<string, string> = {
+              LOCATION: "location",
+              BUSINESS: "business",
+              PAYMENT_PENDING: "payment",
+              PAYMENT_CONFIRMED: "success",
+              GOAL: "goal",
+              HELP_WANTED: "help",
+              EXPERTISE: "expertise",
+              CONNECTION: "connection",
+              COMPLETE: "done",
+            };
+            const resume = map[String(status.resumeStage || "")];
+            if (resume) await stepper.goTo(resume as never);
+          } catch {
+            // Session token present but status failed — stay on account
+          }
         }
+
         const params = new URLSearchParams(window.location.search);
         if (params.get("payment") === "success") await stepper.goTo("success");
         if (params.get("payment") === "cancel") await stepper.goTo("payment");
@@ -243,48 +228,29 @@ export function SignupApp(props: { apiBase: string }) {
   };
 
   const onAccount = accountForm.handleSubmit(async (values) => {
+    if (loading) return; // prevent double submit
     setError(null);
     setLoading(true);
     try {
-      const w = window as unknown as {
-        $memberstackDom?: {
-          signupMemberEmailPassword?: (p: {
-            email: string;
-            password: string;
-            customFields?: Record<string, string>;
-          }) => Promise<unknown>;
-          loginMemberEmailPassword?: (p: {
-            email: string;
-            password: string;
-          }) => Promise<unknown>;
-        };
-      };
-      if (!w.$memberstackDom?.signupMemberEmailPassword) {
-        throw new Error(
-          "Memberstack is not loaded. Add the Memberstack script on this Webflow page."
-        );
-      }
-      try {
-        await w.$memberstackDom.signupMemberEmailPassword({
-          email: values.email,
-          password: values.password,
-          customFields: {
-            "first-name": values.firstName,
-            "last-name": values.lastName,
-          },
-        });
-      } catch {
-        await w.$memberstackDom.loginMemberEmailPassword?.({
-          email: values.email,
-          password: values.password,
-        });
-      }
-      const t = await resolveMemberstackToken();
-      if (!t) throw new Error("Signed in but could not read Memberstack token");
-      setToken(t);
+      logMemberstackDiagnostics("account_submit_start");
+      const auth = await authenticateEmailPassword({
+        email: values.email,
+        password: values.password,
+        firstName: values.firstName,
+        lastName: values.lastName,
+      });
+      logMemberstackDiagnostics("account_auth_ok", {
+        source: auth.source,
+        tokenFound: true,
+        tokenType: typeof auth.accessToken,
+        memberIdPresent: Boolean(auth.memberId),
+      });
+
+      setToken(auth.accessToken);
+
       await api(props.apiBase, "/api/onboarding/bootstrap", {
         method: "POST",
-        token: t,
+        token: auth.accessToken,
         body: JSON.stringify({
           firstName: values.firstName,
           lastName: values.lastName,
@@ -292,9 +258,40 @@ export function SignupApp(props: { apiBase: string }) {
           attribution,
         }),
       });
-      stepper.setComplete("account");
-      await stepper.next();
+
+      // Resume correct stage when existing member returns
+      try {
+        const status = await api(props.apiBase, "/api/onboarding/status", {
+          token: auth.accessToken,
+        });
+        const map: Record<string, string> = {
+          LOCATION: "location",
+          BUSINESS: "business",
+          PAYMENT_PENDING: "payment",
+          PAYMENT_CONFIRMED: "success",
+          GOAL: "goal",
+          HELP_WANTED: "help",
+          EXPERTISE: "expertise",
+          CONNECTION: "connection",
+          COMPLETE: "done",
+        };
+        const resume = map[String(status.resumeStage || "")];
+        stepper.setComplete("account");
+        if (resume && resume !== "account") {
+          await stepper.goTo(resume as never);
+        } else {
+          await stepper.next();
+        }
+      } catch {
+        stepper.setComplete("account");
+        await stepper.next();
+      }
     } catch (e) {
+      logMemberstackDiagnostics("account_submit_error", {
+        errorName: e instanceof Error ? e.name : "unknown",
+        // message only — no tokens/passwords
+        hasMessage: e instanceof Error && Boolean(e.message),
+      });
       setError(e instanceof Error ? e.message : "Account step failed");
     } finally {
       setLoading(false);

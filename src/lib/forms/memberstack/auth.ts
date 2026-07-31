@@ -1,6 +1,8 @@
 /**
- * Server-side Memberstack token verification.
- * Uses Admin API when MEMBERSTACK_SECRET_KEY is set.
+ * Server-side Memberstack token verification via Admin REST API.
+ * Docs: POST https://admin.memberstack.com/members/verify-token
+ * Returns JWT claims { id, type, iat, exp, aud, iss } under data.
+ * Full member profile loaded via GET /members/:id when email is needed.
  */
 import { FormsError } from "@/lib/forms/errors";
 
@@ -12,6 +14,8 @@ export type VerifiedMemberstackMember = {
   raw: Record<string, unknown>;
 };
 
+const ADMIN_BASE = "https://admin.memberstack.com";
+
 function getAdminKey(): string {
   return (
     process.env.MEMBERSTACK_SECRET_KEY?.trim() ||
@@ -20,10 +24,13 @@ function getAdminKey(): string {
   );
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 /**
  * Verify bearer/member token and return member identity.
- * In test/dev without MS configured, accepts X-Test-Memberstack-* headers only when
- * ALLOW_MEMBERSTACK_TEST_AUTH=true (never in production).
+ * Test headers only when ALLOW_MEMBERSTACK_TEST_AUTH=true outside production.
  */
 export async function verifyMemberstackToken(
   token: string | null | undefined,
@@ -64,42 +71,118 @@ export async function verifyMemberstackToken(
     );
   }
 
-  // Memberstack Admin API — verify member token
-  const res = await fetch("https://admin.memberstack.com/members/verify-token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-API-KEY": adminKey,
-    },
-    body: JSON.stringify({ token: t }),
-  });
-
-  if (!res.ok) {
-    // Fallback: some MS setups use GET member by token header
-    const res2 = await fetch("https://admin.memberstack.com/members/me", {
+  // Official Admin REST: POST /members/verify-token
+  // Non-200 (typically 400 INVALID_TOKEN) ⇒ unauthenticated
+  let verifyJson: unknown;
+  try {
+    const res = await fetch(`${ADMIN_BASE}/members/verify-token`, {
+      method: "POST",
       headers: {
-        Authorization: `Bearer ${t}`,
+        "Content-Type": "application/json",
         "X-API-KEY": adminKey,
       },
+      body: JSON.stringify({ token: t }),
     });
-    if (!res2.ok) {
+    verifyJson = await res.json().catch(() => ({}));
+    if (!res.ok) {
       throw new FormsError("MEMBERSTACK_API_FAILED", "Invalid Memberstack session", {
         status: 401,
         retryable: false,
       });
     }
-    const data2 = (await res2.json()) as Record<string, unknown>;
-    return mapMember(data2);
+  } catch (err) {
+    if (err instanceof FormsError) throw err;
+    throw new FormsError("MEMBERSTACK_API_FAILED", "Memberstack verification failed", {
+      status: 502,
+      retryable: true,
+    });
   }
 
-  const data = (await res.json()) as Record<string, unknown>;
-  return mapMember(data.data && typeof data.data === "object" ? (data.data as Record<string, unknown>) : data);
+  const claimsRaw = isRecord(verifyJson) && isRecord(verifyJson.data)
+    ? verifyJson.data
+    : isRecord(verifyJson)
+      ? verifyJson
+      : null;
+
+  const memberId = claimsRaw && typeof claimsRaw.id === "string" ? claimsRaw.id.trim() : "";
+  if (!memberId) {
+    throw new FormsError("MEMBERSTACK_API_FAILED", "Invalid Memberstack session", {
+      status: 401,
+    });
+  }
+
+  // Optional exp check
+  if (claimsRaw && typeof claimsRaw.exp === "number") {
+    const now = Math.floor(Date.now() / 1000);
+    if (claimsRaw.exp < now) {
+      throw new FormsError("MEMBERSTACK_API_FAILED", "Memberstack session expired", {
+        status: 401,
+      });
+    }
+  }
+
+  // Load member profile for email / name (verify-token returns JWT claims only)
+  try {
+    const memberRes = await fetch(
+      `${ADMIN_BASE}/members/${encodeURIComponent(memberId)}`,
+      {
+        headers: { "X-API-KEY": adminKey },
+      }
+    );
+    const memberJson = (await memberRes.json().catch(() => ({}))) as Record<
+      string,
+      unknown
+    >;
+    if (!memberRes.ok) {
+      // Token valid but profile fetch failed — still allow with id only if email in claims
+      const claimEmail =
+        claimsRaw && typeof claimsRaw.email === "string" ? claimsRaw.email : "";
+      if (claimEmail) {
+        return {
+          id: memberId,
+          email: claimEmail.toLowerCase(),
+          firstName: "",
+          lastName: "",
+          raw: claimsRaw || { id: memberId },
+        };
+      }
+      throw new FormsError("MEMBERSTACK_API_FAILED", "Could not load Memberstack member", {
+        status: 502,
+        retryable: true,
+      });
+    }
+
+    // GET /members/:id returns { data: member | null }
+    const memberData =
+      isRecord(memberJson.data) ? memberJson.data : isRecord(memberJson) ? memberJson : null;
+
+    if (!memberData) {
+      throw new FormsError("MEMBERSTACK_MEMBER_NOT_FOUND", "Memberstack member not found", {
+        status: 401,
+      });
+    }
+
+    return mapMember(memberData, memberId);
+  } catch (err) {
+    if (err instanceof FormsError) throw err;
+    throw new FormsError("MEMBERSTACK_API_FAILED", "Could not load Memberstack member", {
+      status: 502,
+      retryable: true,
+    });
+  }
 }
 
-function mapMember(data: Record<string, unknown>): VerifiedMemberstackMember {
-  const id = String(data.id || data.memberId || "").trim();
-  const auth = (data.auth as Record<string, unknown>) || {};
-  const custom = (data.customFields as Record<string, unknown>) || {};
+function mapMember(
+  data: Record<string, unknown>,
+  fallbackId?: string
+): VerifiedMemberstackMember {
+  const id = String(data.id || fallbackId || "").trim();
+  const auth = isRecord(data.auth) ? data.auth : {};
+  const custom = isRecord(data.customFields)
+    ? data.customFields
+    : isRecord(data.custom_fields)
+      ? data.custom_fields
+      : {};
   const email = String(data.email || auth.email || "")
     .trim()
     .toLowerCase();
@@ -111,8 +194,12 @@ function mapMember(data: Record<string, unknown>): VerifiedMemberstackMember {
   return {
     id,
     email,
-    firstName: String(custom["first-name"] || custom.firstName || data.firstName || "").trim(),
-    lastName: String(custom["last-name"] || custom.lastName || data.lastName || "").trim(),
+    firstName: String(
+      custom["first-name"] || custom.firstName || custom.first_name || data.firstName || ""
+    ).trim(),
+    lastName: String(
+      custom["last-name"] || custom.lastName || custom.last_name || data.lastName || ""
+    ).trim(),
     raw: data,
   };
 }
@@ -136,7 +223,7 @@ export async function updateMemberstackEmail(input: {
       status: 500,
     });
   }
-  const res = await fetch(`https://admin.memberstack.com/members/${input.memberId}`, {
+  const res = await fetch(`${ADMIN_BASE}/members/${encodeURIComponent(input.memberId)}`, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
@@ -150,9 +237,10 @@ export async function updateMemberstackEmail(input: {
     });
   }
   if (!res.ok) {
-    throw new FormsError("MEMBERSTACK_API_FAILED", `Memberstack email update failed (${res.status})`, {
-      status: 502,
-      retryable: true,
-    });
+    throw new FormsError(
+      "MEMBERSTACK_API_FAILED",
+      `Memberstack email update failed (${res.status})`,
+      { status: 502, retryable: true }
+    );
   }
 }
