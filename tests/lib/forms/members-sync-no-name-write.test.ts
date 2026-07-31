@@ -208,7 +208,7 @@ describe("Airtable member writes never include computed Name", () => {
     expect(fields[MEMBER_FIELDS.onboardingStatus]).toBe("BUSINESS");
   });
 
-  it("updateOnboardingStep maps availability array to Availability v2 + legacy", async () => {
+  it("updateOnboardingStep maps availability array to multi-select + legacy", async () => {
     listRecords.mockResolvedValue([
       {
         id: "rec_existing",
@@ -221,14 +221,15 @@ describe("Airtable member writes never include computed Name", () => {
       memberstackId: "mem_1",
       stage: "LOCATION",
       patch: {
-        [MEMBER_FIELDS.availabilityV2]: ["WEEKDAY_MORNING", "WEEKEND"],
+        [MEMBER_FIELDS.availabilityV2]: ["mon_morning", "tue_evening"],
       },
     });
 
     const fields = updateRecords.mock.calls[0][1][0].fields as Record<string, unknown>;
-    expect(fields[MEMBER_FIELDS.availabilityV2]).toBe("WEEKDAY_MORNING,WEEKEND");
+    // Airtable multi-select requires string[], not comma-joined text
+    expect(fields[MEMBER_FIELDS.availabilityV2]).toEqual(["mon_morning", "tue_evening"]);
     expect(fields[MEMBER_FIELDS.availabilityLegacy]).toEqual(expect.any(String));
-    expect(String(fields[MEMBER_FIELDS.availabilityLegacy]).length).toBeGreaterThan(0);
+    expect(String(fields[MEMBER_FIELDS.availabilityLegacy])).toContain("Monday");
   });
 
   it("upsert with attribution uses canonical UTM field names", async () => {

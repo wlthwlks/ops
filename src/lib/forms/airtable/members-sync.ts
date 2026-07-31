@@ -256,14 +256,18 @@ export async function updateOnboardingStep(
     delete fields[MEMBER_FIELDS.city + " code"]; // safety
   }
 
-  // Availability codes → Availability v2 + legacy Availability string
-  // Note: availabilityCodes is an alias of availabilityV2 ("Availability v2") — do not delete by alias after write.
+  // Availability v2 is Airtable multi-select — must send string[] of option names (e.g. mon_morning).
   const avail =
     input.patch[MEMBER_FIELDS.availabilityV2] ??
     input.patch.availability;
   if (Array.isArray(avail)) {
-    const codes = avail as string[];
-    fields[MEMBER_FIELDS.availabilityV2] = codes.join(",");
+    const codes = (avail as string[]).map((c) => String(c).trim()).filter(Boolean);
+    fields[MEMBER_FIELDS.availabilityV2] = codes;
+    fields[MEMBER_FIELDS.availabilityLegacy] = availabilityCodesToLegacyString(codes);
+    delete fields.availability;
+  } else if (typeof avail === "string" && avail.trim()) {
+    const codes = avail.split(",").map((c) => c.trim()).filter(Boolean);
+    fields[MEMBER_FIELDS.availabilityV2] = codes;
     fields[MEMBER_FIELDS.availabilityLegacy] = availabilityCodesToLegacyString(codes);
     delete fields.availability;
   }
@@ -352,8 +356,12 @@ export async function updateMemberProfile(
   delete fields.annualRevenue;
 
   if (Array.isArray(fields[MEMBER_FIELDS.availabilityV2]) || Array.isArray(fields.availability)) {
-    const codes = (fields[MEMBER_FIELDS.availabilityV2] || fields.availability) as string[];
-    fields[MEMBER_FIELDS.availabilityV2] = codes.join(",");
+    const codes = (
+      (fields[MEMBER_FIELDS.availabilityV2] || fields.availability) as string[]
+    )
+      .map((c) => String(c).trim())
+      .filter(Boolean);
+    fields[MEMBER_FIELDS.availabilityV2] = codes;
     fields[MEMBER_FIELDS.availabilityLegacy] = availabilityCodesToLegacyString(codes);
     delete fields.availability;
   }
@@ -411,7 +419,13 @@ export async function updateMemberBilling(
 
 export function recordToProfileDto(record: AirtableRecord) {
   const f = record.fields;
-  const availV2 = fieldStr(f, MEMBER_FIELDS.availabilityV2);
+  const availRaw = f[MEMBER_FIELDS.availabilityV2];
+  const availability = Array.isArray(availRaw)
+    ? availRaw.map((s) => String(s).trim()).filter(Boolean)
+    : fieldStr(f, MEMBER_FIELDS.availabilityV2)
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
   return {
     airtableRecordId: record.id,
     name: fieldStr(f, MEMBER_FIELDS.name),
@@ -443,9 +457,7 @@ export function recordToProfileDto(record: AirtableRecord) {
     expertiseOffered: [] as string[],
     expertiseContext: fieldStr(f, MEMBER_FIELDS.expertiseContext),
     connectionType: fieldStr(f, MEMBER_FIELDS.connectionType),
-    availability: availV2
-      ? availV2.split(",").map((s) => s.trim()).filter(Boolean)
-      : [],
+    availability,
   };
 }
 
