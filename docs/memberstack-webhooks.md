@@ -14,4 +14,14 @@ Handlers (normalized type contains):
 - `plan.canceled` — cancel-at-period-end note
 - `member.deleted` — soft mark; history preserved
 
-Inspect Memberstack Event Catalog and adjust `memberstack-handlers.ts` if names differ.
+### Payload envelopes
+
+`pickMember` accepts all of:
+
+```ts
+payload.data
+payload.payload   // documented Memberstack member.created shape
+payload           // root
+```
+
+Nested `member` objects and `auth.email` / `customFields` are supported. Confirm against live Svix logs after first delivery.

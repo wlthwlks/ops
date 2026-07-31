@@ -1,4 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
+
+const profileSchema = z.object({
+  firstName: z.string().trim().min(1, "Required").max(80),
+  lastName: z.string().trim().min(1, "Required").max(80),
+  email: z
+    .string()
+    .trim()
+    .email()
+    .transform((e) => e.toLowerCase()),
+  phone: z.string().trim().max(40).optional(),
+  businessName: z.string().trim().max(120).optional(),
+  businessWebsite: z.string().trim().max(500).optional(),
+  countryCode: z.string().min(2),
+  cityCode: z.string().optional(),
+  primaryIndustry: z.string().optional(),
+  businessStage: z.string().optional(),
+  annualRevenue: z.string().optional(),
+  businessDescription: z.string().trim().max(400).optional(),
+  ninetyDayGoal: z.string().trim().max(300).optional(),
+  connectionType: z.string().optional(),
+});
+
+type ProfileForm = z.infer<typeof profileSchema>;
 
 async function resolveToken(): Promise<string | null> {
   const w = window as unknown as {
@@ -26,6 +52,10 @@ async function api(base: string, path: string, opts: RequestInit & { token?: str
   return json;
 }
 
+function FieldError({ message }: { message?: string }) {
+  return <div className="wlth-error">{message || "\u00a0"}</div>;
+}
+
 export function UpdateDetailsApp(props: { apiBase: string }) {
   const [token, setToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,26 +68,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     industries: Array<{ code: string; label: string }>;
     businessStages: Array<{ code: string; label: string }>;
     revenueBrackets: Array<{ code: string; label: string }>;
-    availabilityOptions: Array<{ code: string; label: string }>;
     connectionTypes: Array<{ code: string; label: string }>;
   } | null>(null);
-  const [form, setForm] = useState({
-    firstName: "",
-    lastName: "",
-    email: "",
-    phone: "",
-    businessName: "",
-    businessWebsite: "",
-    countryCode: "GB",
-    cityCode: "",
-    availability: [] as string[],
-    primaryIndustry: "",
-    businessStage: "",
-    annualRevenue: "",
-    businessDescription: "",
-    ninetyDayGoal: "",
-    connectionType: "",
-  });
   const [billing, setBilling] = useState<{
     membership: string;
     payment: string;
@@ -65,6 +77,29 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     cancelAtPeriodEnd: boolean;
     cancellationEffectiveAt: string;
   } | null>(null);
+
+  const form = useForm<ProfileForm>({
+    resolver: zodResolver(profileSchema),
+    defaultValues: {
+      firstName: "",
+      lastName: "",
+      email: "",
+      phone: "",
+      businessName: "",
+      businessWebsite: "",
+      countryCode: "GB",
+      cityCode: "",
+      primaryIndustry: "",
+      businessStage: "",
+      annualRevenue: "",
+      businessDescription: "",
+      ninetyDayGoal: "",
+      connectionType: "",
+    },
+    mode: "onBlur",
+  });
+
+  const countryCode = form.watch("countryCode");
 
   useEffect(() => {
     void (async () => {
@@ -83,7 +118,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         ]);
         setRefData(ref);
         const p = profileRes.profile;
-        setForm({
+        form.reset({
           firstName: p.firstName || "",
           lastName: p.lastName || "",
           email: p.email || "",
@@ -92,7 +127,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           businessWebsite: p.businessWebsite || "",
           countryCode: p.countryCode || "GB",
           cityCode: p.cityCode || "",
-          availability: p.availability || [],
           primaryIndustry: p.primaryIndustry || "",
           businessStage: p.businessStage || "",
           annualRevenue: p.annualRevenue || "",
@@ -107,45 +141,42 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         setLoading(false);
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.apiBase]);
 
   const cities = useMemo(
-    () =>
-      (refData?.cities || []).filter((c) => c.countryCode === form.countryCode),
-    [refData, form.countryCode]
+    () => (refData?.cities || []).filter((c) => c.countryCode === countryCode),
+    [refData, countryCode]
   );
 
-  const save = async () => {
+  const onSave = form.handleSubmit(async (values) => {
     if (!token) return;
     setSaving(true);
     setError(null);
     setOk(null);
     try {
-      if (form.email) {
-        await api(props.apiBase, "/api/member/email", {
-          method: "POST",
-          token,
-          body: JSON.stringify({ email: form.email }),
-        });
-      }
+      await api(props.apiBase, "/api/member/email", {
+        method: "POST",
+        token,
+        body: JSON.stringify({ email: values.email }),
+      });
       await api(props.apiBase, "/api/member/profile", {
         method: "PATCH",
         token,
         body: JSON.stringify({
-          firstName: form.firstName,
-          lastName: form.lastName,
-          phone: form.phone,
-          businessName: form.businessName,
-          businessWebsite: form.businessWebsite || undefined,
-          countryCode: form.countryCode,
-          cityCode: form.cityCode || undefined,
-          availability: form.availability,
-          primaryIndustry: form.primaryIndustry || undefined,
-          businessStage: form.businessStage || undefined,
-          annualRevenue: form.annualRevenue || undefined,
-          businessDescription: form.businessDescription || undefined,
-          ninetyDayGoal: form.ninetyDayGoal || undefined,
-          connectionType: form.connectionType || undefined,
+          firstName: values.firstName,
+          lastName: values.lastName,
+          phone: values.phone,
+          businessName: values.businessName,
+          businessWebsite: values.businessWebsite || undefined,
+          countryCode: values.countryCode,
+          cityCode: values.cityCode || undefined,
+          primaryIndustry: values.primaryIndustry || undefined,
+          businessStage: values.businessStage || undefined,
+          annualRevenue: values.annualRevenue || undefined,
+          businessDescription: values.businessDescription || undefined,
+          ninetyDayGoal: values.ninetyDayGoal || undefined,
+          connectionType: values.connectionType || undefined,
         }),
       });
       setOk("Saved");
@@ -154,7 +185,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     } finally {
       setSaving(false);
     }
-  };
+  });
 
   const openPortal = async () => {
     const w = window as unknown as {
@@ -182,138 +213,129 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       <div className="wlth-card">
         <h1>Update details</h1>
         <p>Keep your WLTH WLKS profile up to date.</p>
-        {error && <div className="wlth-banner-error">{error}</div>}
+        {error && (
+          <div className="wlth-banner-error" role="alert">
+            {error}
+          </div>
+        )}
         {ok && <div className="wlth-banner-success">{ok}</div>}
 
         {!token && <p>Log in to continue.</p>}
 
         {token && refData && (
-          <>
+          <form onSubmit={onSave} noValidate>
             <h2>Personal</h2>
-            <label>First name</label>
-            <input
-              value={form.firstName}
-              onChange={(e) => setForm({ ...form, firstName: e.target.value })}
-            />
-            <label>Last name</label>
-            <input
-              value={form.lastName}
-              onChange={(e) => setForm({ ...form, lastName: e.target.value })}
-            />
-            <label>Email</label>
-            <input
-              type="email"
-              value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
-            />
-            <label>Phone</label>
-            <input
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-            />
+            <div className="wlth-field">
+              <label htmlFor="fn">First name</label>
+              <input id="fn" {...form.register("firstName")} />
+              <FieldError message={form.formState.errors.firstName?.message} />
+            </div>
+            <div className="wlth-field">
+              <label htmlFor="ln">Last name</label>
+              <input id="ln" {...form.register("lastName")} />
+              <FieldError message={form.formState.errors.lastName?.message} />
+            </div>
+            <div className="wlth-field">
+              <label htmlFor="em">Email</label>
+              <input id="em" type="email" {...form.register("email")} />
+              <FieldError message={form.formState.errors.email?.message} />
+            </div>
+            <div className="wlth-field">
+              <label htmlFor="ph">Phone</label>
+              <input id="ph" {...form.register("phone")} />
+            </div>
 
             <h2>Location</h2>
-            <label>Country</label>
-            <select
-              value={form.countryCode}
-              onChange={(e) =>
-                setForm({ ...form, countryCode: e.target.value, cityCode: "" })
-              }
-            >
-              {refData.countries.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-            <label>City</label>
-            <select
-              value={form.cityCode}
-              onChange={(e) => setForm({ ...form, cityCode: e.target.value })}
-            >
-              <option value="">Select</option>
-              {cities.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
+            <div className="wlth-field">
+              <label htmlFor="co">Country</label>
+              <select
+                id="co"
+                {...form.register("countryCode", {
+                  onChange: () => form.setValue("cityCode", ""),
+                })}
+              >
+                {refData.countries.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="wlth-field">
+              <label htmlFor="ci">City</label>
+              <select id="ci" {...form.register("cityCode")}>
+                <option value="">Select</option>
+                {cities.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
             <h2>Business</h2>
-            <label>Business name</label>
-            <input
-              value={form.businessName}
-              onChange={(e) => setForm({ ...form, businessName: e.target.value })}
-            />
-            <label>Website</label>
-            <input
-              value={form.businessWebsite}
-              onChange={(e) => setForm({ ...form, businessWebsite: e.target.value })}
-            />
-            <label>Industry</label>
-            <select
-              value={form.primaryIndustry}
-              onChange={(e) => setForm({ ...form, primaryIndustry: e.target.value })}
-            >
-              <option value="">Select</option>
-              {refData.industries.map((i) => (
-                <option key={i.code} value={i.code}>
-                  {i.label}
-                </option>
-              ))}
-            </select>
-            <label>Stage</label>
-            <select
-              value={form.businessStage}
-              onChange={(e) => setForm({ ...form, businessStage: e.target.value })}
-            >
-              <option value="">Select</option>
-              {refData.businessStages.map((i) => (
-                <option key={i.code} value={i.code}>
-                  {i.label}
-                </option>
-              ))}
-            </select>
-            <label>Revenue</label>
-            <select
-              value={form.annualRevenue}
-              onChange={(e) => setForm({ ...form, annualRevenue: e.target.value })}
-            >
-              <option value="">Select</option>
-              {refData.revenueBrackets.map((i) => (
-                <option key={i.code} value={i.code}>
-                  {i.label}
-                </option>
-              ))}
-            </select>
-            <label>Description</label>
-            <textarea
-              rows={3}
-              value={form.businessDescription}
-              onChange={(e) =>
-                setForm({ ...form, businessDescription: e.target.value })
-              }
-            />
+            <div className="wlth-field">
+              <label htmlFor="bn">Business name</label>
+              <input id="bn" {...form.register("businessName")} />
+            </div>
+            <div className="wlth-field">
+              <label htmlFor="bw">Website</label>
+              <input id="bw" {...form.register("businessWebsite")} />
+            </div>
+            <div className="wlth-field">
+              <label htmlFor="ind">Industry</label>
+              <select id="ind" {...form.register("primaryIndustry")}>
+                <option value="">Select</option>
+                {refData.industries.map((i) => (
+                  <option key={i.code} value={i.code}>
+                    {i.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="wlth-field">
+              <label htmlFor="st">Stage</label>
+              <select id="st" {...form.register("businessStage")}>
+                <option value="">Select</option>
+                {refData.businessStages.map((i) => (
+                  <option key={i.code} value={i.code}>
+                    {i.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="wlth-field">
+              <label htmlFor="rv">Revenue</label>
+              <select id="rv" {...form.register("annualRevenue")}>
+                <option value="">Select</option>
+                {refData.revenueBrackets.map((i) => (
+                  <option key={i.code} value={i.code}>
+                    {i.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="wlth-field">
+              <label htmlFor="bd">Description</label>
+              <textarea id="bd" rows={3} {...form.register("businessDescription")} />
+            </div>
 
             <h2>Profile preferences</h2>
-            <label>90-day goal</label>
-            <textarea
-              rows={3}
-              value={form.ninetyDayGoal}
-              onChange={(e) => setForm({ ...form, ninetyDayGoal: e.target.value })}
-            />
-            <label>Connection type</label>
-            <select
-              value={form.connectionType}
-              onChange={(e) => setForm({ ...form, connectionType: e.target.value })}
-            >
-              <option value="">Select</option>
-              {refData.connectionTypes.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
+            <div className="wlth-field">
+              <label htmlFor="g">90-day goal</label>
+              <textarea id="g" rows={3} {...form.register("ninetyDayGoal")} />
+            </div>
+            <div className="wlth-field">
+              <label htmlFor="ct">Connection type</label>
+              <select id="ct" {...form.register("connectionType")}>
+                <option value="">Select</option>
+                {refData.connectionTypes.map((c) => (
+                  <option key={c.code} value={c.code}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
             <h2>Account & billing</h2>
             {billing && (
@@ -333,12 +355,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
             )}
 
             <div className="wlth-actions">
-              <button
-                type="button"
-                className="wlth-btn-primary"
-                disabled={saving}
-                onClick={() => void save()}
-              >
+              <button type="submit" className="wlth-btn-primary" disabled={saving}>
                 {saving ? "Saving…" : "Save changes"}
               </button>
               <button
@@ -349,7 +366,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 Manage membership
               </button>
             </div>
-          </>
+          </form>
         )}
       </div>
     </div>

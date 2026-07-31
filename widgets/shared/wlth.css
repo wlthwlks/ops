@@ -1,26 +1,34 @@
+/* WLTH WLKS widget theme — editorial black/white, scoped to .wlth-widget */
 .wlth-widget {
   --wlth-background: #ffffff;
-  --wlth-surface: #f7f7f5;
-  --wlth-text: #111111;
-  --wlth-text-muted: #5c5c5c;
-  --wlth-border: #e5e5e0;
-  --wlth-button: #111111;
+  --wlth-surface: #f6f5f2;
+  --wlth-text: #0a0a0a;
+  --wlth-text-muted: #5a5a56;
+  --wlth-border: #e2e0d9;
+  --wlth-border-strong: #0a0a0a;
+  --wlth-button: #0a0a0a;
   --wlth-button-text: #ffffff;
-  --wlth-button-hover: #2a2a2a;
-  --wlth-error: #b42318;
-  --wlth-success: #067647;
-  --wlth-radius: 10px;
-  --wlth-font: "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --wlth-max: 520px;
+  --wlth-button-hover: #2c2c2c;
+  --wlth-error: #9b1c1c;
+  --wlth-error-bg: #fdf2f2;
+  --wlth-success: #03543f;
+  --wlth-success-bg: #f3faf7;
+  --wlth-radius: 12px;
+  --wlth-radius-sm: 8px;
+  --wlth-font: "Helvetica Neue", Helvetica, Arial, ui-sans-serif, system-ui, sans-serif;
+  --wlth-max: 540px;
+  --wlth-shadow: 0 1px 2px rgba(10, 10, 10, 0.04), 0 8px 24px rgba(10, 10, 10, 0.04);
 
   box-sizing: border-box;
   color: var(--wlth-text);
   font-family: var(--wlth-font);
   font-size: 16px;
-  line-height: 1.5;
+  line-height: 1.55;
+  letter-spacing: -0.01em;
   max-width: var(--wlth-max);
   margin: 0 auto;
-  padding: 8px;
+  padding: 12px;
+  -webkit-font-smoothing: antialiased;
 }
 
 .wlth-widget *,
@@ -32,21 +40,22 @@
 .wlth-widget h1,
 .wlth-widget h2 {
   font-weight: 600;
-  letter-spacing: -0.02em;
-  margin: 0 0 8px;
+  letter-spacing: -0.03em;
+  margin: 0 0 10px;
   color: var(--wlth-text);
+  line-height: 1.2;
 }
 
 .wlth-widget h1 {
-  font-size: 1.75rem;
+  font-size: clamp(1.6rem, 4vw, 1.9rem);
 }
 
 .wlth-widget h2 {
-  font-size: 1.25rem;
+  font-size: clamp(1.2rem, 3vw, 1.35rem);
 }
 
 .wlth-widget p {
-  margin: 0 0 16px;
+  margin: 0 0 18px;
   color: var(--wlth-text-muted);
 }
 
@@ -54,23 +63,26 @@
   background: var(--wlth-background);
   border: 1px solid var(--wlth-border);
   border-radius: var(--wlth-radius);
-  padding: 24px;
+  padding: clamp(20px, 4vw, 28px);
+  box-shadow: var(--wlth-shadow);
 }
 
 .wlth-widget .wlth-steps {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 20px;
+  margin-bottom: 22px;
 }
 
 .wlth-widget .wlth-step-dot {
   font-size: 11px;
-  padding: 4px 8px;
+  font-weight: 500;
+  padding: 5px 10px;
   border-radius: 999px;
   border: 1px solid var(--wlth-border);
   color: var(--wlth-text-muted);
   background: var(--wlth-surface);
+  text-transform: none;
 }
 
 .wlth-widget .wlth-step-dot.is-active {
@@ -80,14 +92,15 @@
 }
 
 .wlth-widget .wlth-step-dot.is-done {
-  border-color: var(--wlth-text);
+  border-color: var(--wlth-border-strong);
   color: var(--wlth-text);
+  background: #fff;
 }
 
 .wlth-widget label {
   display: block;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 600;
   margin-bottom: 6px;
   color: var(--wlth-text);
 }
@@ -97,43 +110,56 @@
 .wlth-widget textarea {
   width: 100%;
   border: 1px solid var(--wlth-border);
-  border-radius: 8px;
-  padding: 10px 12px;
+  border-radius: var(--wlth-radius-sm);
+  padding: 11px 12px;
   font: inherit;
   color: var(--wlth-text);
   background: #fff;
+  margin-bottom: 4px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.wlth-widget .wlth-field {
   margin-bottom: 14px;
 }
 
 .wlth-widget input:focus,
 .wlth-widget select:focus,
 .wlth-widget textarea:focus {
-  outline: 2px solid #111;
-  outline-offset: 1px;
+  outline: none;
+  border-color: var(--wlth-border-strong);
+  box-shadow: 0 0 0 3px rgba(10, 10, 10, 0.08);
+}
+
+.wlth-widget input[aria-invalid="true"],
+.wlth-widget select[aria-invalid="true"],
+.wlth-widget textarea[aria-invalid="true"] {
+  border-color: var(--wlth-error);
 }
 
 .wlth-widget .wlth-error {
   color: var(--wlth-error);
-  font-size: 13px;
-  margin: -8px 0 12px;
+  font-size: 12.5px;
+  margin: 4px 0 10px;
+  min-height: 1.1em;
 }
 
 .wlth-widget .wlth-banner-error {
-  background: #fef3f2;
-  border: 1px solid #fecdca;
+  background: var(--wlth-error-bg);
+  border: 1px solid #f8b4b4;
   color: var(--wlth-error);
-  padding: 10px 12px;
-  border-radius: 8px;
+  padding: 11px 13px;
+  border-radius: var(--wlth-radius-sm);
   margin-bottom: 16px;
   font-size: 14px;
 }
 
 .wlth-widget .wlth-banner-success {
-  background: #ecfdf3;
-  border: 1px solid #abefc6;
+  background: var(--wlth-success-bg);
+  border: 1px solid #bcf0da;
   color: var(--wlth-success);
-  padding: 10px 12px;
-  border-radius: 8px;
+  padding: 11px 13px;
+  border-radius: var(--wlth-radius-sm);
   margin-bottom: 16px;
 }
 
@@ -141,19 +167,21 @@
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
-  margin-top: 8px;
+  margin-top: 12px;
 }
 
 .wlth-widget button {
   font: inherit;
-  border-radius: 8px;
-  padding: 11px 18px;
+  font-weight: 600;
+  border-radius: var(--wlth-radius-sm);
+  padding: 12px 18px;
   cursor: pointer;
   border: 1px solid transparent;
+  transition: background 0.15s ease, opacity 0.15s ease;
 }
 
 .wlth-widget button:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -172,10 +200,14 @@
   color: var(--wlth-text);
 }
 
+.wlth-widget .wlth-btn-secondary:hover:not(:disabled) {
+  border-color: var(--wlth-border-strong);
+}
+
 .wlth-widget .wlth-check-grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 6px;
+  gap: 8px;
   margin-bottom: 14px;
 }
 
@@ -191,14 +223,36 @@
   gap: 8px;
   font-size: 14px;
   margin: 0;
+  font-weight: 400;
+  padding: 8px 10px;
+  border: 1px solid var(--wlth-border);
+  border-radius: var(--wlth-radius-sm);
+  background: var(--wlth-surface);
 }
 
 .wlth-widget .wlth-check input {
   width: auto;
-  margin: 3px 0 0;
+  margin: 2px 0 0;
+  padding: 0;
 }
 
 .wlth-widget .wlth-muted {
   font-size: 13px;
   color: var(--wlth-text-muted);
+  margin-bottom: 10px;
+}
+
+.wlth-widget .wlth-progress {
+  height: 3px;
+  background: var(--wlth-surface);
+  border-radius: 999px;
+  margin-bottom: 18px;
+  overflow: hidden;
+}
+
+.wlth-widget .wlth-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--wlth-button);
+  transition: width 0.25s ease;
 }

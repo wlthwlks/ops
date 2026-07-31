@@ -10,7 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "node --env-file=.env.local ./node_modules/drizzle-kit/bin.cjs migrate",
     "airtable:update-intro-fields": "npx tsx scripts/update-intro-fields.ts",
     "airtable:import-history": "npx tsx scripts/import-introduction-history.ts",
     "airtable:backfill-service-access": "npx tsx scripts/backfill-service-access-until.ts",

@@ -216,7 +216,7 @@ describe("POST /api/webhooks/stripe", () => {
     expect(createRecords).not.toHaveBeenCalled();
   });
 
-  it("returns 200 member_registration_pending after retry window", async () => {
+  it("returns 200 stripe_member_not_found after retry window", async () => {
     const periodEnd = Math.floor(Date.now() / 1000) + 86400;
     const paidAt = Math.floor(Date.now() / 1000) - 48 * 3600;
     constructEvent.mockReturnValue({
@@ -245,12 +245,13 @@ describe("POST /api/webhooks/stripe", () => {
     const res = await POST(makeRequest("{}"));
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.status).toBe("member_registration_pending");
+    expect(json.status).toBe("stripe_member_not_found");
     expect(json.shouldRetry).toBe(false);
     expect(createRecords).not.toHaveBeenCalled();
+    expect(updateRecordsBatched).not.toHaveBeenCalled();
   });
 
-  it("links unique email member with blank Stripe Customer ID", async () => {
+  it("does not link by email when Stripe Customer ID is missing on Airtable", async () => {
     const periodEnd = Math.floor(new Date("2026-09-01T00:00:00.000Z").getTime() / 1000);
     constructEvent.mockReturnValue({
       id: "evt_link",
@@ -268,30 +269,22 @@ describe("POST /api/webhooks/stripe", () => {
       data: [membershipLine(periodEnd)],
       has_more: false,
     });
+    // Would have been email-linked under the old behaviour
+    listRecords.mockResolvedValue([]);
     retrieveCustomer.mockResolvedValue({
       id: "cus_link",
       email: "link@example.com",
       object: "customer",
     });
 
-    let n = 0;
-    listRecords.mockImplementation(async (_t: string, opts?: { filterByFormula?: string }) => {
-      const f = opts?.filterByFormula || "";
-      n++;
-      if (f.includes("Stripe Customer ID")) {
-        if (n === 1) return [];
-        return [{ id: "rec_link", fields: { "Stripe Customer ID": "cus_link" } }];
-      }
-      return [{ id: "rec_link", fields: { email: "link@example.com" } }];
-    });
-    updateRecordsBatched.mockResolvedValue([{ id: "rec_link", fields: {} }]);
-
     const res = await POST(makeRequest("{}"));
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
     const json = await res.json();
-    expect(json.status).toBe("linked_and_updated");
-    expect(json.linkedStripeCustomerId).toBe(true);
+    expect(json.status).toBe("member_registration_pending");
+    expect(json.linkedStripeCustomerId).toBe(false);
+    expect(updateRecordsBatched).not.toHaveBeenCalled();
     expect(createRecords).not.toHaveBeenCalled();
+    expect(retrieveCustomer).not.toHaveBeenCalled();
   });
 
   it("never creates Airtable members from webhook", async () => {

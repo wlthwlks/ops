@@ -47,4 +47,25 @@ test.describe("widget build artifacts", () => {
     expect(js.length).toBeGreaterThan(1000);
     expect(js).not.toMatch(/MEMBERSTACK_SECRET|AIRTABLE_GET_DATA_TOKEN|sk_live_/);
   });
+
+  test("signup bundle includes stepper and form validation markers", () => {
+    const js = readFileSync(
+      join(process.cwd(), "public/widgets/signup/v1/signup.js"),
+      "utf8"
+    );
+    // Bundled strings from Stepperize / RHF integration
+    expect(js).toMatch(/Join WLTH WLKS|wlth-signup|firstName|Continue/);
+    expect(js.length).toBeGreaterThan(50_000);
+  });
 });
+
+test.describe("CORS preflight", () => {
+  test("reference-data answers OPTIONS", async ({ request }) => {
+    const res = await request.fetch("/api/reference-data/onboarding", {
+      method: "OPTIONS",
+      headers: { Origin: "https://wlthwlks.com" },
+    });
+    expect([200, 204]).toContain(res.status());
+  });
+});
+

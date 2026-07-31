@@ -1,7 +1,12 @@
 /**
  * Stripe invoice.paid → Airtable billing sync for the webhook.
- * NEVER creates Members. Memberstack + Make own ongoing registration.
- * May link blank Stripe Customer ID via unique primary email match only.
+ *
+ * NEVER creates Members.
+ * NEVER matches or links by email.
+ * ONLY updates existing Airtable members matched by exact Stripe Customer ID.
+ *
+ * Historical email→Stripe ID linking is CLI-only
+ * (`npm run airtable:historical-stripe-repair` / reconcile scripts).
  */
 import type Stripe from "stripe";
 import type { AirtableClient, AirtableRecord } from "@/lib/integrations/airtable";
@@ -15,23 +20,15 @@ import {
   type ServiceAccessSyncResult,
   type ServiceAccessSyncStatus,
 } from "@/lib/billing/service-access-sync";
-import {
-  isValidEmail,
-  maskEmail,
-  normalizeEmailStrict,
-} from "@/lib/billing/reconcile-stripe-customers";
+import { normalizeEmailStrict } from "@/lib/billing/reconcile-stripe-customers";
 
 export const PRIMARY_EMAIL_FIELD = "email";
 export const DEFAULT_MEMBER_REGISTRATION_RETRY_HOURS = 24;
 
 export type WebhookBillingStatus =
   | ServiceAccessSyncStatus
-  | "linked_and_updated"
   | "member_registration_pending"
-  | "email_conflict"
-  | "stripe_customer_id_conflict"
-  | "no_customer_email"
-  | "invalid_customer_email";
+  | "stripe_member_not_found";
 
 export type WebhookBillingResult = {
   status: WebhookBillingStatus;
@@ -42,7 +39,8 @@ export type WebhookBillingResult = {
   airtableRecordsMatched: number;
   airtableRecordsUpdated: number;
   duplicateAirtableRecords: boolean;
-  linkedStripeCustomerId: boolean;
+  /** Always false for webhook path — email linking is forbidden. */
+  linkedStripeCustomerId: false;
   customerEmailMasked: string | null;
   reason: string;
   sync?: ServiceAccessSyncResult;
@@ -57,7 +55,8 @@ export function getMemberRegistrationRetryHours(): number {
 }
 
 /**
- * True while Stripe should keep retrying (member may still be created by Make).
+ * True while Stripe should keep retrying (member may still get Stripe Customer ID
+ * written by Memberstack/onboarding/Make onto an existing Airtable row).
  * Anchor: invoice paid_at, else invoice.created (unix seconds).
  */
 export function isWithinMemberRegistrationRetryWindow(input: {
@@ -101,6 +100,9 @@ export function extractStripeCustomerEmail(
   return trimmed || null;
 }
 
+/**
+ * Email lookup helper for historical CLI repair only — not used by the live webhook.
+ */
 export async function findAirtableMembersByPrimaryEmail(
   airtable: AirtableClient,
   email: string
@@ -108,23 +110,23 @@ export async function findAirtableMembersByPrimaryEmail(
   const normalized = normalizeEmailStrict(email);
   if (!normalized) return [];
   const escaped = escapeAirtableFormulaString(normalized);
-  // Case-insensitive match on primary email only (not Slack Email).
   return airtable.listRecords(MEMBERS_TABLE, {
     filterByFormula: `LOWER({${PRIMARY_EMAIL_FIELD}}) = "${escaped}"`,
     fields: [PRIMARY_EMAIL_FIELD, STRIPE_CUSTOMER_ID_FIELD, SERVICE_ACCESS_FIELD, "Name"],
   });
 }
 
-/** Minimal Stripe customer retrieve surface (full SDK or test mocks). */
+/** Minimal Stripe customer retrieve surface (kept for call-site compatibility). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type StripeCustomerRetrieveClient = { customers: { retrieve: (id: string) => Promise<any> } };
 
 /**
  * Resolve Airtable member for a paid membership invoice and update access.
- * Never creates Members. Optionally links blank Stripe Customer ID on unique email match.
+ * Exact Stripe Customer ID only. Never creates members. Never email-matches.
  */
 export async function syncInvoicePaidToAirtable(input: {
   airtable: AirtableClient;
+  /** Unused for matching; retained so existing call sites keep compiling. */
   stripe: StripeCustomerRetrieveClient;
   stripeCustomerId: string;
   paidThrough: Date;
@@ -137,7 +139,6 @@ export async function syncInvoicePaidToAirtable(input: {
 }): Promise<WebhookBillingResult> {
   const {
     airtable,
-    stripe,
     stripeCustomerId,
     paidThrough,
     stripeInvoiceId,
@@ -155,15 +156,16 @@ export async function syncInvoicePaidToAirtable(input: {
     airtableRecordsMatched: 0,
     airtableRecordsUpdated: 0,
     duplicateAirtableRecords: false,
-    linkedStripeCustomerId: false,
+    linkedStripeCustomerId: false as const,
     customerEmailMasked: null as string | null,
   };
 
-  // 1) Exact Stripe Customer ID match
+  // Exact Stripe Customer ID match only
   const byCustomerId = await findAirtableMembersByStripeCustomerId(
     airtable,
     stripeCustomerId
   );
+
   if (byCustomerId.length > 0) {
     const sync = await updateServiceAccessUntilForCustomer({
       airtable,
@@ -180,220 +182,43 @@ export async function syncInvoicePaidToAirtable(input: {
       airtableRecordsMatched: sync.airtableRecordsMatched,
       airtableRecordsUpdated: sync.airtableRecordsUpdated,
       duplicateAirtableRecords: sync.duplicateAirtableRecords,
-      reason: "Matched by Stripe Customer ID",
+      reason: "Matched by exact Stripe Customer ID",
       sync,
     };
   }
 
-  // 2) No ID match — try unique primary email link (blank Stripe Customer ID only)
-  let customer: Stripe.Customer | Stripe.DeletedCustomer | null;
-  try {
-    customer = (await stripe.customers.retrieve(stripeCustomerId)) as
-      | Stripe.Customer
-      | Stripe.DeletedCustomer;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(
-      JSON.stringify({
-        event: "stripe_webhook_customer_retrieve_failed",
-        stripeCustomerId,
-        stripeInvoiceId,
-        stripeEventId: stripeEventId ?? null,
-        error: msg,
-      })
-    );
-    throw err;
-  }
-
-  const rawEmail = extractStripeCustomerEmail(customer);
-  if (!rawEmail) {
-    console.warn(
-      JSON.stringify({
-        event: "stripe_webhook_no_customer_email",
-        stripeCustomerId,
-        stripeInvoiceId,
-        stripeEventId: stripeEventId ?? null,
-        status: "no_customer_email",
-      })
-    );
-    return {
-      ...base,
-      status: "no_customer_email",
-      shouldRetry: false,
-      reason: "Stripe customer has no email; cannot link or wait on registration",
-    };
-  }
-
-  const masked = maskEmail(rawEmail);
-  base.customerEmailMasked = masked;
-
-  if (!isValidEmail(rawEmail)) {
-    console.warn(
-      JSON.stringify({
-        event: "stripe_webhook_invalid_customer_email",
-        stripeCustomerId,
-        stripeInvoiceId,
-        stripeEventId: stripeEventId ?? null,
-        status: "invalid_customer_email",
-        emailMasked: masked,
-      })
-    );
-    return {
-      ...base,
-      status: "invalid_customer_email",
-      shouldRetry: false,
-      reason: "Stripe customer email is invalid",
-    };
-  }
-
-  const byEmail = await findAirtableMembersByPrimaryEmail(airtable, rawEmail);
-
-  if (byEmail.length > 1) {
-    console.warn(
-      JSON.stringify({
-        event: "stripe_webhook_email_conflict",
-        stripeCustomerId,
-        stripeInvoiceId,
-        stripeEventId: stripeEventId ?? null,
-        status: "email_conflict",
-        emailMasked: masked,
-        airtableRecordIds: byEmail.map((r) => r.id),
-      })
-    );
-    return {
-      ...base,
-      status: "email_conflict",
-      shouldRetry: false,
-      airtableRecordsMatched: byEmail.length,
-      duplicateAirtableRecords: true,
-      reason: "Multiple Airtable Members share this primary email",
-    };
-  }
-
-  if (byEmail.length === 1) {
-    const rec = byEmail[0];
-    const existingIdRaw = rec.fields[STRIPE_CUSTOMER_ID_FIELD];
-    const existingId =
-      existingIdRaw == null || existingIdRaw === ""
-        ? ""
-        : String(existingIdRaw).trim();
-
-    if (existingId && existingId !== stripeCustomerId) {
-      console.warn(
-        JSON.stringify({
-          event: "stripe_webhook_customer_id_conflict",
-          stripeCustomerId,
-          stripeInvoiceId,
-          stripeEventId: stripeEventId ?? null,
-          status: "stripe_customer_id_conflict",
-          airtableRecordId: rec.id,
-          emailMasked: masked,
-        })
-      );
-      return {
-        ...base,
-        status: "stripe_customer_id_conflict",
-        shouldRetry: false,
-        airtableRecordsMatched: 1,
-        reason:
-          "Airtable member already has a different Stripe Customer ID; not overwriting",
-      };
-    }
-
-    // Link blank ID, then update access via customer-id path
-    if (!existingId) {
-      if (!dryRun) {
-        await airtable.updateRecordsBatched(MEMBERS_TABLE, [
-          {
-            id: rec.id,
-            fields: { [STRIPE_CUSTOMER_ID_FIELD]: stripeCustomerId },
-          },
-        ]);
-      }
-      console.log(
-        JSON.stringify({
-          event: "stripe_webhook_linked_customer_id",
-          stripeCustomerId,
-          stripeInvoiceId,
-          stripeEventId: stripeEventId ?? null,
-          airtableRecordId: rec.id,
-          emailMasked: masked,
-          dryRun,
-        })
-      );
-    }
-
-    const sync = await updateServiceAccessUntilForCustomer({
-      airtable,
-      stripeCustomerId,
-      paidThrough,
-      stripeInvoiceId,
-      stripeEventId,
-      dryRun,
-    });
-
-    // If dry-run link didn't write ID, update by customer id may find 0 — update the record directly
-    if (dryRun && !existingId && sync.status === "no_airtable_member") {
-      return {
-        ...base,
-        status: "linked_and_updated",
-        shouldRetry: false,
-        airtableRecordsMatched: 1,
-        airtableRecordsUpdated: 0,
-        linkedStripeCustomerId: true,
-        reason: "Would link blank Stripe Customer ID and update Service access until",
-        sync,
-      };
-    }
-
-    const linked = !existingId;
-    const status: WebhookBillingStatus = linked
-      ? sync.status === "updated" || sync.status === "already_up_to_date" || sync.status === "existing_later"
-        ? "linked_and_updated"
-        : sync.status
-      : sync.status;
-
-    return {
-      ...base,
-      status,
-      shouldRetry: false,
-      airtableRecordsMatched: Math.max(sync.airtableRecordsMatched, 1),
-      airtableRecordsUpdated: sync.airtableRecordsUpdated,
-      duplicateAirtableRecords: sync.duplicateAirtableRecords,
-      linkedStripeCustomerId: linked,
-      reason: linked
-        ? "Linked blank Stripe Customer ID via unique primary email, then synced access"
-        : "Matched existing Stripe Customer ID on email record",
-      sync,
-    };
-  }
-
-  // 3) No Airtable member yet — registration may still be in flight (Make)
+  // No exact ID — do not search email, do not write Airtable
   const withinWindow = isWithinMemberRegistrationRetryWindow({
     nowMs,
     paidAtUnix: invoicePaidAtUnix,
     createdUnix: invoiceCreatedUnix,
   });
 
+  const status: WebhookBillingStatus = withinWindow
+    ? "member_registration_pending"
+    : "stripe_member_not_found";
+
   console.warn(
     JSON.stringify({
-      event: "stripe_webhook_member_registration_pending",
+      event: withinWindow
+        ? "stripe_webhook_member_registration_pending"
+        : "stripe_webhook_member_not_found",
       stripeCustomerId,
       stripeInvoiceId,
       stripeEventId: stripeEventId ?? null,
-      status: "member_registration_pending",
-      emailMasked: masked,
+      status,
       shouldRetry: withinWindow,
       retryHours: getMemberRegistrationRetryHours(),
+      note: "Exact Stripe Customer ID only; email linking is CLI-only historical repair",
     })
   );
 
   return {
     ...base,
-    status: "member_registration_pending",
+    status,
     shouldRetry: withinWindow,
     reason: withinWindow
-      ? "No Airtable member yet; within registration retry window"
-      : "No Airtable member after registration retry window; not creating from webhook",
+      ? "No Airtable member with this exact Stripe Customer ID; within registration retry window (Stripe will retry)"
+      : "No Airtable member with this exact Stripe Customer ID after retry window; not creating or email-linking from webhook",
   };
 }
