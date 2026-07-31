@@ -199,23 +199,27 @@ export function createAirtableClient(config: AirtableConfig) {
 
   async function createRecords(
     table: string,
-    records: Array<{ fields: Record<string, unknown> }>
+    records: Array<{ fields: Record<string, unknown> }>,
+    options?: { typecast?: boolean }
   ): Promise<AirtableRecord[]> {
     const url = `${baseUrl}/${encodeURIComponent(table)}`;
-    const res = await request(url, { method: "POST", body: JSON.stringify({ records }) });
+    const body: Record<string, unknown> = { records };
+    if (options?.typecast) body.typecast = true;
+    const res = await request(url, { method: "POST", body: JSON.stringify(body) });
     const data = await res.json();
     return data.records;
   }
 
   async function createRecordsBatched(
     table: string,
-    records: Array<{ fields: Record<string, unknown> }>
+    records: Array<{ fields: Record<string, unknown> }>,
+    options?: { typecast?: boolean }
   ): Promise<AirtableRecord[]> {
     const BATCH_SIZE = 10;
     const results: AirtableRecord[] = [];
     for (let i = 0; i < records.length; i += BATCH_SIZE) {
       const batch = records.slice(i, i + BATCH_SIZE);
-      const batchResults = await createRecords(table, batch);
+      const batchResults = await createRecords(table, batch, options);
       results.push(...batchResults);
     }
     return results;
@@ -223,10 +227,13 @@ export function createAirtableClient(config: AirtableConfig) {
 
   async function updateRecords(
     table: string,
-    records: Array<{ id: string; fields: Record<string, unknown> }>
+    records: Array<{ id: string; fields: Record<string, unknown> }>,
+    options?: { typecast?: boolean }
   ): Promise<AirtableRecord[]> {
     const url = `${baseUrl}/${encodeURIComponent(table)}`;
-    const res = await request(url, { method: "PATCH", body: JSON.stringify({ records }) });
+    const body: Record<string, unknown> = { records };
+    if (options?.typecast) body.typecast = true;
+    const res = await request(url, { method: "PATCH", body: JSON.stringify(body) });
     const data = await res.json();
     return data.records;
   }

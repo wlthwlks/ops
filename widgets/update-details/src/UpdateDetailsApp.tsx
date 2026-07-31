@@ -70,7 +70,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       phone: "",
       businessName: "",
       businessWebsite: "",
-      countryCode: "GB",
+      countryCode: "",
       cityCode: "",
       primaryIndustry: "",
       businessStage: "",
@@ -109,7 +109,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           phone: p.phone || "",
           businessName: p.businessName || "",
           businessWebsite: p.businessWebsite || "",
-          countryCode: p.countryCode || "GB",
+          countryCode:
+            p.countryCode ||
+            (ref as { countries?: Array<{ code: string }> }).countries?.[0]?.code ||
+            "",
           cityCode: p.cityCode || "",
           primaryIndustry: p.primaryIndustry || "",
           businessStage: p.businessStage || "",

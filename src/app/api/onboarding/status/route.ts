@@ -6,7 +6,7 @@ import {
 } from "@/lib/forms/memberstack/auth";
 import {
   findMemberByMemberstackId,
-  recordToProfileDto,
+  recordToProfileDtoResolved,
 } from "@/lib/forms/airtable/members-sync";
 import { FormsError } from "@/lib/forms/errors";
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
@@ -39,7 +39,7 @@ export async function GET(request: Request) {
     if (rows.length > 1) {
       throw new FormsError("AIRTABLE_DUPLICATE_MEMBER", "Duplicate Memberstack ID");
     }
-    const profile = recordToProfileDto(rows[0]);
+    const profile = await recordToProfileDtoResolved(rows[0]);
     const status = profile.onboardingStatus || "ACCOUNT_CREATED";
     const resumeStage = mapResumeStage(status);
     return withCors(

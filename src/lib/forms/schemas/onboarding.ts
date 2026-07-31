@@ -7,7 +7,7 @@ import {
   HELP_WANTED_OPTIONS,
   INDUSTRIES,
   REVENUE_BRACKETS,
-  findCityByCode,
+  isAirtableRecordId,
 } from "@/lib/forms/reference-data";
 
 const stageCodes = BUSINESS_STAGES.map((s) => s.code) as [string, ...string[]];
@@ -17,6 +17,14 @@ const availCodes = AVAILABILITY_OPTIONS.map((s) => s.code) as [string, ...string
 const helpCodes = HELP_WANTED_OPTIONS.map((s) => s.code) as [string, ...string[]];
 const expertiseCodes = EXPERTISE_OPTIONS.map((s) => s.code) as [string, ...string[]];
 const connectionCodes = CONNECTION_TYPES.map((s) => s.code) as [string, ...string[]];
+
+/** Airtable record ids (rec…) used as country/city codes from live catalogue. */
+const airtableId = z
+  .string()
+  .trim()
+  .min(10)
+  .max(64)
+  .refine((v) => isAirtableRecordId(v), { message: "Invalid Airtable record id" });
 
 export const accountSchema = z.object({
   firstName: z.string().trim().min(1).max(80),
@@ -30,30 +38,11 @@ export const accountSchema = z.object({
   password: z.string().min(8).max(128).optional(),
 });
 
-export const locationSchema = z
-  .object({
-    countryCode: z.string().min(2).max(8),
-    cityCode: z.string().min(2).max(32),
-    availability: z.array(z.enum(availCodes)).min(1).max(21),
-  })
-  .superRefine((val, ctx) => {
-    const city = findCityByCode(val.cityCode);
-    if (!city) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Invalid city",
-        path: ["cityCode"],
-      });
-      return;
-    }
-    if (city.countryCode !== val.countryCode) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "City does not match country",
-        path: ["cityCode"],
-      });
-    }
-  });
+export const locationSchema = z.object({
+  countryCode: airtableId,
+  cityCode: airtableId,
+  availability: z.array(z.enum(availCodes)).min(1).max(21),
+});
 
 export const businessSchema = z.object({
   primaryIndustry: z.enum(industryCodes),
@@ -124,8 +113,8 @@ export const updateProfileSchema = z.object({
   businessName: z.string().trim().max(120).optional(),
   businessWebsite: z.string().trim().max(500).optional(),
   socialUrl: z.string().trim().max(500).optional(),
-  countryCode: z.string().min(2).max(8).optional(),
-  cityCode: z.string().min(2).max(32).optional(),
+  countryCode: airtableId.optional(),
+  cityCode: airtableId.optional(),
   availability: z.array(z.enum(availCodes)).max(21).optional(),
   primaryIndustry: z.enum(industryCodes).optional(),
   businessStage: z.enum(stageCodes).optional(),

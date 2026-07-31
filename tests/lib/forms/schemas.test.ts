@@ -6,6 +6,9 @@ import {
   goalSchema,
 } from "@/lib/forms/schemas/onboarding";
 
+const COUNTRY_ID = "reccnnjiVkL28NBgV";
+const CITY_ID = "rec8cL36vOg1PpgIY";
+
 describe("onboarding schemas", () => {
   it("normalizes email to lowercase", () => {
     const r = accountSchema.parse({
@@ -16,22 +19,23 @@ describe("onboarding schemas", () => {
     expect(r.email).toBe("ada@ex.com");
   });
 
-  it("rejects city/country mismatch", () => {
+  it("rejects non-Airtable city/country ids", () => {
     const r = locationSchema.safeParse({
-      countryCode: "US",
+      countryCode: "GB",
       cityCode: "GB-LON",
       availability: ["mon_morning"],
     });
     expect(r.success).toBe(false);
   });
 
-  it("accepts valid location", () => {
+  it("accepts valid location with Airtable record ids", () => {
     const r = locationSchema.parse({
-      countryCode: "GB",
-      cityCode: "GB-LON",
+      countryCode: COUNTRY_ID,
+      cityCode: CITY_ID,
       availability: ["mon_morning", "tue_evening"],
     });
-    expect(r.cityCode).toBe("GB-LON");
+    expect(r.cityCode).toBe(CITY_ID);
+    expect(r.countryCode).toBe(COUNTRY_ID);
   });
 
   it("enforces business description length", () => {

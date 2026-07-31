@@ -33,9 +33,28 @@ Canonical MEMBERS field names used by signup/onboarding/update-details. Exact na
 - `utm_source` style keys (use `UTM Source`, …)
 - `First attribution at` (use `First attribution captured at`)
 
-## ALL CITIES / SLACK CHANNELS (reference)
+## Field types (probed on live base)
 
-- ALL CITIES: `City`, `City Code`, `Slack channels`, `intros`, `Form enabled`, …
-- SLACK CHANNELS: `group size`, `Channel status/donut`, `Slack Channel ID`, …
+| Field | Type | Write format |
+|---|---|---|
+| `Availability v2` | multi-select | `string[]` option names: `mon_morning` … `sun_evening` |
+| `Availability` | single line text | legacy label string |
+| `City` | single line text | city name e.g. `"London"` |
+| `City relation` | linked record → ALL CITIES | `[recordId]` |
+| `Timezone` | single line text | IANA e.g. `Europe/London` |
+| `Industry`, `Revenue` | single select | app codes; forms use `typecast: true` |
+| `Business stage`, `Connection type` | single select | app codes (`EXPLORING_IDEA`, …) |
+
+## Location catalogue (live)
+
+- Forms load **COUNTRIES** + **ALL CITIES** from Airtable (not a hardcoded list).
+- Form `countryCode` / `cityCode` = Airtable record ids.
+- Signup writes both `City` (text) and `City relation` (link).
+- Live ALL CITIES columns used: `City`, `Country` (link), `Slack channels`, `City Tier`.
+  (`City Code` / `Form enabled` / `Timezone` are not present on this base.)
+
+## SLACK CHANNELS
+
+- `group size`, `Channel status/donut`, `Slack Channel ID`, …
 
 Do **not** map new form fields into matching or Pinecone without an explicit ops change.

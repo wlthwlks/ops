@@ -9,6 +9,20 @@ export async function OPTIONS(request: Request) {
 }
 
 export async function GET(request: Request) {
-  const body = getOnboardingReferenceData();
-  return withCors(NextResponse.json({ success: true, ...body }), request);
+  try {
+    const body = await getOnboardingReferenceData();
+    return withCors(NextResponse.json({ success: true, ...body }), request);
+  } catch (err) {
+    return withCors(
+      NextResponse.json(
+        {
+          success: false,
+          code: "REFERENCE_DATA_UNAVAILABLE",
+          message: err instanceof Error ? err.message : "Failed to load reference data",
+        },
+        { status: 502 }
+      ),
+      request
+    );
+  }
 }

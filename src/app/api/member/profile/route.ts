@@ -6,7 +6,7 @@ import {
 } from "@/lib/forms/memberstack/auth";
 import {
   findMemberByMemberstackId,
-  recordToProfileDto,
+  recordToProfileDtoResolved,
   updateMemberProfile,
 } from "@/lib/forms/airtable/members-sync";
 import { updateProfileSchema } from "@/lib/forms/schemas/onboarding";
@@ -44,7 +44,7 @@ export async function GET(request: Request) {
     return withCors(
       NextResponse.json({
         success: true,
-        profile: recordToProfileDto(rows[0]),
+        profile: await recordToProfileDtoResolved(rows[0]),
       }),
       request
     );
@@ -119,6 +119,7 @@ export async function PATCH(request: Request) {
     if (d.lastName != null) patch[MEMBER_FIELDS.lastName] = d.lastName;
     if (d.phone != null) patch[MEMBER_FIELDS.phone] = d.phone;
     if (d.cityCode != null) patch._appCityCode = d.cityCode;
+    if (d.countryCode != null) patch._appCountryCode = d.countryCode;
     if (d.availability != null) patch[MEMBER_FIELDS.availabilityV2] = d.availability;
     if (d.primaryIndustry != null) patch[MEMBER_FIELDS.industry] = d.primaryIndustry;
     if (d.businessStage != null) patch[MEMBER_FIELDS.businessStage] = d.businessStage;
@@ -148,7 +149,7 @@ export async function PATCH(request: Request) {
       NextResponse.json({
         success: true,
         shadowed: result.shadowed,
-        profile: recordToProfileDto(result.record),
+        profile: await recordToProfileDtoResolved(result.record),
       }),
       request
     );

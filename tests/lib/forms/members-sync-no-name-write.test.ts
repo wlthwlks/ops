@@ -1,6 +1,34 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 
+const LONDON_ID = "rec8cL36vOg1PpgIY";
+const UK_ID = "reccnnjiVkL28NBgV";
+
+const TEST_CATALOG = {
+  source: "airtable" as const,
+  fetchedAt: new Date().toISOString(),
+  countries: [{ code: UK_ID, label: "United Kingdom" }],
+  cities: [
+    {
+      code: LONDON_ID,
+      label: "London",
+      countryCode: UK_ID,
+      countryLabel: "United Kingdom",
+      timezone: "Europe/London",
+      legacyCityLabel: "London",
+      airtableRecordId: LONDON_ID,
+      hasSlackChannel: true,
+      cityTier: "Anchor",
+    },
+  ],
+};
+
+async function loadMembersSync() {
+  const { setLocationCatalogForTests } = await import("@/lib/forms/reference-data");
+  setLocationCatalogForTests(TEST_CATALOG);
+  return import("@/lib/forms/airtable/members-sync");
+}
+
 describe("Airtable member writes never include computed Name", () => {
   const prevSignup = process.env.NEW_SIGNUP_WIDGET_ENABLED;
   const prevUpdate = process.env.NEW_UPDATE_DETAILS_WIDGET_ENABLED;
@@ -39,8 +67,14 @@ describe("Airtable member writes never include computed Name", () => {
     }));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.doUnmock("@/lib/integrations/airtable");
+    try {
+      const { setLocationCatalogForTests } = await import("@/lib/forms/reference-data");
+      setLocationCatalogForTests(null);
+    } catch {
+      /* ignore */
+    }
     if (prevSignup === undefined) delete process.env.NEW_SIGNUP_WIDGET_ENABLED;
     else process.env.NEW_SIGNUP_WIDGET_ENABLED = prevSignup;
     if (prevUpdate === undefined) delete process.env.NEW_UPDATE_DETAILS_WIDGET_ENABLED;
@@ -54,9 +88,7 @@ describe("Airtable member writes never include computed Name", () => {
   });
 
   it("stripComputedMemberWriteFields removes Name", async () => {
-    const { stripComputedMemberWriteFields } = await import(
-      "@/lib/forms/airtable/members-sync"
-    );
+    const { stripComputedMemberWriteFields } = await loadMembersSync();
     const stripped = stripComputedMemberWriteFields({
       [MEMBER_FIELDS.name]: "Should Go",
       Name: "Also Go",
@@ -72,9 +104,7 @@ describe("Airtable member writes never include computed Name", () => {
   });
 
   it("upsertMinimalSignupMember create payload has First/Last but not Name", async () => {
-    const { upsertMinimalSignupMember } = await import(
-      "@/lib/forms/airtable/members-sync"
-    );
+    const { upsertMinimalSignupMember } = await loadMembersSync();
     await upsertMinimalSignupMember({
       memberstackId: "mem_1",
       email: "ada@ex.com",
@@ -104,7 +134,7 @@ describe("Airtable member writes never include computed Name", () => {
       },
     ]);
 
-    const { updateMemberProfile } = await import("@/lib/forms/airtable/members-sync");
+    const { updateMemberProfile } = await loadMembersSync();
     await updateMemberProfile({
       memberstackId: "mem_1",
       patch: {
@@ -122,7 +152,7 @@ describe("Airtable member writes never include computed Name", () => {
   });
 
   it("recordToProfileDto still reads Name for display", async () => {
-    const { recordToProfileDto } = await import("@/lib/forms/airtable/members-sync");
+    const { recordToProfileDto } = await loadMembersSync();
     const dto = recordToProfileDto({
       id: "rec1",
       fields: {
@@ -137,9 +167,7 @@ describe("Airtable member writes never include computed Name", () => {
   });
 
   it("stripComputedMemberWriteFields removes nonexistent Last form source and aliases", async () => {
-    const { stripComputedMemberWriteFields } = await import(
-      "@/lib/forms/airtable/members-sync"
-    );
+    const { stripComputedMemberWriteFields } = await loadMembersSync();
     const stripped = stripComputedMemberWriteFields({
       "Last form source": "signup",
       lastFormSource: "signup",
@@ -179,16 +207,15 @@ describe("Airtable member writes never include computed Name", () => {
       },
     ]);
 
-    const { updateOnboardingStep } = await import("@/lib/forms/airtable/members-sync");
+    const { updateOnboardingStep } = await loadMembersSync();
     await updateOnboardingStep({
       memberstackId: "mem_1",
       stage: "BUSINESS",
       patch: {
-        [MEMBER_FIELDS.industry]: "Tech",
-        [MEMBER_FIELDS.revenue]: "100k-250k",
-        [MEMBER_FIELDS.businessStage]: "Growth",
+        [MEMBER_FIELDS.industry]: "TECH_SAAS",
+        [MEMBER_FIELDS.revenue]: "10K_50K",
+        [MEMBER_FIELDS.businessStage]: "EARLY_TRACTION",
         [MEMBER_FIELDS.businessDescription]: "Widgets",
-        _appCityCode: "should-be-mapped-or-dropped",
         helpWanted: ["x"],
         "Last form source": "must-not-land",
       },
@@ -196,9 +223,9 @@ describe("Airtable member writes never include computed Name", () => {
 
     expect(updateRecords).toHaveBeenCalledTimes(1);
     const fields = updateRecords.mock.calls[0][1][0].fields as Record<string, unknown>;
-    expect(fields[MEMBER_FIELDS.industry]).toBe("Tech");
-    expect(fields[MEMBER_FIELDS.revenue]).toBe("100k-250k");
-    expect(fields[MEMBER_FIELDS.businessStage]).toBe("Growth");
+    expect(fields[MEMBER_FIELDS.industry]).toBe("TECH_SAAS");
+    expect(fields[MEMBER_FIELDS.revenue]).toBe("10K_50K");
+    expect(fields[MEMBER_FIELDS.businessStage]).toBe("EARLY_TRACTION");
     expect(fields["Last form source"]).toBeUndefined();
     expect(fields["City code"]).toBeUndefined();
     expect(fields["Country code"]).toBeUndefined();
@@ -206,9 +233,11 @@ describe("Airtable member writes never include computed Name", () => {
     expect(fields._appCityCode).toBeUndefined();
     expect(fields[MEMBER_FIELDS.name]).toBeUndefined();
     expect(fields[MEMBER_FIELDS.onboardingStatus]).toBe("BUSINESS");
+    // typecast enabled for single-select Industry/Revenue
+    expect(updateRecords.mock.calls[0][2]).toEqual({ typecast: true });
   });
 
-  it("updateOnboardingStep maps availability array to multi-select + legacy", async () => {
+  it("updateOnboardingStep maps location to City text + City relation + multi-select availability", async () => {
     listRecords.mockResolvedValue([
       {
         id: "rec_existing",
@@ -216,26 +245,29 @@ describe("Airtable member writes never include computed Name", () => {
       },
     ]);
 
-    const { updateOnboardingStep } = await import("@/lib/forms/airtable/members-sync");
+    const { updateOnboardingStep } = await loadMembersSync();
     await updateOnboardingStep({
       memberstackId: "mem_1",
       stage: "LOCATION",
       patch: {
+        _appCityCode: LONDON_ID,
+        _appCountryCode: UK_ID,
         [MEMBER_FIELDS.availabilityV2]: ["mon_morning", "tue_evening"],
       },
     });
 
     const fields = updateRecords.mock.calls[0][1][0].fields as Record<string, unknown>;
-    // Airtable multi-select requires string[], not comma-joined text
+    expect(fields[MEMBER_FIELDS.city]).toBe("London");
+    expect(fields[MEMBER_FIELDS.cityRelation]).toEqual([LONDON_ID]);
+    expect(fields[MEMBER_FIELDS.timezone]).toBe("Europe/London");
     expect(fields[MEMBER_FIELDS.availabilityV2]).toEqual(["mon_morning", "tue_evening"]);
     expect(fields[MEMBER_FIELDS.availabilityLegacy]).toEqual(expect.any(String));
     expect(String(fields[MEMBER_FIELDS.availabilityLegacy])).toContain("Monday");
+    expect(fields._appCityCode).toBeUndefined();
   });
 
   it("upsert with attribution uses canonical UTM field names", async () => {
-    const { upsertMinimalSignupMember } = await import(
-      "@/lib/forms/airtable/members-sync"
-    );
+    const { upsertMinimalSignupMember } = await loadMembersSync();
     await upsertMinimalSignupMember({
       memberstackId: "mem_attr",
       email: "attr@ex.com",

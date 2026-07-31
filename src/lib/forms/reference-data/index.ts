@@ -1,7 +1,21 @@
 /**
- * Single source of truth for onboarding controlled values.
- * Labels may change; stored codes are stable.
+ * Controlled values for onboarding forms.
+ * Location (countries/cities) is loaded live from Airtable — see airtable-catalog.ts.
+ * Other option lists are stable app codes written to MEMBERS single/multi-selects.
  */
+
+export {
+  loadLocationCatalog,
+  findCatalogCityByCode,
+  findCatalogCityByRecordIds,
+  resolveMemberLocationDto,
+  isAirtableRecordId,
+  clearLocationCatalogCache,
+  setLocationCatalogForTests,
+  type CatalogCity,
+  type CatalogCountry,
+  type LocationCatalog,
+} from "./airtable-catalog";
 
 export const BUSINESS_STAGES = [
   { code: "EXPLORING_IDEA", label: "Exploring an idea" },
@@ -97,6 +111,7 @@ const DAY_LABELS: Record<(typeof DAYS)[number], string> = {
   sun: "Sunday",
 };
 
+/** Exact Airtable Availability v2 multi-select option names. */
 export const AVAILABILITY_OPTIONS = DAYS.flatMap((day) =>
   SLOTS.map((slot) => ({
     code: `${day}_${slot.key}` as const,
@@ -106,213 +121,36 @@ export const AVAILABILITY_OPTIONS = DAYS.flatMap((day) =>
   }))
 );
 
-export type CityRef = {
-  code: string;
-  label: string;
-  countryCode: string;
-  region: string;
-  timezone: string;
-  latitude: number;
-  longitude: number;
-  /** Legacy Airtable City text for backward compatibility */
-  legacyCityLabel: string;
-};
-
-export const COUNTRIES = [
-  { code: "GB", label: "United Kingdom" },
-  { code: "IE", label: "Ireland" },
-  { code: "US", label: "United States" },
-  { code: "AE", label: "United Arab Emirates" },
-  { code: "AU", label: "Australia" },
-  { code: "CA", label: "Canada" },
-  { code: "FR", label: "France" },
-  { code: "DE", label: "Germany" },
-  { code: "NL", label: "Netherlands" },
-  { code: "ES", label: "Spain" },
-  { code: "PT", label: "Portugal" },
-  { code: "OTHER", label: "Other" },
-] as const;
-
-/** Starter city catalogue — extend via Airtable later without changing codes. */
-export const CITIES: CityRef[] = [
-  {
-    code: "GB-LON",
-    label: "London",
-    countryCode: "GB",
-    region: "England",
-    timezone: "Europe/London",
-    latitude: 51.5074,
-    longitude: -0.1278,
-    legacyCityLabel: "London",
-  },
-  {
-    code: "GB-MAN",
-    label: "Manchester",
-    countryCode: "GB",
-    region: "England",
-    timezone: "Europe/London",
-    latitude: 53.4808,
-    longitude: -2.2426,
-    legacyCityLabel: "Manchester",
-  },
-  {
-    code: "GB-BIR",
-    label: "Birmingham",
-    countryCode: "GB",
-    region: "England",
-    timezone: "Europe/London",
-    latitude: 52.4862,
-    longitude: -1.8904,
-    legacyCityLabel: "Birmingham",
-  },
-  {
-    code: "GB-EDI",
-    label: "Edinburgh",
-    countryCode: "GB",
-    region: "Scotland",
-    timezone: "Europe/London",
-    latitude: 55.9533,
-    longitude: -3.1883,
-    legacyCityLabel: "Edinburgh",
-  },
-  {
-    code: "GB-BRI",
-    label: "Bristol",
-    countryCode: "GB",
-    region: "England",
-    timezone: "Europe/London",
-    latitude: 51.4545,
-    longitude: -2.5879,
-    legacyCityLabel: "Bristol",
-  },
-  {
-    code: "IE-DUB",
-    label: "Dublin",
-    countryCode: "IE",
-    region: "Leinster",
-    timezone: "Europe/Dublin",
-    latitude: 53.3498,
-    longitude: -6.2603,
-    legacyCityLabel: "Dublin",
-  },
-  {
-    code: "AE-DXB",
-    label: "Dubai",
-    countryCode: "AE",
-    region: "Dubai",
-    timezone: "Asia/Dubai",
-    latitude: 25.2048,
-    longitude: 55.2708,
-    legacyCityLabel: "Dubai",
-  },
-  {
-    code: "US-NYC",
-    label: "New York",
-    countryCode: "US",
-    region: "NY",
-    timezone: "America/New_York",
-    latitude: 40.7128,
-    longitude: -74.006,
-    legacyCityLabel: "New York",
-  },
-  {
-    code: "US-LAX",
-    label: "Los Angeles",
-    countryCode: "US",
-    region: "CA",
-    timezone: "America/Los_Angeles",
-    latitude: 34.0522,
-    longitude: -118.2437,
-    legacyCityLabel: "Los Angeles",
-  },
-  {
-    code: "AU-SYD",
-    label: "Sydney",
-    countryCode: "AU",
-    region: "NSW",
-    timezone: "Australia/Sydney",
-    latitude: -33.8688,
-    longitude: 151.2093,
-    legacyCityLabel: "Sydney",
-  },
-  {
-    code: "FR-PAR",
-    label: "Paris",
-    countryCode: "FR",
-    region: "Île-de-France",
-    timezone: "Europe/Paris",
-    latitude: 48.8566,
-    longitude: 2.3522,
-    legacyCityLabel: "Paris",
-  },
-  {
-    code: "DE-BER",
-    label: "Berlin",
-    countryCode: "DE",
-    region: "Berlin",
-    timezone: "Europe/Berlin",
-    latitude: 52.52,
-    longitude: 13.405,
-    legacyCityLabel: "Berlin",
-  },
-  {
-    code: "NL-AMS",
-    label: "Amsterdam",
-    countryCode: "NL",
-    region: "North Holland",
-    timezone: "Europe/Amsterdam",
-    latitude: 52.3676,
-    longitude: 4.9041,
-    legacyCityLabel: "Amsterdam",
-  },
-  {
-    code: "ES-MAD",
-    label: "Madrid",
-    countryCode: "ES",
-    region: "Madrid",
-    timezone: "Europe/Madrid",
-    latitude: 40.4168,
-    longitude: -3.7038,
-    legacyCityLabel: "Madrid",
-  },
-  {
-    code: "PT-LIS",
-    label: "Lisbon",
-    countryCode: "PT",
-    region: "Lisbon",
-    timezone: "Europe/Lisbon",
-    latitude: 38.7223,
-    longitude: -9.1393,
-    legacyCityLabel: "Lisbon",
-  },
-];
-
-export function citiesForCountry(countryCode: string): CityRef[] {
-  return CITIES.filter((c) => c.countryCode === countryCode);
-}
-
-export function findCityByCode(code: string): CityRef | undefined {
-  return CITIES.find((c) => c.code === code);
-}
-
-/** Legacy multi-select style string for systems that still read free-text availability. */
 export function availabilityCodesToLegacyString(codes: string[]): string {
   return codes
     .map((code) => AVAILABILITY_OPTIONS.find((o) => o.code === code)?.label || code)
     .join("; ");
 }
 
-export function getOnboardingReferenceData() {
+export async function getOnboardingReferenceData() {
+  const { loadLocationCatalog } = await import("./airtable-catalog");
+  const location = await loadLocationCatalog();
   return {
-    countries: [...COUNTRIES],
-    cities: CITIES,
+    countries: location.countries,
+    cities: location.cities.map((c) => ({
+      code: c.code,
+      label: c.label,
+      countryCode: c.countryCode,
+      timezone: c.timezone,
+      legacyCityLabel: c.legacyCityLabel,
+    })),
     industries: [...INDUSTRIES],
     businessStages: [...BUSINESS_STAGES],
     revenueBrackets: [...REVENUE_BRACKETS],
-    availabilityOptions: AVAILABILITY_OPTIONS,
+    availabilityOptions: AVAILABILITY_OPTIONS.map((o) => ({
+      code: o.code,
+      label: o.label,
+    })),
     helpWantedOptions: [...HELP_WANTED_OPTIONS],
     expertiseOptions: [...EXPERTISE_OPTIONS],
     connectionTypes: [...CONNECTION_TYPES],
-    version: 1,
+    locationSource: location.source,
+    locationFetchedAt: location.fetchedAt,
+    version: 2,
   };
 }

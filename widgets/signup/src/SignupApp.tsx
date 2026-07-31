@@ -124,7 +124,7 @@ export function SignupApp(props: { apiBase: string }) {
   });
   const locationForm = useForm<LocationForm>({
     resolver: zodResolver(locationFormSchema),
-    defaultValues: { countryCode: "GB", cityCode: "", availability: [] },
+    defaultValues: { countryCode: "", cityCode: "", availability: [] },
     mode: "onBlur",
   });
   const businessForm = useForm<BusinessForm>({
@@ -169,7 +169,11 @@ export function SignupApp(props: { apiBase: string }) {
           api(props.apiBase, "/api/reference-data/onboarding"),
         ]);
         setConfig(cfg as { membershipPriceId: string; homeUrl: string });
-        setRefData(ref as unknown as RefData);
+        const rd = ref as unknown as RefData;
+        setRefData(rd);
+        if (!locationForm.getValues("countryCode") && rd.countries?.[0]?.code) {
+          locationForm.setValue("countryCode", rd.countries[0].code);
+        }
 
         // Session resume only via documented cookie/session API when available
         const t = await tryResolveSessionAccessToken();
@@ -491,6 +495,7 @@ export function SignupApp(props: { apiBase: string }) {
                   onChange: () => locationForm.setValue("cityCode", ""),
                 })}
               >
+                <option value="">Select country</option>
                 {refData.countries.map((c) => (
                   <option key={c.code} value={c.code}>
                     {c.label}

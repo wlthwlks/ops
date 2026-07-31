@@ -30,8 +30,8 @@ describe("widget schemas", () => {
   it("requires availability", () => {
     expect(
       locationFormSchema.safeParse({
-        countryCode: "GB",
-        cityCode: "GB-LON",
+        countryCode: "reccnnjiVkL28NBgV",
+        cityCode: "rec8cL36vOg1PpgIY",
         availability: [],
       }).success
     ).toBe(false);

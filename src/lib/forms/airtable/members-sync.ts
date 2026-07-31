@@ -17,7 +17,8 @@ import {
 import { normalizeEmailStrict } from "@/lib/billing/reconcile-stripe-customers";
 import {
   availabilityCodesToLegacyString,
-  findCityByCode,
+  findCatalogCityByCode,
+  resolveMemberLocationDto,
 } from "@/lib/forms/reference-data";
 import { FormsError } from "@/lib/forms/errors";
 import { canWriteAirtableFromForms } from "@/lib/forms/feature-flags";
@@ -131,14 +132,92 @@ async function writeMembers(
     stripComputedMemberWriteFields(fields),
     mode
   );
+  // typecast: Industry/Revenue single-selects may not have options pre-created
+  const writeOpts = { typecast: true as const };
   if (mode === "create") {
-    const [created] = await airtable.createRecords(MEMBERS_TABLE, [{ fields: safe }]);
+    const [created] = await airtable.createRecords(
+      MEMBERS_TABLE,
+      [{ fields: safe }],
+      writeOpts
+    );
     return created;
   }
-  const [updated] = await airtable.updateRecords(MEMBERS_TABLE, [
-    { id: recordId!, fields: safe },
-  ]);
+  const [updated] = await airtable.updateRecords(
+    MEMBERS_TABLE,
+    [{ id: recordId!, fields: safe }],
+    writeOpts
+  );
   return updated;
+}
+
+/** Resolve form cityCode (ALL CITIES record id) → City text + City relation + Timezone. */
+async function applyLocationPatch(
+  fields: Record<string, unknown>,
+  patch: Record<string, unknown>,
+  airtable: AirtableClient
+): Promise<void> {
+  const cityCodeVal = patch._appCityCode ?? patch.cityCode;
+  if (typeof cityCodeVal !== "string" || !cityCodeVal.trim()) {
+    delete fields._appCityCode;
+    delete fields.cityCode;
+    delete fields.countryCode;
+    return;
+  }
+
+  const city = await findCatalogCityByCode(cityCodeVal.trim(), airtable);
+  if (!city) {
+    throw new FormsError(
+      "PROFILE_VALIDATION_FAILED",
+      "Unknown city — choose a city from the list",
+      { status: 400, details: { field: "cityCode", cityCode: cityCodeVal } }
+    );
+  }
+
+  const countryCodeVal = patch._appCountryCode ?? patch.countryCode;
+  if (
+    typeof countryCodeVal === "string" &&
+    countryCodeVal.trim() &&
+    countryCodeVal.trim() !== city.countryCode
+  ) {
+    throw new FormsError(
+      "PROFILE_VALIDATION_FAILED",
+      "City does not match country",
+      { status: 400, details: { field: "cityCode" } }
+    );
+  }
+
+  fields[MEMBER_FIELDS.city] = city.legacyCityLabel;
+  fields[MEMBER_FIELDS.cityRelation] = [city.airtableRecordId];
+  if (city.timezone) {
+    fields[MEMBER_FIELDS.timezone] = city.timezone;
+  }
+
+  delete fields._appCityCode;
+  delete fields._appCountryCode;
+  delete fields.cityCode;
+  delete fields.countryCode;
+}
+
+function applyAvailabilityPatch(
+  fields: Record<string, unknown>,
+  patch: Record<string, unknown>
+): void {
+  const avail = patch[MEMBER_FIELDS.availabilityV2] ?? patch.availability;
+  if (Array.isArray(avail)) {
+    const codes = (avail as string[]).map((c) => String(c).trim()).filter(Boolean);
+    // multi-select: string[] of option names (mon_morning, …)
+    fields[MEMBER_FIELDS.availabilityV2] = codes;
+    fields[MEMBER_FIELDS.availabilityLegacy] = availabilityCodesToLegacyString(codes);
+    delete fields.availability;
+  } else if (typeof avail === "string" && avail.trim()) {
+    const codes = avail
+      .split(",")
+      .map((c) => c.trim())
+      .filter(Boolean);
+    fields[MEMBER_FIELDS.availabilityV2] = codes;
+    fields[MEMBER_FIELDS.availabilityLegacy] = availabilityCodesToLegacyString(codes);
+    delete fields.availability;
+  }
 }
 
 export async function upsertMinimalSignupMember(
@@ -242,40 +321,14 @@ export async function updateOnboardingStep(
     [MEMBER_FIELDS.profileLastUpdatedAt]: new Date().toISOString(),
   };
 
-  // Location: map app cityCode → City text + Timezone (no City code / Country code on MEMBERS)
-  const cityCodeVal = input.patch._appCityCode ?? input.patch.cityCode;
-  if (typeof cityCodeVal === "string" && cityCodeVal) {
-    const city = findCityByCode(cityCodeVal);
-    if (city) {
-      fields[MEMBER_FIELDS.city] = city.legacyCityLabel;
-      fields[MEMBER_FIELDS.timezone] = city.timezone;
-    }
-    delete fields._appCityCode;
-    delete fields.cityCode;
-    delete fields.countryCode;
-    delete fields[MEMBER_FIELDS.city + " code"]; // safety
-  }
-
-  // Availability v2 is Airtable multi-select — must send string[] of option names (e.g. mon_morning).
-  const avail =
-    input.patch[MEMBER_FIELDS.availabilityV2] ??
-    input.patch.availability;
-  if (Array.isArray(avail)) {
-    const codes = (avail as string[]).map((c) => String(c).trim()).filter(Boolean);
-    fields[MEMBER_FIELDS.availabilityV2] = codes;
-    fields[MEMBER_FIELDS.availabilityLegacy] = availabilityCodesToLegacyString(codes);
-    delete fields.availability;
-  } else if (typeof avail === "string" && avail.trim()) {
-    const codes = avail.split(",").map((c) => c.trim()).filter(Boolean);
-    fields[MEMBER_FIELDS.availabilityV2] = codes;
-    fields[MEMBER_FIELDS.availabilityLegacy] = availabilityCodesToLegacyString(codes);
-    delete fields.availability;
-  }
+  await applyLocationPatch(fields, input.patch, airtable);
+  applyAvailabilityPatch(fields, input.patch);
 
   // Drop app-only keys that are not Airtable MEMBERS columns
   delete fields.countryCode;
   delete fields.cityCode;
   delete fields._appCityCode;
+  delete fields._appCountryCode;
   delete fields.helpWanted;
   delete fields.expertiseOffered;
   delete fields.businessName;
@@ -337,15 +390,16 @@ export async function updateMemberProfile(
   }
   fields[MEMBER_FIELDS.profileLastUpdatedAt] = new Date().toISOString();
 
-  const cityCodeVal = fields._appCityCode ?? fields.cityCode;
-  if (typeof cityCodeVal === "string" && cityCodeVal) {
-    const city = findCityByCode(cityCodeVal);
-    if (city) {
-      fields[MEMBER_FIELDS.city] = city.legacyCityLabel;
-      fields[MEMBER_FIELDS.timezone] = city.timezone;
-    }
-  }
+  await applyLocationPatch(fields, input.patch, airtable);
+  applyAvailabilityPatch(fields, {
+    ...input.patch,
+    [MEMBER_FIELDS.availabilityV2]:
+      fields[MEMBER_FIELDS.availabilityV2] ?? input.patch[MEMBER_FIELDS.availabilityV2],
+    availability: fields.availability ?? input.patch.availability,
+  });
+
   delete fields._appCityCode;
+  delete fields._appCountryCode;
   delete fields.cityCode;
   delete fields.countryCode;
   delete fields.helpWanted;
@@ -354,17 +408,7 @@ export async function updateMemberProfile(
   delete fields.businessWebsite;
   delete fields.primaryIndustry;
   delete fields.annualRevenue;
-
-  if (Array.isArray(fields[MEMBER_FIELDS.availabilityV2]) || Array.isArray(fields.availability)) {
-    const codes = (
-      (fields[MEMBER_FIELDS.availabilityV2] || fields.availability) as string[]
-    )
-      .map((c) => String(c).trim())
-      .filter(Boolean);
-    fields[MEMBER_FIELDS.availabilityV2] = codes;
-    fields[MEMBER_FIELDS.availabilityLegacy] = availabilityCodesToLegacyString(codes);
-    delete fields.availability;
-  }
+  delete fields.availability;
 
   const writeFields = stripComputedMemberWriteFields(fields);
 
@@ -426,6 +470,11 @@ export function recordToProfileDto(record: AirtableRecord) {
         .split(",")
         .map((s) => s.trim())
         .filter(Boolean);
+
+  const rel = f[MEMBER_FIELDS.cityRelation];
+  const relId =
+    Array.isArray(rel) && typeof rel[0] === "string" ? (rel[0] as string) : "";
+
   return {
     airtableRecordId: record.id,
     name: fieldStr(f, MEMBER_FIELDS.name),
@@ -434,7 +483,7 @@ export function recordToProfileDto(record: AirtableRecord) {
     email: fieldStr(f, MEMBER_FIELDS.email),
     phone: fieldStr(f, MEMBER_FIELDS.phone),
     city: fieldStr(f, MEMBER_FIELDS.city),
-    cityCode: "", // not stored on MEMBERS; derived client-side if needed
+    cityCode: relId,
     countryCode: "",
     membership: fieldStr(f, MEMBER_FIELDS.membership),
     payment: fieldStr(f, MEMBER_FIELDS.payment),
@@ -458,6 +507,21 @@ export function recordToProfileDto(record: AirtableRecord) {
     expertiseContext: fieldStr(f, MEMBER_FIELDS.expertiseContext),
     connectionType: fieldStr(f, MEMBER_FIELDS.connectionType),
     availability,
+  };
+}
+
+/** Async profile DTO with country resolved from live catalogue. */
+export async function recordToProfileDtoResolved(
+  record: AirtableRecord,
+  airtable: AirtableClient = getFormsAirtableClient()
+) {
+  const base = recordToProfileDto(record);
+  const loc = await resolveMemberLocationDto(record.fields, airtable);
+  return {
+    ...base,
+    city: loc.city || base.city,
+    cityCode: loc.cityCode || base.cityCode,
+    countryCode: loc.countryCode || base.countryCode,
   };
 }
 

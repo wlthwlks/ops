@@ -16,8 +16,9 @@ export const accountFormSchema = z.object({
 });
 
 export const locationFormSchema = z.object({
-  countryCode: z.string().min(2, "Country is required"),
-  cityCode: z.string().min(2, "City is required"),
+  // Airtable COUNTRIES / ALL CITIES record ids (rec…)
+  countryCode: z.string().min(10, "Country is required").max(64),
+  cityCode: z.string().min(10, "City is required").max(64),
   availability: z.array(z.string()).min(1, "Select at least one availability slot"),
 });
 

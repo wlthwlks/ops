@@ -1,5 +1,5 @@
 /**
- * Dry-run report: compare legacy Airtable City values against canonical city codes.
+ * Dry-run report: compare MEMBERS.City text / City relation against live ALL CITIES catalogue.
  * Does NOT write or migrate anything.
  *
  *   npx tsx scripts/report-city-alias-dry-run.ts
@@ -7,7 +7,7 @@
 import "dotenv/config";
 import { createAirtableClient } from "../src/lib/integrations/airtable";
 import { MEMBER_FIELDS, MEMBERS_TABLE } from "../src/lib/ops/airtable-fields";
-import { CITIES } from "../src/lib/forms/reference-data";
+import { loadLocationCatalog } from "../src/lib/forms/reference-data";
 
 function fieldStr(fields: Record<string, unknown>, key: string): string {
   const v = fields[key];
@@ -26,29 +26,6 @@ function normalizeCityLabel(s: string): string {
     .trim();
 }
 
-/** Built-in aliases for common historical labels → city code */
-const ALIASES: Record<string, string> = {
-  london: "GB-LON",
-  "greater london": "GB-LON",
-  manchester: "GB-MAN",
-  birmingham: "GB-BIR",
-  edinburgh: "GB-EDI",
-  bristol: "GB-BRI",
-  dublin: "IE-DUB",
-  dubai: "AE-DXB",
-  "new york": "US-NYC",
-  nyc: "US-NYC",
-  "los angeles": "US-LAX",
-  la: "US-LAX",
-  sydney: "AU-SYD",
-  paris: "FR-PAR",
-  berlin: "DE-BER",
-  amsterdam: "NL-AMS",
-  madrid: "ES-MAD",
-  lisbon: "PT-LIS",
-  lisboa: "PT-LIS",
-};
-
 async function main() {
   const token = process.env.AIRTABLE_GET_DATA_TOKEN;
   const baseId = process.env.AIRTABLE_BASE_ID;
@@ -57,27 +34,34 @@ async function main() {
     process.exit(1);
   }
 
+  const airtable = createAirtableClient({ apiKey: token, baseId });
+  const catalog = await loadLocationCatalog(airtable, { force: true });
+
   const byLegacy = new Map<string, string>();
-  for (const c of CITIES) {
+  for (const c of catalog.cities) {
     byLegacy.set(normalizeCityLabel(c.legacyCityLabel), c.code);
   }
-  for (const [k, v] of Object.entries(ALIASES)) {
-    byLegacy.set(k, v);
-  }
 
-  const airtable = createAirtableClient({ apiKey: token, baseId });
-  // MEMBERS has City text only (no City code column); map labels via reference data.
   const members = await airtable.listRecords(MEMBERS_TABLE, {
-    fields: [MEMBER_FIELDS.city, MEMBER_FIELDS.email],
+    fields: [MEMBER_FIELDS.city, MEMBER_FIELDS.cityRelation, MEMBER_FIELDS.email],
   });
 
   const counts = new Map<string, number>();
   let blank = 0;
-  let matched = 0;
+  let matchedByRelation = 0;
+  let matchedByName = 0;
   let unmatched = 0;
   const unmatchedSamples: string[] = [];
 
   for (const m of members) {
+    const rel = m.fields[MEMBER_FIELDS.cityRelation];
+    const relId =
+      Array.isArray(rel) && typeof rel[0] === "string" ? (rel[0] as string) : "";
+    if (relId && catalog.cities.some((c) => c.code === relId)) {
+      matchedByRelation++;
+      continue;
+    }
+
     const city = fieldStr(m.fields, MEMBER_FIELDS.city);
     if (!city) {
       blank++;
@@ -85,29 +69,30 @@ async function main() {
     }
     counts.set(city, (counts.get(city) || 0) + 1);
     const mapped = byLegacy.get(normalizeCityLabel(city));
-    if (mapped) matched++;
+    if (mapped) matchedByName++;
     else {
       unmatched++;
       if (unmatchedSamples.length < 30) unmatchedSamples.push(city);
     }
   }
-  const alreadyCoded = 0;
 
   console.log(
     JSON.stringify(
       {
         dryRun: true,
+        catalogCountries: catalog.countries.length,
+        catalogCities: catalog.cities.length,
         totalMembers: members.length,
-        alreadyHaveCityCode: alreadyCoded,
+        matchedByCityRelation: matchedByRelation,
+        matchedByCityName: matchedByName,
         blankCity: blank,
-        legacyMatchedToCode: matched,
-        legacyUnmatched: unmatched,
+        unmatchedCityText: unmatched,
         topLegacyCities: [...counts.entries()]
           .sort((a, b) => b[1] - a[1])
           .slice(0, 40)
           .map(([city, count]) => ({ city, count })),
         unmatchedSamples: [...new Set(unmatchedSamples)],
-        note: "No writes performed. Historical migration remains a separate manual operation.",
+        note: "No writes performed. Forms now write City + City relation from live ALL CITIES ids.",
       },
       null,
       2

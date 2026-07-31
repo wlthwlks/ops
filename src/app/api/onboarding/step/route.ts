@@ -5,7 +5,10 @@ import {
   extractMemberstackToken,
   verifyMemberstackToken,
 } from "@/lib/forms/memberstack/auth";
-import { updateOnboardingStep, recordToProfileDto } from "@/lib/forms/airtable/members-sync";
+import {
+  updateOnboardingStep,
+  recordToProfileDtoResolved,
+} from "@/lib/forms/airtable/members-sync";
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 import { FormsError } from "@/lib/forms/errors";
 import { enforcePublicWriteRateLimit } from "@/lib/forms/http";
@@ -55,7 +58,7 @@ export async function PATCH(request: Request) {
         success: true,
         stage,
         shadowed: result.shadowed,
-        profile: result.record ? recordToProfileDto(result.record) : null,
+        profile: result.record ? await recordToProfileDtoResolved(result.record) : null,
       }),
       request
     );
@@ -102,8 +105,9 @@ function stepDataToAirtablePatch(
       };
     case "LOCATION":
       return {
-        // App-only key consumed by members-sync → City + Timezone
+        // App-only keys → City text + City relation + Timezone
         _appCityCode: data.cityCode,
+        _appCountryCode: data.countryCode,
         [MEMBER_FIELDS.availabilityV2]: data.availability,
       };
     case "BUSINESS":
