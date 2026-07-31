@@ -94,11 +94,11 @@ function stepDataToAirtablePatch(
 ): Record<string, unknown> {
   switch (stage) {
     case "ACCOUNT":
+      // Name is a computed Airtable field — never write it
       return {
         [MEMBER_FIELDS.firstName]: data.firstName,
         [MEMBER_FIELDS.lastName]: data.lastName,
         [MEMBER_FIELDS.email]: data.email,
-        [MEMBER_FIELDS.name]: `${data.firstName || ""} ${data.lastName || ""}`.trim(),
       };
     case "LOCATION":
       return {

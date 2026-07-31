@@ -28,6 +28,20 @@ function escapeFormula(value: string): string {
   return value.replace(/'/g, "\\'");
 }
 
+/**
+ * Airtable `Name` is a computed formula field — never include it in create/update payloads.
+ * Still safe to read via MEMBER_FIELDS.name / recordToProfileDto.
+ */
+export function stripComputedMemberWriteFields(
+  fields: Record<string, unknown>
+): Record<string, unknown> {
+  const out = { ...fields };
+  delete out[MEMBER_FIELDS.name];
+  delete out.Name;
+  delete out.name;
+  return out;
+}
+
 export function getFormsAirtableClient(): AirtableClient {
   const token = process.env.AIRTABLE_GET_DATA_TOKEN;
   const baseId = process.env.AIRTABLE_BASE_ID;
@@ -121,7 +135,6 @@ export async function upsertMinimalSignupMember(
   airtable: AirtableClient = getFormsAirtableClient()
 ): Promise<{ record: AirtableRecord; created: boolean; shadowed: boolean }> {
   const email = normalizeEmailStrict(input.email);
-  const name = `${input.firstName} ${input.lastName}`.trim();
 
   let existing =
     requireUnique(
@@ -133,8 +146,8 @@ export async function upsertMinimalSignupMember(
       "email"
     );
 
-  const fields: Record<string, unknown> = {
-    [MEMBER_FIELDS.name]: name,
+  // Name is computed in Airtable — write First/Last name only
+  const fields = stripComputedMemberWriteFields({
     [MEMBER_FIELDS.email]: email,
     [MEMBER_FIELDS.memberstackId]: input.memberstackId,
     [MEMBER_FIELDS.firstName]: input.firstName,
@@ -143,7 +156,7 @@ export async function upsertMinimalSignupMember(
       ? fieldStr(existing.fields, MEMBER_FIELDS.onboardingStatus) || "ACCOUNT_CREATED"
       : "ACCOUNT_CREATED",
     [MEMBER_FIELDS.lastFormSource]: input.source || "signup_widget",
-  };
+  });
 
   if (!existing && input.attribution) {
     const a = input.attribution;
@@ -208,11 +221,11 @@ export async function updateOnboardingStep(
     });
   }
 
-  const fields: Record<string, unknown> = {
+  const fields: Record<string, unknown> = stripComputedMemberWriteFields({
     ...input.patch,
     [MEMBER_FIELDS.onboardingStatus]: input.stage,
     [MEMBER_FIELDS.lastFormSource]: "signup_widget",
-  };
+  });
 
   // Expand city code → legacy city + geo metadata fields when present
   if (typeof input.patch[MEMBER_FIELDS.cityCode] === "string") {
@@ -228,13 +241,18 @@ export async function updateOnboardingStep(
     fields[MEMBER_FIELDS.availabilityCodes] = codes.join(",");
   }
 
+  const writeFields = stripComputedMemberWriteFields(fields);
+
   if (!canWriteAirtableFromForms()) {
-    return { record: { ...existing, fields: { ...existing.fields, ...fields } }, shadowed: true };
+    return {
+      record: { ...existing, fields: { ...existing.fields, ...writeFields } },
+      shadowed: true,
+    };
   }
 
   try {
     const [updated] = await airtable.updateRecords(MEMBERS_TABLE, [
-      { id: existing.id, fields },
+      { id: existing.id, fields: writeFields },
     ]);
     return { record: updated, shadowed: false };
   } catch (e) {
@@ -291,25 +309,19 @@ export async function updateMemberProfile(
     fields[MEMBER_FIELDS.availabilityLegacy] = availabilityCodesToLegacyString(codes);
     fields[MEMBER_FIELDS.availabilityCodes] = codes.join(",");
   }
-  if (typeof fields[MEMBER_FIELDS.firstName] === "string" || typeof fields[MEMBER_FIELDS.lastName] === "string") {
-    const fn =
-      (fields[MEMBER_FIELDS.firstName] as string) ||
-      fieldStr(existing.fields, MEMBER_FIELDS.firstName);
-    const ln =
-      (fields[MEMBER_FIELDS.lastName] as string) ||
-      fieldStr(existing.fields, MEMBER_FIELDS.lastName);
-    if (fn || ln) fields[MEMBER_FIELDS.name] = `${fn} ${ln}`.trim();
-  }
+  // Do not write computed Name — Airtable formula uses First/Last name
+
+  const writeFields = stripComputedMemberWriteFields(fields);
 
   if (!canWriteAirtableFromForms()) {
     return {
-      record: { ...existing, fields: { ...existing.fields, ...fields } },
+      record: { ...existing, fields: { ...existing.fields, ...writeFields } },
       shadowed: true,
     };
   }
 
   const [updated] = await airtable.updateRecords(MEMBERS_TABLE, [
-    { id: existing.id, fields },
+    { id: existing.id, fields: writeFields },
   ]);
   return { record: updated, shadowed: false };
 }
@@ -347,7 +359,7 @@ export async function updateMemberBilling(
   }
 
   const [updated] = await airtable.updateRecords(MEMBERS_TABLE, [
-    { id: existing.id, fields: input.patch },
+    { id: existing.id, fields: stripComputedMemberWriteFields(input.patch) },
   ]);
   return { record: updated, status: "updated" };
 }
