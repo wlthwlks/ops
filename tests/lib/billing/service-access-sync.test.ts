@@ -209,7 +209,14 @@ describe("updateServiceAccessUntilForCustomer", () => {
     });
     expect(r.airtableRecordsUpdated).toBe(1);
     expect(at.updateRecordsBatched).toHaveBeenCalledWith("MEMBERS", [
-      { id: "rec1", fields: { [SERVICE_ACCESS_FIELD]: "2026-09-01T00:00:00.000Z" } },
+      {
+        id: "rec1",
+        fields: {
+          Payment: "Paid",
+          Membership: "Active",
+          [SERVICE_ACCESS_FIELD]: "2026-09-01T00:00:00.000Z",
+        },
+      },
     ]);
   });
 
@@ -243,7 +250,7 @@ describe("updateServiceAccessUntilForCustomer", () => {
     expect(at.updateRecordsBatched).not.toHaveBeenCalled();
   });
 
-  it("skips when existing is later", async () => {
+  it("does not shorten access when existing is later but still marks Paid", async () => {
     const at = mockAirtable([
       {
         id: "rec1",
@@ -257,7 +264,16 @@ describe("updateServiceAccessUntilForCustomer", () => {
       stripeInvoiceId: "in_1",
     });
     expect(r.status).toBe("existing_later");
-    expect(at.updateRecordsBatched).not.toHaveBeenCalled();
+    expect(r.airtableRecordsUpdated).toBe(0);
+    expect(at.updateRecordsBatched).toHaveBeenCalledWith("MEMBERS", [
+      {
+        id: "rec1",
+        fields: {
+          Payment: "Paid",
+          Membership: "Active",
+        },
+      },
+    ]);
   });
 
   it("escapes customer id in formula", async () => {

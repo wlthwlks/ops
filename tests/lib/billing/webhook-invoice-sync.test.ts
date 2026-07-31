@@ -259,6 +259,15 @@ describe("syncInvoicePaidToAirtable", () => {
       invoicePaidAtUnix: paidAt,
     });
     expect(r.status).toBe("existing_later");
-    expect(airtable.updateRecordsBatched).not.toHaveBeenCalled();
+    // Access date preserved, but Payment must still flip to Paid
+    expect(airtable.updateRecordsBatched).toHaveBeenCalledWith("MEMBERS", [
+      {
+        id: "rec1",
+        fields: {
+          Payment: "Paid",
+          Membership: "Active",
+        },
+      },
+    ]);
   });
 });

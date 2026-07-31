@@ -81,6 +81,10 @@ function clearPaymentQueryParam() {
   }
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 const FLOW_DOTS = ["account", "location", "business", "payment", "goal"] as const;
 
 type RefData = {
@@ -140,7 +144,8 @@ function FieldError({ message }: { message?: string }) {
 }
 
 export function SignupApp(props: { apiBase: string }) {
-  const stepper = useStepper({ linear: true, defaultStep: "account" });
+  // linear:false — resume / Stripe return must jump to goal (linear only allows +1 step)
+  const stepper = useStepper({ linear: false, defaultStep: "account" });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [refData, setRefData] = useState<RefData | null>(null);
@@ -150,6 +155,87 @@ export function SignupApp(props: { apiBase: string }) {
   } | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const attribution = useMemo(() => captureAttribution(), []);
+
+  const resolveStripeCustomerIdFromMemberstack = async (): Promise<string | undefined> => {
+    try {
+      const dom = (
+        window as unknown as {
+          $memberstackDom?: {
+            getCurrentMember?: () => Promise<unknown>;
+          };
+        }
+      ).$memberstackDom;
+      if (!dom?.getCurrentMember) return undefined;
+      const raw = await dom.getCurrentMember();
+      const root =
+        raw && typeof raw === "object" && raw !== null && "data" in raw
+          ? (raw as { data: unknown }).data
+          : raw;
+      const member =
+        root && typeof root === "object" && root !== null && "member" in root
+          ? (root as { member: unknown }).member
+          : root;
+      if (!member || typeof member !== "object") return undefined;
+      const m = member as Record<string, unknown>;
+      const candidates = [
+        m.stripeCustomerId,
+        m.stripe_customer_id,
+        m.stripeId,
+        isRecord(m.billing) ? (m.billing as Record<string, unknown>).stripeCustomerId : null,
+        isRecord(m.auth) ? (m.auth as Record<string, unknown>).stripeCustomerId : null,
+      ];
+      for (const c of candidates) {
+        if (typeof c === "string" && c.trim().startsWith("cus_")) return c.trim();
+      }
+    } catch {
+      /* optional */
+    }
+    return undefined;
+  };
+
+  const advanceAfterPayment = async (accessToken: string | null) => {
+    markPreGoalComplete(stepper);
+    if (accessToken) {
+      const stripeCustomerId = await resolveStripeCustomerIdFromMemberstack();
+      try {
+        await api(props.apiBase, "/api/onboarding/step", {
+          method: "PATCH",
+          token: accessToken,
+          body: JSON.stringify({
+            stage: "PAYMENT_CONFIRMED",
+            data: stripeCustomerId ? { stripeCustomerId } : {},
+          }),
+        });
+      } catch {
+        // Retry once — Payment=Paid must land
+        try {
+          await api(props.apiBase, "/api/onboarding/step", {
+            method: "PATCH",
+            token: accessToken,
+            body: JSON.stringify({
+              stage: "PAYMENT_CONFIRMED",
+              data: stripeCustomerId ? { stripeCustomerId } : {},
+            }),
+          });
+        } catch {
+          /* webhooks may still confirm */
+        }
+      }
+      void api(props.apiBase, "/api/onboarding/analytics", {
+        method: "POST",
+        token: accessToken,
+        body: JSON.stringify({ eventType: "PAYMENT_RETURNED" }),
+      }).catch(() => undefined);
+    }
+    try {
+      sessionStorage.setItem("wlth_payment_ok", "1");
+      sessionStorage.removeItem("wlth_checkout_pending");
+    } catch {
+      /* ignore */
+    }
+    await stepper.goTo("goal");
+    clearPaymentQueryParam();
+  };
 
   const accountForm = useForm<AccountForm>({
     resolver: zodResolver(accountFormSchema),
@@ -218,30 +304,37 @@ export function SignupApp(props: { apiBase: string }) {
         if (t) setToken(t);
 
         const params = new URLSearchParams(window.location.search);
-        const paymentReturn = (params.get("payment") || "").toLowerCase();
+        const hashParams = new URLSearchParams(
+          window.location.hash.startsWith("#")
+            ? window.location.hash.slice(1)
+            : window.location.hash
+        );
+        const paymentReturn = (
+          params.get("payment") ||
+          params.get("checkout") ||
+          hashParams.get("payment") ||
+          ""
+        ).toLowerCase();
+        // Stripe Checkout often appends session_id on success redirect
+        const stripeSessionOk = Boolean(params.get("session_id"));
+        let checkoutPending = false;
+        let paymentOkFlag = false;
+        try {
+          checkoutPending = sessionStorage.getItem("wlth_checkout_pending") === "1";
+          paymentOkFlag = sessionStorage.getItem("wlth_payment_ok") === "1";
+        } catch {
+          /* ignore */
+        }
 
-        // Stripe/Memberstack return MUST win over status resume (webhook often still PAYMENT_PENDING)
-        if (paymentReturn === "success") {
-          markPreGoalComplete(stepper);
-          if (t) {
-            try {
-              await api(props.apiBase, "/api/onboarding/step", {
-                method: "PATCH",
-                token: t,
-                body: JSON.stringify({ stage: "PAYMENT_CONFIRMED", data: {} }),
-              });
-            } catch {
-              /* webhook may still confirm; don't block UX */
-            }
-            void api(props.apiBase, "/api/onboarding/analytics", {
-              method: "POST",
-              token: t,
-              body: JSON.stringify({ eventType: "PAYMENT_RETURNED" }),
-            }).catch(() => undefined);
-          }
-          await stepper.goTo("goal");
-          clearPaymentQueryParam();
+        // Post-pay path MUST win (linear stepper + webhook lag previously left users on Payment)
+        if (paymentReturn === "success" || stripeSessionOk || paymentOkFlag) {
+          await advanceAfterPayment(t);
         } else if (paymentReturn === "cancel") {
+          try {
+            sessionStorage.removeItem("wlth_checkout_pending");
+          } catch {
+            /* ignore */
+          }
           if (t) {
             try {
               const status = await api(props.apiBase, "/api/onboarding/status", { token: t });
@@ -261,15 +354,37 @@ export function SignupApp(props: { apiBase: string }) {
         } else if (t) {
           try {
             const status = await api(props.apiBase, "/api/onboarding/status", { token: t });
-            const resume = resumeStageToStep(
-              String(status.resumeStage || ""),
-              Boolean(status.paymentConfirmed)
-            );
-            if (resume) {
-              if (resume === "goal" || resume === "help" || resume === "expertise" || resume === "connection" || resume === "done") {
-                markPreGoalComplete(stepper);
+            // Left for checkout and came back without query params — if paid or still pending after checkout, advance
+            if (
+              checkoutPending &&
+              (Boolean(status.paymentConfirmed) ||
+                String(status.onboardingStatus || "") === "PAYMENT_PENDING" ||
+                String(status.onboardingStatus || "") === "PAYMENT_CONFIRMED")
+            ) {
+              // Prefer goal when checkout was started; confirm paid if webhook already landed
+              if (Boolean(status.paymentConfirmed)) {
+                await advanceAfterPayment(t);
+              } else {
+                // Still pending server-side — still move UX forward after checkout attempt return
+                await advanceAfterPayment(t);
               }
-              await stepper.goTo(resume as never);
+            } else {
+              const resume = resumeStageToStep(
+                String(status.resumeStage || ""),
+                Boolean(status.paymentConfirmed)
+              );
+              if (resume) {
+                if (
+                  resume === "goal" ||
+                  resume === "help" ||
+                  resume === "expertise" ||
+                  resume === "connection" ||
+                  resume === "done"
+                ) {
+                  markPreGoalComplete(stepper);
+                }
+                await stepper.goTo(resume as never);
+              }
             }
           } catch {
             // Session token present but status failed — stay on account
@@ -404,6 +519,7 @@ export function SignupApp(props: { apiBase: string }) {
 
   const startCheckout = async () => {
     setError(null);
+    setLoading(true);
     const w = window as unknown as {
       $memberstackDom?: {
         purchasePlansWithCheckout?: (p: {
@@ -416,22 +532,51 @@ export function SignupApp(props: { apiBase: string }) {
     const priceId = config?.membershipPriceId;
     if (!priceId) {
       setError("Membership price is not configured (MEMBERSTACK_MEMBERSHIP_PRICE_ID).");
+      setLoading(false);
       return;
     }
     if (!w.$memberstackDom?.purchasePlansWithCheckout) {
       setError("Memberstack checkout is unavailable on this page.");
+      setLoading(false);
       return;
     }
     const base = window.location.origin + window.location.pathname;
+    try {
+      sessionStorage.setItem("wlth_checkout_pending", "1");
+    } catch {
+      /* ignore */
+    }
     await api(props.apiBase, "/api/onboarding/analytics", {
       method: "POST",
       body: JSON.stringify({ eventType: "CHECKOUT_STARTED" }),
     }).catch(() => undefined);
-    await w.$memberstackDom.purchasePlansWithCheckout({
-      priceId,
-      successUrl: `${base}?payment=success`,
-      cancelUrl: `${base}?payment=cancel`,
-    });
+    try {
+      // If checkout is embedded/modal, this promise resolves on success without a full redirect.
+      // If it full-page redirects to Stripe, mount handler + sessionStorage covers the return.
+      await w.$memberstackDom.purchasePlansWithCheckout({
+        priceId,
+        successUrl: `${base}?payment=success`,
+        cancelUrl: `${base}?payment=cancel`,
+      });
+      // Resolved without unload → payment finished in-place
+      let t = token;
+      if (!t) t = await tryResolveSessionAccessToken();
+      if (t) setToken(t);
+      await advanceAfterPayment(t);
+    } catch (e) {
+      try {
+        sessionStorage.removeItem("wlth_checkout_pending");
+      } catch {
+        /* ignore */
+      }
+      // User closed checkout / cancel — stay on payment
+      const msg = e instanceof Error ? e.message : "";
+      if (msg && !/cancel|closed|abort/i.test(msg)) {
+        setError(msg);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const finish = async () => {

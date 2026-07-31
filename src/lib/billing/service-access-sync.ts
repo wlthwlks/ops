@@ -5,6 +5,8 @@ import { MEMBERS_TABLE as AIRTABLE_MEMBERS_TABLE } from "@/lib/ops/airtable-fiel
 
 export const SERVICE_ACCESS_FIELD = "Service access until";
 export const STRIPE_CUSTOMER_ID_FIELD = "Stripe Customer ID";
+export const PAYMENT_FIELD = "Payment";
+export const MEMBERSHIP_FIELD = "Membership";
 export const MEMBERS_TABLE = AIRTABLE_MEMBERS_TABLE;
 
 /** Escape a string for use inside Airtable formula double quotes. */
@@ -266,6 +268,12 @@ export async function updateServiceAccessUntilForCustomer(input: {
       Math.floor(paidThrough.getTime() / 1000)
     );
 
+    // Always mark paid on qualifying invoice.paid (even if access date unchanged).
+    const fields: Record<string, unknown> = {
+      [PAYMENT_FIELD]: "Paid",
+      [MEMBERSHIP_FIELD]: "Active",
+    };
+
     if (comparison.invalidCurrent) {
       results.push({
         airtableRecordId: rec.id,
@@ -285,10 +293,23 @@ export async function updateServiceAccessUntilForCustomer(input: {
           status: "invalid_existing_date",
         })
       );
+      // Still write Payment/Membership — invalid date must not leave Unpaid
+      toUpdate.push({ id: rec.id, fields });
       continue;
     }
 
-    if (!comparison.shouldUpdate) {
+    if (comparison.shouldUpdate) {
+      fields[SERVICE_ACCESS_FIELD] = paidThroughIso;
+      results.push({
+        airtableRecordId: rec.id,
+        stripeCustomerId,
+        oldValue,
+        newValue: paidThroughIso,
+        status: "updated",
+        reason: comparison.reason,
+        updated: !dryRun,
+      });
+    } else {
       const status: ServiceAccessSyncStatus =
         comparison.reason === "Already up to date"
           ? "already_up_to_date"
@@ -300,33 +321,22 @@ export async function updateServiceAccessUntilForCustomer(input: {
         newValue: comparison.finalDate.toISOString(),
         status,
         reason: comparison.reason,
+        // Access date unchanged; Payment/Membership still written below
         updated: false,
       });
-      continue;
     }
 
-    results.push({
-      airtableRecordId: rec.id,
-      stripeCustomerId,
-      oldValue,
-      newValue: paidThroughIso,
-      status: "updated",
-      reason: comparison.reason,
-      updated: !dryRun,
-    });
-    toUpdate.push({
-      id: rec.id,
-      fields: { [SERVICE_ACCESS_FIELD]: paidThroughIso },
-    });
+    toUpdate.push({ id: rec.id, fields });
   }
 
   if (!dryRun && toUpdate.length > 0) {
     await airtable.updateRecordsBatched(MEMBERS_TABLE, toUpdate);
   }
 
-  const updatedCount = results.filter((r) => r.status === "updated").length;
+  const accessUpdatedCount = results.filter((r) => r.status === "updated").length;
+  const billingRowsWritten = dryRun ? 0 : toUpdate.length;
   let overall: ServiceAccessSyncStatus = "skipped";
-  if (updatedCount > 0) overall = "updated";
+  if (accessUpdatedCount > 0) overall = "updated";
   else if (results.every((r) => r.status === "already_up_to_date")) {
     overall = "already_up_to_date";
   } else if (results.some((r) => r.status === "existing_later")) {
@@ -344,7 +354,9 @@ export async function updateServiceAccessUntilForCustomer(input: {
       paidThrough: paidThroughIso,
       airtableRecordIds: records.map((r) => r.id),
       recordsMatched: records.length,
-      recordsUpdated: dryRun ? 0 : updatedCount,
+      recordsUpdated: dryRun ? 0 : accessUpdatedCount,
+      billingRowsWritten,
+      paymentMarkedPaid: !dryRun && billingRowsWritten > 0,
       dryRun,
       status: overall,
       duplicateAirtableRecords: records.length > 1,
@@ -355,7 +367,7 @@ export async function updateServiceAccessUntilForCustomer(input: {
     stripeCustomerId,
     paidThrough: paidThroughIso,
     airtableRecordsMatched: records.length,
-    airtableRecordsUpdated: dryRun ? 0 : updatedCount,
+    airtableRecordsUpdated: dryRun ? 0 : accessUpdatedCount,
     duplicateAirtableRecords: records.length > 1,
     results,
     status: overall,

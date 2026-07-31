@@ -338,7 +338,18 @@ export async function updateOnboardingStep(
 
   const writeFields = stripComputedMemberWriteFields(fields);
 
-  if (!canWriteAirtableFromForms()) {
+  // Payment confirmation must land even when other form writes are shadowed:
+  // invoice.paid only matches Stripe Customer ID (often blank until later).
+  const isPaymentConfirm =
+    input.stage === "PAYMENT_CONFIRMED" ||
+    writeFields[MEMBER_FIELDS.payment] === "Paid";
+  const allowWrite =
+    canWriteAirtableFromForms() ||
+    (isPaymentConfirm &&
+      ((process.env.MAKE_SHADOW_MODE || "").toLowerCase() !== "true" &&
+        (process.env.MAKE_SHADOW_MODE || "") !== "1"));
+
+  if (!allowWrite) {
     return {
       record: { ...existing, fields: { ...existing.fields, ...writeFields } },
       shadowed: true,

@@ -89,7 +89,15 @@ export const onboardingStepSchema = z.discriminatedUnion("stage", [
   z.object({ stage: z.literal("LOCATION"), data: locationSchema }),
   z.object({ stage: z.literal("BUSINESS"), data: businessSchema }),
   z.object({ stage: z.literal("PAYMENT_PENDING"), data: z.object({}).optional() }),
-  z.object({ stage: z.literal("PAYMENT_CONFIRMED"), data: z.object({}).optional() }),
+  z.object({
+    stage: z.literal("PAYMENT_CONFIRMED"),
+    data: z
+      .object({
+        /** Optional Stripe cus_… from Memberstack after checkout */
+        stripeCustomerId: z.string().trim().max(80).optional(),
+      })
+      .optional(),
+  }),
   z.object({ stage: z.literal("GOAL"), data: goalSchema }),
   z.object({ stage: z.literal("HELP_WANTED"), data: helpWantedSchema }),
   z.object({ stage: z.literal("EXPERTISE"), data: expertiseSchema }),

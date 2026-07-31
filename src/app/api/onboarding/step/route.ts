@@ -119,13 +119,20 @@ function stepDataToAirtablePatch(
       };
     case "PAYMENT_PENDING":
       return {};
-    case "PAYMENT_CONFIRMED":
-      return {
+    case "PAYMENT_CONFIRMED": {
+      const patch: Record<string, unknown> = {
         [MEMBER_FIELDS.onboardingStatus]: "PAYMENT_CONFIRMED",
-        // Soft mark paid on return from checkout (webhooks may lag)
+        // Authoritative client-side paid mark (webhooks may lag or lack Stripe Customer ID)
         [MEMBER_FIELDS.payment]: "Paid",
         [MEMBER_FIELDS.membership]: "Active",
       };
+      const cus =
+        typeof data.stripeCustomerId === "string" ? data.stripeCustomerId.trim() : "";
+      if (cus.startsWith("cus_")) {
+        patch[MEMBER_FIELDS.stripeCustomerId] = cus;
+      }
+      return patch;
+    }
     case "GOAL":
       return {
         [MEMBER_FIELDS.ninetyDayGoal]: data.ninetyDayGoal,
