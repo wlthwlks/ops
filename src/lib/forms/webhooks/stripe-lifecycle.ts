@@ -179,6 +179,9 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
         patch: {
           [MEMBER_FIELDS.stripeCustomerId]: cus,
           ...(sub ? { [MEMBER_FIELDS.stripeSubscriptionId]: sub } : {}),
+          [MEMBER_FIELDS.payment]: "Paid",
+          [MEMBER_FIELDS.membership]: "Active",
+          [MEMBER_FIELDS.onboardingStatus]: "PAYMENT_CONFIRMED",
         },
       });
       if (result.status === "STRIPE_MEMBER_NOT_FOUND") {

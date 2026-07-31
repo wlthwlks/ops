@@ -119,6 +119,13 @@ function stepDataToAirtablePatch(
       };
     case "PAYMENT_PENDING":
       return {};
+    case "PAYMENT_CONFIRMED":
+      return {
+        [MEMBER_FIELDS.onboardingStatus]: "PAYMENT_CONFIRMED",
+        // Soft mark paid on return from checkout (webhooks may lag)
+        [MEMBER_FIELDS.payment]: "Paid",
+        [MEMBER_FIELDS.membership]: "Active",
+      };
     case "GOAL":
       return {
         [MEMBER_FIELDS.ninetyDayGoal]: data.ninetyDayGoal,

@@ -40,12 +40,46 @@ const STEP_LABELS: Record<string, string> = {
   business: "Business",
   payment: "Payment",
   success: "You’re in",
-  goal: "90-day goal",
+  goal: "Matching",
   help: "Help wanted",
   expertise: "Expertise",
   connection: "Connection",
   done: "Done",
 };
+
+/** Map Airtable / status resume stages → widget step ids */
+function resumeStageToStep(resumeStage: string, paymentConfirmed?: boolean): string | null {
+  const map: Record<string, string> = {
+    LOCATION: "location",
+    BUSINESS: "business",
+    PAYMENT_PENDING: paymentConfirmed ? "goal" : "payment",
+    PAYMENT_CONFIRMED: "goal",
+    GOAL: "goal",
+    HELP_WANTED: "help",
+    EXPERTISE: "expertise",
+    CONNECTION: "connection",
+    COMPLETE: "done",
+  };
+  return map[resumeStage] || null;
+}
+
+function markPreGoalComplete(stepper: { setComplete: (id: never) => void }) {
+  for (const id of ["account", "location", "business", "payment", "success"] as const) {
+    stepper.setComplete(id as never);
+  }
+}
+
+function clearPaymentQueryParam() {
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("payment")) return;
+    url.searchParams.delete("payment");
+    const qs = url.searchParams.toString();
+    window.history.replaceState({}, "", url.pathname + (qs ? `?${qs}` : "") + url.hash);
+  } catch {
+    /* ignore */
+  }
+}
 
 const FLOW_DOTS = ["account", "location", "business", "payment", "goal"] as const;
 
@@ -181,31 +215,67 @@ export function SignupApp(props: { apiBase: string }) {
           tokenFound: Boolean(t),
           tokenType: t ? typeof t : "none",
         });
-        if (t) {
-          setToken(t);
+        if (t) setToken(t);
+
+        const params = new URLSearchParams(window.location.search);
+        const paymentReturn = (params.get("payment") || "").toLowerCase();
+
+        // Stripe/Memberstack return MUST win over status resume (webhook often still PAYMENT_PENDING)
+        if (paymentReturn === "success") {
+          markPreGoalComplete(stepper);
+          if (t) {
+            try {
+              await api(props.apiBase, "/api/onboarding/step", {
+                method: "PATCH",
+                token: t,
+                body: JSON.stringify({ stage: "PAYMENT_CONFIRMED", data: {} }),
+              });
+            } catch {
+              /* webhook may still confirm; don't block UX */
+            }
+            void api(props.apiBase, "/api/onboarding/analytics", {
+              method: "POST",
+              token: t,
+              body: JSON.stringify({ eventType: "PAYMENT_RETURNED" }),
+            }).catch(() => undefined);
+          }
+          await stepper.goTo("goal");
+          clearPaymentQueryParam();
+        } else if (paymentReturn === "cancel") {
+          if (t) {
+            try {
+              const status = await api(props.apiBase, "/api/onboarding/status", { token: t });
+              const resume = resumeStageToStep(
+                String(status.resumeStage || ""),
+                Boolean(status.paymentConfirmed)
+              );
+              if (resume && resume !== "account") await stepper.goTo(resume as never);
+              else await stepper.goTo("payment");
+            } catch {
+              await stepper.goTo("payment");
+            }
+          } else {
+            await stepper.goTo("payment");
+          }
+          clearPaymentQueryParam();
+        } else if (t) {
           try {
             const status = await api(props.apiBase, "/api/onboarding/status", { token: t });
-            const map: Record<string, string> = {
-              LOCATION: "location",
-              BUSINESS: "business",
-              PAYMENT_PENDING: "payment",
-              PAYMENT_CONFIRMED: "success",
-              GOAL: "goal",
-              HELP_WANTED: "help",
-              EXPERTISE: "expertise",
-              CONNECTION: "connection",
-              COMPLETE: "done",
-            };
-            const resume = map[String(status.resumeStage || "")];
-            if (resume) await stepper.goTo(resume as never);
+            const resume = resumeStageToStep(
+              String(status.resumeStage || ""),
+              Boolean(status.paymentConfirmed)
+            );
+            if (resume) {
+              if (resume === "goal" || resume === "help" || resume === "expertise" || resume === "connection" || resume === "done") {
+                markPreGoalComplete(stepper);
+              }
+              await stepper.goTo(resume as never);
+            }
           } catch {
             // Session token present but status failed — stay on account
           }
         }
 
-        const params = new URLSearchParams(window.location.search);
-        if (params.get("payment") === "success") await stepper.goTo("success");
-        if (params.get("payment") === "cancel") await stepper.goTo("payment");
         void api(props.apiBase, "/api/onboarding/analytics", {
           method: "POST",
           body: JSON.stringify({
@@ -268,20 +338,21 @@ export function SignupApp(props: { apiBase: string }) {
         const status = await api(props.apiBase, "/api/onboarding/status", {
           token: auth.accessToken,
         });
-        const map: Record<string, string> = {
-          LOCATION: "location",
-          BUSINESS: "business",
-          PAYMENT_PENDING: "payment",
-          PAYMENT_CONFIRMED: "success",
-          GOAL: "goal",
-          HELP_WANTED: "help",
-          EXPERTISE: "expertise",
-          CONNECTION: "connection",
-          COMPLETE: "done",
-        };
-        const resume = map[String(status.resumeStage || "")];
+        const resume = resumeStageToStep(
+          String(status.resumeStage || ""),
+          Boolean(status.paymentConfirmed)
+        );
         stepper.setComplete("account");
         if (resume && resume !== "account") {
+          if (
+            resume === "goal" ||
+            resume === "help" ||
+            resume === "expertise" ||
+            resume === "connection" ||
+            resume === "done"
+          ) {
+            markPreGoalComplete(stepper);
+          }
           await stepper.goTo(resume as never);
         } else {
           await stepper.next();
@@ -638,17 +709,14 @@ export function SignupApp(props: { apiBase: string }) {
         {stepper.is("success") && (
           <>
             <h1>You’re in!</h1>
-            <p>
-              Complete your profile to get better matches later. Matching behaviour is
-              unchanged in this release.
-            </p>
+            <p>Next: a few questions so we can improve your matching results.</p>
             <div className="wlth-actions">
               <button
                 type="button"
                 className="wlth-btn-primary"
                 onClick={() => void stepper.goTo("goal")}
               >
-                Complete your profile to get better matches
+                Improve your matching results
               </button>
               <button
                 type="button"
@@ -674,10 +742,13 @@ export function SignupApp(props: { apiBase: string }) {
             })}
             noValidate
           >
-            <h2>90-day goal</h2>
+            <h2>Improve your matching results!</h2>
+            <p className="wlth-muted">
+              Tell us what you’re focused on so we can introduce you to the right people.
+            </p>
             <div className="wlth-field">
               <label htmlFor="goal">
-                What is your most important business goal for the next 90 days?
+                What’s the most important thing you want help with right now?
               </label>
               <textarea id="goal" rows={4} {...goalForm.register("ninetyDayGoal")} />
               <FieldError message={goalForm.formState.errors.ninetyDayGoal?.message as string} />

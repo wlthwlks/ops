@@ -41,7 +41,13 @@ export async function GET(request: Request) {
     }
     const profile = await recordToProfileDtoResolved(rows[0]);
     const status = profile.onboardingStatus || "ACCOUNT_CREATED";
-    const resumeStage = mapResumeStage(status);
+    const paymentConfirmed =
+      status === "PAYMENT_CONFIRMED" ||
+      status === "COMPLETE" ||
+      ["GOAL", "HELP_WANTED", "EXPERTISE", "CONNECTION"].includes(status) ||
+      profile.payment.toLowerCase() === "paid";
+    // After checkout, never send members back to Payment — advance to post-pay profile.
+    const resumeStage = mapResumeStage(status, paymentConfirmed);
     return withCors(
       NextResponse.json({
         success: true,
@@ -50,11 +56,7 @@ export async function GET(request: Request) {
         airtableRecordId: profile.airtableRecordId,
         onboardingStatus: status,
         resumeStage,
-        paymentConfirmed:
-          status === "PAYMENT_CONFIRMED" ||
-          status === "COMPLETE" ||
-          ["GOAL", "HELP_WANTED", "EXPERTISE", "CONNECTION"].includes(status) ||
-          (profile.payment === "Paid" && profile.membership === "Active"),
+        paymentConfirmed,
         profile,
       }),
       request
@@ -83,7 +85,7 @@ export async function GET(request: Request) {
   }
 }
 
-function mapResumeStage(status: string): string {
+function mapResumeStage(status: string, paymentConfirmed: boolean): string {
   const order = [
     "ACCOUNT_CREATED",
     "LOCATION",
@@ -98,6 +100,14 @@ function mapResumeStage(status: string): string {
   ];
   if (status === "ACCOUNT_CREATED") return "LOCATION";
   if (status === "COMPLETE") return "COMPLETE";
+  // Paid (or checkout return) → continue profile at GOAL, not Payment / success interstitial
+  if (
+    paymentConfirmed &&
+    (status === "PAYMENT_PENDING" || status === "PAYMENT_CONFIRMED" || status === "BUSINESS")
+  ) {
+    return "GOAL";
+  }
+  if (status === "PAYMENT_CONFIRMED") return "GOAL";
   if (order.includes(status)) return status;
   return "ACCOUNT";
 }
