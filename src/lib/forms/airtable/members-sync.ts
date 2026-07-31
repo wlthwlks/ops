@@ -1,12 +1,17 @@
 /**
  * Centralized Airtable member sync for forms/webhooks.
- * Does NOT touch matching, introductions, or Pinecone fields.
- * Stripe webhooks never create members and never use email fallback.
+ * Field names must match canonical MEMBERS schema exactly.
+ * NEVER writes computed Name. NEVER writes nonexistent columns.
  */
-import { createAirtableClient, type AirtableClient, type AirtableRecord } from "@/lib/integrations/airtable";
+import {
+  createAirtableClient,
+  type AirtableClient,
+  type AirtableRecord,
+} from "@/lib/integrations/airtable";
 import {
   MEMBER_FIELDS,
   MEMBERS_TABLE,
+  sanitizeMembersWriteFields,
   toAirtableSchemaError,
 } from "@/lib/ops/airtable-fields";
 import { normalizeEmailStrict } from "@/lib/billing/reconcile-stripe-customers";
@@ -16,6 +21,7 @@ import {
 } from "@/lib/forms/reference-data";
 import { FormsError } from "@/lib/forms/errors";
 import { canWriteAirtableFromForms } from "@/lib/forms/feature-flags";
+import { stripComputedMemberWriteFields } from "@/lib/forms/airtable/write-guards";
 
 function fieldStr(fields: Record<string, unknown>, key: string): string {
   const v = fields[key];
@@ -26,20 +32,6 @@ function fieldStr(fields: Record<string, unknown>, key: string): string {
 
 function escapeFormula(value: string): string {
   return value.replace(/'/g, "\\'");
-}
-
-/**
- * Airtable `Name` is a computed formula field — never include it in create/update payloads.
- * Still safe to read via MEMBER_FIELDS.name / recordToProfileDto.
- */
-export function stripComputedMemberWriteFields(
-  fields: Record<string, unknown>
-): Record<string, unknown> {
-  const out = { ...fields };
-  delete out[MEMBER_FIELDS.name];
-  delete out.Name;
-  delete out.name;
-  return out;
 }
 
 export function getFormsAirtableClient(): AirtableClient {
@@ -68,11 +60,10 @@ export async function findMemberByMemberstackId(
   } catch (e) {
     const schema = toAirtableSchemaError(MEMBERS_TABLE, e);
     if (schema) {
-      throw new FormsError(
-        "AIRTABLE_VALIDATION_FAILED",
-        schema.message,
-        { status: 422, details: { field: schema.field } }
-      );
+      throw new FormsError("AIRTABLE_VALIDATION_FAILED", schema.message, {
+        status: 422,
+        details: { field: schema.field },
+      });
     }
     throw e;
   }
@@ -130,13 +121,33 @@ export type MinimalSignupInput = {
   source?: string;
 };
 
+async function writeMembers(
+  airtable: AirtableClient,
+  mode: "create" | "update",
+  fields: Record<string, unknown>,
+  recordId?: string
+): Promise<AirtableRecord> {
+  const safe = sanitizeMembersWriteFields(
+    stripComputedMemberWriteFields(fields),
+    mode
+  );
+  if (mode === "create") {
+    const [created] = await airtable.createRecords(MEMBERS_TABLE, [{ fields: safe }]);
+    return created;
+  }
+  const [updated] = await airtable.updateRecords(MEMBERS_TABLE, [
+    { id: recordId!, fields: safe },
+  ]);
+  return updated;
+}
+
 export async function upsertMinimalSignupMember(
   input: MinimalSignupInput,
   airtable: AirtableClient = getFormsAirtableClient()
 ): Promise<{ record: AirtableRecord; created: boolean; shadowed: boolean }> {
   const email = normalizeEmailStrict(input.email);
 
-  let existing =
+  const existing =
     requireUnique(
       await findMemberByMemberstackId(input.memberstackId, airtable),
       "Memberstack ID"
@@ -146,8 +157,7 @@ export async function upsertMinimalSignupMember(
       "email"
     );
 
-  // Name is computed in Airtable — write First/Last name only
-  const fields = stripComputedMemberWriteFields({
+  const fields: Record<string, unknown> = {
     [MEMBER_FIELDS.email]: email,
     [MEMBER_FIELDS.memberstackId]: input.memberstackId,
     [MEMBER_FIELDS.firstName]: input.firstName,
@@ -155,9 +165,10 @@ export async function upsertMinimalSignupMember(
     [MEMBER_FIELDS.onboardingStatus]: existing
       ? fieldStr(existing.fields, MEMBER_FIELDS.onboardingStatus) || "ACCOUNT_CREATED"
       : "ACCOUNT_CREATED",
-    [MEMBER_FIELDS.lastFormSource]: input.source || "signup_widget",
-  });
+    [MEMBER_FIELDS.lastCompletedSignupStep]: "ACCOUNT",
+  };
 
+  // First-touch attribution only on create — exact canonical UTM field names
   if (!existing && input.attribution) {
     const a = input.attribution;
     if (a.utm_source) fields[MEMBER_FIELDS.utmSource] = a.utm_source;
@@ -165,6 +176,8 @@ export async function upsertMinimalSignupMember(
     if (a.utm_campaign) fields[MEMBER_FIELDS.utmCampaign] = a.utm_campaign;
     if (a.utm_content) fields[MEMBER_FIELDS.utmContent] = a.utm_content;
     if (a.utm_term) fields[MEMBER_FIELDS.utmTerm] = a.utm_term;
+    if (a.gclid) fields[MEMBER_FIELDS.googleClickId] = a.gclid;
+    if (a.fbclid) fields[MEMBER_FIELDS.facebookClickId] = a.fbclid;
     if (a.initialLandingPage) fields[MEMBER_FIELDS.initialLandingPage] = a.initialLandingPage;
     if (a.initialReferrer) fields[MEMBER_FIELDS.initialReferrer] = a.initialReferrer;
     if (a.firstAttributionAt) fields[MEMBER_FIELDS.firstAttributionAt] = a.firstAttributionAt;
@@ -180,14 +193,15 @@ export async function upsertMinimalSignupMember(
 
   try {
     if (existing) {
-      const [updated] = await airtable.updateRecords(MEMBERS_TABLE, [
-        { id: existing.id, fields },
-      ]);
+      const updated = await writeMembers(airtable, "update", fields, existing.id);
       return { record: updated, created: false, shadowed: false };
     }
-    const [created] = await airtable.createRecords(MEMBERS_TABLE, [{ fields }]);
+    const created = await writeMembers(airtable, "create", fields);
     return { record: created, created: true, shadowed: false };
   } catch (e) {
+    if (e instanceof Error && e.message.includes("Unsupported Airtable field")) {
+      throw new FormsError("AIRTABLE_VALIDATION_FAILED", e.message, { status: 422 });
+    }
     const schema = toAirtableSchemaError(MEMBERS_TABLE, e);
     if (schema) {
       throw new FormsError("AIRTABLE_VALIDATION_FAILED", schema.message, {
@@ -221,25 +235,49 @@ export async function updateOnboardingStep(
     });
   }
 
-  const fields: Record<string, unknown> = stripComputedMemberWriteFields({
+  const fields: Record<string, unknown> = {
     ...input.patch,
     [MEMBER_FIELDS.onboardingStatus]: input.stage,
-    [MEMBER_FIELDS.lastFormSource]: "signup_widget",
-  });
+    [MEMBER_FIELDS.lastCompletedSignupStep]: input.stage,
+    [MEMBER_FIELDS.profileLastUpdatedAt]: new Date().toISOString(),
+  };
 
-  // Expand city code → legacy city + geo metadata fields when present
-  if (typeof input.patch[MEMBER_FIELDS.cityCode] === "string") {
-    const city = findCityByCode(String(input.patch[MEMBER_FIELDS.cityCode]));
+  // Location: map app cityCode → City text + Timezone (no City code / Country code on MEMBERS)
+  const cityCodeVal = input.patch._appCityCode ?? input.patch.cityCode;
+  if (typeof cityCodeVal === "string" && cityCodeVal) {
+    const city = findCityByCode(cityCodeVal);
     if (city) {
       fields[MEMBER_FIELDS.city] = city.legacyCityLabel;
-      fields[MEMBER_FIELDS.countryCode] = city.countryCode;
+      fields[MEMBER_FIELDS.timezone] = city.timezone;
     }
+    delete fields._appCityCode;
+    delete fields.cityCode;
+    delete fields.countryCode;
+    delete fields[MEMBER_FIELDS.city + " code"]; // safety
   }
-  if (Array.isArray(input.patch[MEMBER_FIELDS.availabilityCodes])) {
-    const codes = input.patch[MEMBER_FIELDS.availabilityCodes] as string[];
+
+  // Availability codes → Availability v2 + legacy Availability string
+  // Note: availabilityCodes is an alias of availabilityV2 ("Availability v2") — do not delete by alias after write.
+  const avail =
+    input.patch[MEMBER_FIELDS.availabilityV2] ??
+    input.patch.availability;
+  if (Array.isArray(avail)) {
+    const codes = avail as string[];
+    fields[MEMBER_FIELDS.availabilityV2] = codes.join(",");
     fields[MEMBER_FIELDS.availabilityLegacy] = availabilityCodesToLegacyString(codes);
-    fields[MEMBER_FIELDS.availabilityCodes] = codes.join(",");
+    delete fields.availability;
   }
+
+  // Drop app-only keys that are not Airtable MEMBERS columns
+  delete fields.countryCode;
+  delete fields.cityCode;
+  delete fields._appCityCode;
+  delete fields.helpWanted;
+  delete fields.expertiseOffered;
+  delete fields.businessName;
+  delete fields.businessWebsite;
+  delete fields.primaryIndustry;
+  delete fields.annualRevenue;
 
   const writeFields = stripComputedMemberWriteFields(fields);
 
@@ -251,16 +289,15 @@ export async function updateOnboardingStep(
   }
 
   try {
-    const [updated] = await airtable.updateRecords(MEMBERS_TABLE, [
-      { id: existing.id, fields: writeFields },
-    ]);
+    const updated = await writeMembers(airtable, "update", writeFields, existing.id);
     return { record: updated, shadowed: false };
   } catch (e) {
+    if (e instanceof Error && e.message.includes("Unsupported Airtable field")) {
+      throw new FormsError("AIRTABLE_VALIDATION_FAILED", e.message, { status: 422 });
+    }
     const schema = toAirtableSchemaError(MEMBERS_TABLE, e);
     if (schema) {
-      // Retry without unknown optional fields
-      const msg = schema.message;
-      throw new FormsError("AIRTABLE_VALIDATION_FAILED", msg, {
+      throw new FormsError("AIRTABLE_VALIDATION_FAILED", schema.message, {
         status: 422,
         details: { field: schema.field },
       });
@@ -288,28 +325,38 @@ export async function updateMemberProfile(
     throw new FormsError("AIRTABLE_MEMBER_NOT_FOUND", "Member not found", { status: 404 });
   }
 
-  // Never blank out with empty strings for profile sync from MS
   const fields: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(input.patch)) {
     if (v === undefined || v === null) continue;
     if (typeof v === "string" && v.trim() === "") continue;
     fields[k] = v;
   }
-  fields[MEMBER_FIELDS.lastFormSource] = "update_details_widget";
+  fields[MEMBER_FIELDS.profileLastUpdatedAt] = new Date().toISOString();
 
-  if (typeof fields[MEMBER_FIELDS.cityCode] === "string") {
-    const city = findCityByCode(String(fields[MEMBER_FIELDS.cityCode]));
+  const cityCodeVal = fields._appCityCode ?? fields.cityCode;
+  if (typeof cityCodeVal === "string" && cityCodeVal) {
+    const city = findCityByCode(cityCodeVal);
     if (city) {
       fields[MEMBER_FIELDS.city] = city.legacyCityLabel;
-      fields[MEMBER_FIELDS.countryCode] = city.countryCode;
+      fields[MEMBER_FIELDS.timezone] = city.timezone;
     }
   }
-  if (Array.isArray(fields[MEMBER_FIELDS.availabilityCodes])) {
-    const codes = fields[MEMBER_FIELDS.availabilityCodes] as string[];
+  delete fields._appCityCode;
+  delete fields.cityCode;
+  delete fields.countryCode;
+  delete fields.helpWanted;
+  delete fields.expertiseOffered;
+  delete fields.businessName;
+  delete fields.businessWebsite;
+  delete fields.primaryIndustry;
+  delete fields.annualRevenue;
+
+  if (Array.isArray(fields[MEMBER_FIELDS.availabilityV2]) || Array.isArray(fields.availability)) {
+    const codes = (fields[MEMBER_FIELDS.availabilityV2] || fields.availability) as string[];
+    fields[MEMBER_FIELDS.availabilityV2] = codes.join(",");
     fields[MEMBER_FIELDS.availabilityLegacy] = availabilityCodesToLegacyString(codes);
-    fields[MEMBER_FIELDS.availabilityCodes] = codes.join(",");
+    delete fields.availability;
   }
-  // Do not write computed Name — Airtable formula uses First/Last name
 
   const writeFields = stripComputedMemberWriteFields(fields);
 
@@ -320,9 +367,7 @@ export async function updateMemberProfile(
     };
   }
 
-  const [updated] = await airtable.updateRecords(MEMBERS_TABLE, [
-    { id: existing.id, fields: writeFields },
-  ]);
+  const updated = await writeMembers(airtable, "update", writeFields, existing.id);
   return { record: updated, shadowed: false };
 }
 
@@ -341,14 +386,11 @@ export async function updateMemberBilling(
   if (matches.length > 1) {
     throw new FormsError(
       "STRIPE_CUSTOMER_CONFLICT",
-      "Stripe Customer ID assigned to multiple Airtable members",
+      "Stripe Customer ID assigned to multiple Airtable records",
       { status: 409, details: { ids: matches.map((m) => m.id) } }
     );
   }
   const existing = matches[0];
-  if (!canWriteAirtableFromForms() && !process.env.NEW_STRIPE_WEBHOOKS_ENABLED) {
-    // Billing via expanded webhooks uses its own flag; legacy invoice.paid uses separate path
-  }
   const writeEnabled =
     canWriteAirtableFromForms() ||
     (process.env.NEW_STRIPE_WEBHOOKS_ENABLED || "").toLowerCase() === "true" ||
@@ -358,14 +400,18 @@ export async function updateMemberBilling(
     return { record: existing, status: "shadowed" };
   }
 
-  const [updated] = await airtable.updateRecords(MEMBERS_TABLE, [
-    { id: existing.id, fields: stripComputedMemberWriteFields(input.patch) },
-  ]);
+  const updated = await writeMembers(
+    airtable,
+    "update",
+    stripComputedMemberWriteFields(input.patch),
+    existing.id
+  );
   return { record: updated, status: "updated" };
 }
 
 export function recordToProfileDto(record: AirtableRecord) {
   const f = record.fields;
+  const availV2 = fieldStr(f, MEMBER_FIELDS.availabilityV2);
   return {
     airtableRecordId: record.id,
     name: fieldStr(f, MEMBER_FIELDS.name),
@@ -374,8 +420,8 @@ export function recordToProfileDto(record: AirtableRecord) {
     email: fieldStr(f, MEMBER_FIELDS.email),
     phone: fieldStr(f, MEMBER_FIELDS.phone),
     city: fieldStr(f, MEMBER_FIELDS.city),
-    cityCode: fieldStr(f, MEMBER_FIELDS.cityCode),
-    countryCode: fieldStr(f, MEMBER_FIELDS.countryCode),
+    cityCode: "", // not stored on MEMBERS; derived client-side if needed
+    countryCode: "",
     membership: fieldStr(f, MEMBER_FIELDS.membership),
     payment: fieldStr(f, MEMBER_FIELDS.payment),
     serviceAccessUntil: fieldStr(f, MEMBER_FIELDS.serviceAccessUntil),
@@ -385,27 +431,23 @@ export function recordToProfileDto(record: AirtableRecord) {
     stripeCustomerId: fieldStr(f, MEMBER_FIELDS.stripeCustomerId),
     memberstackId: fieldStr(f, MEMBER_FIELDS.memberstackId),
     onboardingStatus: fieldStr(f, MEMBER_FIELDS.onboardingStatus),
-    businessName: fieldStr(f, MEMBER_FIELDS.businessName),
-    businessWebsite: fieldStr(f, MEMBER_FIELDS.businessWebsite),
-    primaryIndustry: fieldStr(f, MEMBER_FIELDS.primaryIndustry),
+    businessName: "",
+    businessWebsite: "",
+    primaryIndustry: fieldStr(f, MEMBER_FIELDS.industry),
     businessStage: fieldStr(f, MEMBER_FIELDS.businessStage),
-    annualRevenue: fieldStr(f, MEMBER_FIELDS.annualRevenue),
+    annualRevenue: fieldStr(f, MEMBER_FIELDS.revenue),
     businessDescription: fieldStr(f, MEMBER_FIELDS.businessDescription),
     ninetyDayGoal: fieldStr(f, MEMBER_FIELDS.ninetyDayGoal),
-    helpWanted: fieldStr(f, MEMBER_FIELDS.helpWanted)
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
+    helpWanted: [] as string[],
     helpWantedContext: fieldStr(f, MEMBER_FIELDS.helpWantedContext),
-    expertiseOffered: fieldStr(f, MEMBER_FIELDS.expertiseOffered)
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
+    expertiseOffered: [] as string[],
     expertiseContext: fieldStr(f, MEMBER_FIELDS.expertiseContext),
     connectionType: fieldStr(f, MEMBER_FIELDS.connectionType),
-    availability: fieldStr(f, MEMBER_FIELDS.availabilityCodes)
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean),
+    availability: availV2
+      ? availV2.split(",").map((s) => s.trim()).filter(Boolean)
+      : [],
   };
 }
+
+// Re-export for tests
+export { stripComputedMemberWriteFields } from "@/lib/forms/airtable/write-guards";

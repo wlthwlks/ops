@@ -43,7 +43,7 @@ export async function PATCH(request: Request) {
     }
 
     const { stage, data } = parsed.data;
-    const patch = stepDataToAirtablePatch(stage, data || {});
+    const patch = stepDataToAirtablePatch(stage, (data || {}) as Record<string, unknown>);
     const result = await updateOnboardingStep({
       memberstackId: member.id,
       stage,
@@ -88,13 +88,13 @@ export async function PATCH(request: Request) {
   }
 }
 
+/** Map widget step data → canonical MEMBERS writable fields only. */
 function stepDataToAirtablePatch(
   stage: string,
   data: Record<string, unknown>
 ): Record<string, unknown> {
   switch (stage) {
     case "ACCOUNT":
-      // Name is a computed Airtable field — never write it
       return {
         [MEMBER_FIELDS.firstName]: data.firstName,
         [MEMBER_FIELDS.lastName]: data.lastName,
@@ -102,18 +102,16 @@ function stepDataToAirtablePatch(
       };
     case "LOCATION":
       return {
-        [MEMBER_FIELDS.countryCode]: data.countryCode,
-        [MEMBER_FIELDS.cityCode]: data.cityCode,
-        [MEMBER_FIELDS.availabilityCodes]: data.availability,
+        // App-only key consumed by members-sync → City + Timezone
+        _appCityCode: data.cityCode,
+        [MEMBER_FIELDS.availabilityV2]: data.availability,
       };
     case "BUSINESS":
       return {
-        [MEMBER_FIELDS.primaryIndustry]: data.primaryIndustry,
+        [MEMBER_FIELDS.industry]: data.primaryIndustry,
         [MEMBER_FIELDS.businessStage]: data.businessStage,
-        [MEMBER_FIELDS.annualRevenue]: data.annualRevenue,
+        [MEMBER_FIELDS.revenue]: data.annualRevenue,
         [MEMBER_FIELDS.businessDescription]: data.businessDescription,
-        [MEMBER_FIELDS.businessName]: data.businessName,
-        [MEMBER_FIELDS.businessWebsite]: data.businessWebsite,
       };
     case "PAYMENT_PENDING":
       return {};
@@ -124,17 +122,18 @@ function stepDataToAirtablePatch(
       };
     case "HELP_WANTED":
       return {
-        [MEMBER_FIELDS.helpWanted]: Array.isArray(data.helpWanted)
-          ? (data.helpWanted as string[]).join(",")
-          : data.helpWanted,
-        [MEMBER_FIELDS.helpWantedContext]: data.helpWantedContext,
+        // Codes not stored — only context column exists on MEMBERS
+        [MEMBER_FIELDS.helpWantedContext]:
+          data.helpWantedContext ||
+          (Array.isArray(data.helpWanted) ? (data.helpWanted as string[]).join(", ") : ""),
       };
     case "EXPERTISE":
       return {
-        [MEMBER_FIELDS.expertiseOffered]: Array.isArray(data.expertiseOffered)
-          ? (data.expertiseOffered as string[]).join(",")
-          : data.expertiseOffered,
-        [MEMBER_FIELDS.expertiseContext]: data.expertiseContext,
+        [MEMBER_FIELDS.expertiseContext]:
+          data.expertiseContext ||
+          (Array.isArray(data.expertiseOffered)
+            ? (data.expertiseOffered as string[]).join(", ")
+            : ""),
       };
     case "CONNECTION":
       return {

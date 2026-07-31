@@ -66,23 +66,18 @@ async function main() {
   }
 
   const airtable = createAirtableClient({ apiKey: token, baseId });
+  // MEMBERS has City text only (no City code column); map labels via reference data.
   const members = await airtable.listRecords(MEMBERS_TABLE, {
-    fields: [MEMBER_FIELDS.city, MEMBER_FIELDS.cityCode, MEMBER_FIELDS.email],
+    fields: [MEMBER_FIELDS.city, MEMBER_FIELDS.email],
   });
 
   const counts = new Map<string, number>();
   let blank = 0;
   let matched = 0;
   let unmatched = 0;
-  let alreadyCoded = 0;
   const unmatchedSamples: string[] = [];
 
   for (const m of members) {
-    const code = fieldStr(m.fields, MEMBER_FIELDS.cityCode);
-    if (code) {
-      alreadyCoded++;
-      continue;
-    }
     const city = fieldStr(m.fields, MEMBER_FIELDS.city);
     if (!city) {
       blank++;
@@ -96,6 +91,7 @@ async function main() {
       if (unmatchedSamples.length < 30) unmatchedSamples.push(city);
     }
   }
+  const alreadyCoded = 0;
 
   console.log(
     JSON.stringify(

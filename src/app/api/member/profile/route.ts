@@ -118,27 +118,25 @@ export async function PATCH(request: Request) {
     if (d.firstName != null) patch[MEMBER_FIELDS.firstName] = d.firstName;
     if (d.lastName != null) patch[MEMBER_FIELDS.lastName] = d.lastName;
     if (d.phone != null) patch[MEMBER_FIELDS.phone] = d.phone;
-    if (d.businessName != null) patch[MEMBER_FIELDS.businessName] = d.businessName;
-    if (d.businessWebsite != null) patch[MEMBER_FIELDS.businessWebsite] = d.businessWebsite;
-    if (d.countryCode != null) patch[MEMBER_FIELDS.countryCode] = d.countryCode;
-    if (d.cityCode != null) patch[MEMBER_FIELDS.cityCode] = d.cityCode;
-    if (d.availability != null) patch[MEMBER_FIELDS.availabilityCodes] = d.availability;
-    if (d.primaryIndustry != null) patch[MEMBER_FIELDS.primaryIndustry] = d.primaryIndustry;
+    if (d.cityCode != null) patch._appCityCode = d.cityCode;
+    if (d.availability != null) patch[MEMBER_FIELDS.availabilityV2] = d.availability;
+    if (d.primaryIndustry != null) patch[MEMBER_FIELDS.industry] = d.primaryIndustry;
     if (d.businessStage != null) patch[MEMBER_FIELDS.businessStage] = d.businessStage;
-    if (d.annualRevenue != null) patch[MEMBER_FIELDS.annualRevenue] = d.annualRevenue;
+    if (d.annualRevenue != null) patch[MEMBER_FIELDS.revenue] = d.annualRevenue;
     if (d.businessDescription != null)
       patch[MEMBER_FIELDS.businessDescription] = d.businessDescription;
     if (d.ninetyDayGoal != null) {
       patch[MEMBER_FIELDS.ninetyDayGoal] = d.ninetyDayGoal;
       patch[MEMBER_FIELDS.goalUpdatedAt] = new Date().toISOString();
     }
-    if (d.helpWanted != null) patch[MEMBER_FIELDS.helpWanted] = d.helpWanted.join(",");
     if (d.helpWantedContext != null)
       patch[MEMBER_FIELDS.helpWantedContext] = d.helpWantedContext;
-    if (d.expertiseOffered != null)
-      patch[MEMBER_FIELDS.expertiseOffered] = d.expertiseOffered.join(",");
+    else if (d.helpWanted != null)
+      patch[MEMBER_FIELDS.helpWantedContext] = d.helpWanted.join(", ");
     if (d.expertiseContext != null)
       patch[MEMBER_FIELDS.expertiseContext] = d.expertiseContext;
+    else if (d.expertiseOffered != null)
+      patch[MEMBER_FIELDS.expertiseContext] = d.expertiseOffered.join(", ");
     if (d.connectionType != null) patch[MEMBER_FIELDS.connectionType] = d.connectionType;
 
     const result = await updateMemberProfile({

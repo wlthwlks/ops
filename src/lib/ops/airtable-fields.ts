@@ -1,125 +1,105 @@
 /**
- * Table-specific Airtable field maps and live table names.
- * Exact names (case, spaces, punctuation) must match the base schema.
- * Do not share one field map across unrelated tables.
+ * Table-specific Airtable field maps.
+ * Defaults match the canonical CSV schema exactly.
+ * Prefer importing AIRTABLE_TABLES / writable helpers from @/lib/airtable/schema.
  */
+import {
+  AIRTABLE_TABLES,
+  assertMembersWritePayload,
+} from "@/lib/airtable/schema";
 
 function envField(name: string, fallback: string): string {
   return (process.env[name] || "").trim() || fallback;
 }
 
-/**
- * Live Airtable base table names (confirmed via PAT):
- * MEMBERS, MATCH GROUPS, ALL CITIES, DONUT DATA, SLACK CHANNELS, CITY WLKS
- *
- * Airtable often accepts case variants for some tables (e.g. Members/MEMBERS),
- * but "Cities" and "Donut Pairings" 403 — use the names below.
- */
-export const MEMBERS_TABLE = envField("AIRTABLE_MEMBERS_TABLE", "MEMBERS");
-export const MATCH_GROUPS_TABLE = envField("AIRTABLE_MATCH_GROUPS_TABLE", "MATCH GROUPS");
-export const CITIES_TABLE = envField("AIRTABLE_CITIES_TABLE", "ALL CITIES");
-export const DONUT_DATA_TABLE = envField("AIRTABLE_DONUT_DATA_TABLE", "DONUT DATA");
-export const SLACK_CHANNELS_TABLE = envField(
-  "AIRTABLE_SLACK_CHANNELS_TABLE",
-  "SLACK CHANNELS"
-);
-/** City walk events / registrations linked to slack channels. */
-export const CITY_WLKS_TABLE = envField("AIRTABLE_CITY_WLKS_TABLE", "CITY WLKS");
+export const MEMBERS_TABLE = AIRTABLE_TABLES.MEMBERS;
+export const MATCH_GROUPS_TABLE = AIRTABLE_TABLES.MATCH_GROUPS;
+export const CITIES_TABLE = AIRTABLE_TABLES.ALL_CITIES;
+export const DONUT_DATA_TABLE = AIRTABLE_TABLES.DONUT_DATA;
+export const SLACK_CHANNELS_TABLE = AIRTABLE_TABLES.SLACK_CHANNELS;
+export const CITY_WLKS_TABLE = AIRTABLE_TABLES.CITY_WLKS;
+export const COUNTRIES_TABLE = AIRTABLE_TABLES.COUNTRIES;
+export const INDUSTRIES_TABLE = AIRTABLE_TABLES.INDUSTRIES;
+export const MATCHING_OPTIONS_TABLE = AIRTABLE_TABLES.MATCHING_OPTIONS;
 
-/** @deprecated use CITIES_TABLE — kept alias for older imports */
+/** @deprecated use CITIES_TABLE */
 export const CITIES_TABLE_LEGACY_ALIAS = CITIES_TABLE;
 
 /**
- * Members table field map.
- * New form/onboarding fields are optional until created in Airtable —
- * writers omit keys that fail schema checks.
+ * MEMBERS field map — values are exact Airtable column names.
+ * Keys are app-facing identifiers.
  */
 export const MEMBER_FIELDS = {
+  /** Computed — read only, never write */
   name: "Name",
   email: "email",
   slackEmail: "Slack Email",
-  /** Legacy text/select city (source during migration). */
-  city: envField("AIRTABLE_MEMBER_CITY_LEGACY_FIELD", "City"),
-  /** Linked record → ALL CITIES (preferred). Default "City relation". */
-  cityRelation: envField("AIRTABLE_MEMBER_CITY_LINK_FIELD", "City relation"),
+  city: "City",
+  cityRelation: "City relation",
   membership: "Membership",
   payment: "Payment",
   dateJoined: "Date joined",
   cancellationDate: "Cancellation date",
   serviceAccessUntil: "Service access until",
   stripeCustomerId: "Stripe Customer ID",
-  // —— Forms / onboarding (create in Airtable before enabling write flags) ——
-  memberstackId: envField("AIRTABLE_MEMBER_MEMBERSTACK_ID_FIELD", "Memberstack ID"),
-  firstName: envField("AIRTABLE_MEMBER_FIRST_NAME_FIELD", "First Name"),
-  lastName: envField("AIRTABLE_MEMBER_LAST_NAME_FIELD", "Last Name"),
-  phone: envField("AIRTABLE_MEMBER_PHONE_FIELD", "phone number"),
-  businessName: envField("AIRTABLE_MEMBER_BUSINESS_NAME_FIELD", "Business name"),
-  businessWebsite: envField("AIRTABLE_MEMBER_BUSINESS_WEBSITE_FIELD", "Business website"),
-  onboardingStatus: envField("AIRTABLE_MEMBER_ONBOARDING_STATUS_FIELD", "Onboarding status"),
-  profileSchemaVersion: envField(
-    "AIRTABLE_MEMBER_PROFILE_SCHEMA_VERSION_FIELD",
-    "Profile schema version"
-  ),
-  onboardingCompletedAt: envField(
-    "AIRTABLE_MEMBER_ONBOARDING_COMPLETED_AT_FIELD",
-    "Onboarding completed at"
-  ),
-  countryCode: envField("AIRTABLE_MEMBER_COUNTRY_CODE_FIELD", "Country code"),
-  cityCode: envField("AIRTABLE_MEMBER_CITY_CODE_FIELD", "City code"),
-  availabilityCodes: envField(
-    "AIRTABLE_MEMBER_AVAILABILITY_CODES_FIELD",
-    "Availability codes"
-  ),
-  /** Legacy free-text availability for existing systems — do not change matching readers. */
-  availabilityLegacy: envField("AIRTABLE_MEMBER_AVAILABILITY_LEGACY_FIELD", "Availability"),
-  primaryIndustry: envField("AIRTABLE_MEMBER_PRIMARY_INDUSTRY_FIELD", "Primary industry"),
-  businessStage: envField("AIRTABLE_MEMBER_BUSINESS_STAGE_FIELD", "Business stage"),
-  annualRevenue: envField("AIRTABLE_MEMBER_ANNUAL_REVENUE_FIELD", "Annual revenue"),
-  businessDescription: envField(
-    "AIRTABLE_MEMBER_BUSINESS_DESCRIPTION_FIELD",
-    "Business description"
-  ),
-  ninetyDayGoal: envField("AIRTABLE_MEMBER_90_DAY_GOAL_FIELD", "90-day goal"),
-  goalUpdatedAt: envField("AIRTABLE_MEMBER_GOAL_UPDATED_AT_FIELD", "Goal updated at"),
-  helpWanted: envField("AIRTABLE_MEMBER_HELP_WANTED_FIELD", "Help wanted"),
-  helpWantedContext: envField(
-    "AIRTABLE_MEMBER_HELP_WANTED_CONTEXT_FIELD",
-    "Help wanted context"
-  ),
-  expertiseOffered: envField("AIRTABLE_MEMBER_EXPERTISE_OFFERED_FIELD", "Expertise offered"),
-  expertiseContext: envField("AIRTABLE_MEMBER_EXPERTISE_CONTEXT_FIELD", "Expertise context"),
-  connectionType: envField("AIRTABLE_MEMBER_CONNECTION_TYPE_FIELD", "Connection type"),
-  stripeSubscriptionId: envField(
-    "AIRTABLE_MEMBER_STRIPE_SUBSCRIPTION_ID_FIELD",
-    "Stripe Subscription ID"
-  ),
-  cancelAtPeriodEnd: envField(
-    "AIRTABLE_MEMBER_CANCEL_AT_PERIOD_END_FIELD",
-    "Cancel at period end"
-  ),
-  cancellationRequestedAt: envField(
-    "AIRTABLE_MEMBER_CANCELLATION_REQUESTED_AT_FIELD",
-    "Cancellation requested at"
-  ),
-  cancellationEffectiveAt: envField(
-    "AIRTABLE_MEMBER_CANCELLATION_EFFECTIVE_AT_FIELD",
-    "Cancellation effective at"
-  ),
-  utmSource: envField("AIRTABLE_MEMBER_UTM_SOURCE_FIELD", "utm_source"),
-  utmMedium: envField("AIRTABLE_MEMBER_UTM_MEDIUM_FIELD", "utm_medium"),
-  utmCampaign: envField("AIRTABLE_MEMBER_UTM_CAMPAIGN_FIELD", "utm_campaign"),
-  utmContent: envField("AIRTABLE_MEMBER_UTM_CONTENT_FIELD", "utm_content"),
-  utmTerm: envField("AIRTABLE_MEMBER_UTM_TERM_FIELD", "utm_term"),
-  firstAttributionAt: envField(
-    "AIRTABLE_MEMBER_FIRST_ATTRIBUTION_AT_FIELD",
-    "First attribution at"
-  ),
-  initialLandingPage: envField(
-    "AIRTABLE_MEMBER_INITIAL_LANDING_PAGE_FIELD",
-    "Initial landing page"
-  ),
-  initialReferrer: envField("AIRTABLE_MEMBER_INITIAL_REFERRER_FIELD", "Initial referrer"),
-  lastFormSource: envField("AIRTABLE_MEMBER_LAST_FORM_SOURCE_FIELD", "Last form source"),
+  memberstackId: "Memberstack ID",
+  firstName: "First Name",
+  lastName: "Last Name",
+  phone: "phone number",
+  industry: "Industry",
+  revenue: "Revenue",
+  /** @deprecated use industry — kept for gradual migration of call sites */
+  primaryIndustry: "Industry",
+  /** @deprecated use revenue */
+  annualRevenue: "Revenue",
+  onboardingStatus: "Onboarding status",
+  lastCompletedSignupStep: "Last completed signup step",
+  profileSchemaVersion: "Profile schema version",
+  onboardingCompletedAt: "Onboarding completed at",
+  profileLastUpdatedAt: "Profile last updated at",
+  timezone: "Timezone",
+  /** Canonical structured availability codes */
+  availabilityV2: "Availability v2",
+  /** @deprecated alias → Availability v2 */
+  availabilityCodes: "Availability v2",
+  availabilityLegacy: "Availability",
+  locationDataVersion: "Location data version",
+  businessStage: "Business stage",
+  connectionType: "Connection type",
+  businessDescription: "Business description",
+  ninetyDayGoal: "Current 90-day goal",
+  goalUpdatedAt: "Goal updated at",
+  helpWantedContext: "Help wanted context",
+  expertiseContext: "Expertise context",
+  topicsToDiscuss: "Topics to Discuss",
+  stripeSubscriptionId: "Stripe Subscription ID",
+  stripePriceId: "Stripe Price ID",
+  memberstackPlanId: "Memberstack Plan ID",
+  stripeSubscriptionStatus: "Stripe subscription status",
+  cancelAtPeriodEnd: "Cancel at period end",
+  cancellationRequestedAt: "Cancellation requested at",
+  cancellationEffectiveAt: "Cancellation effective at",
+  lastInvoiceId: "Last invoice ID",
+  lastInvoiceStatus: "Last invoice status",
+  lastPaymentFailureCode: "Last payment failure code",
+  lastPaymentFailureMessage: "Last payment failure message",
+  billingLastSyncedAt: "Billing last synced at",
+  lastStripeEventId: "Last Stripe event ID",
+  utmSource: "UTM Source",
+  utmMedium: "UTM Medium",
+  utmCampaign: "UTM Campaign",
+  utmContent: "UTM Content",
+  utmTerm: "UTM Term",
+  googleClickId: "Google Click ID",
+  facebookClickId: "Facebook Click ID",
+  firstAttributionAt: "First attribution captured at",
+  initialLandingPage: "Initial landing page",
+  initialReferrer: "Initial referrer",
+  recurringIntroStatus: "Recurring intro status",
+  recurringPauseUntil: "Recurring pause until",
+  firstIntroductionStatus: "First introduction status",
+  firstIntroductionSentAt: "First introduction sent at",
+  recurringEligibleFrom: "Recurring eligible from",
 } as const;
 
 export const MEMBER_LIST_FIELDS: string[] = [
@@ -134,12 +114,12 @@ export const MEMBER_LIST_FIELDS: string[] = [
   MEMBER_FIELDS.cancellationDate,
   MEMBER_FIELDS.serviceAccessUntil,
   MEMBER_FIELDS.stripeCustomerId,
+  MEMBER_FIELDS.memberstackId,
+  MEMBER_FIELDS.firstName,
+  MEMBER_FIELDS.lastName,
+  MEMBER_FIELDS.onboardingStatus,
 ];
 
-/**
- * SLACK CHANNELS table — exact export columns from Airtable.
- * Do not request Members-only or Cities-only fields here.
- */
 export const SLACK_CHANNEL_FIELDS = {
   name: "Name",
   cities: "Cities",
@@ -149,6 +129,13 @@ export const SLACK_CHANNEL_FIELDS = {
   introType: "Intro type",
   timezone: "Timezone",
   schedulingMode: "Scheduling mode",
+  introMessageTemplate: "Intro message template",
+  introFrequencyWeeks: "Intro frequency weeks",
+  nextIntroductionDate: "Next introduction date",
+  introLocalTime: "Intro local time",
+  strictGroupSize: "Strict group size",
+  members: "Members",
+  countMembers: "Count (Members)",
 } as const;
 
 export const SLACK_CHANNEL_LIST_FIELDS: string[] = [
@@ -161,21 +148,28 @@ export const SLACK_CHANNEL_LIST_FIELDS: string[] = [
   SLACK_CHANNEL_FIELDS.schedulingMode,
 ];
 
-/**
- * ALL CITIES table fields.
- * Do not request "Name" here — primary display field is "City".
- */
 export const CITY_FIELDS = {
-  city: envField("AIRTABLE_CITY_NAME_FIELD", "City"),
-  country: envField("AIRTABLE_CITY_COUNTRY_FIELD", "Country"),
-  /** Reciprocal link on ALL CITIES (exact field name is "Slack channels"). */
-  slackChannels: envField("AIRTABLE_CITY_CHANNEL_FIELD", "Slack channels"),
+  city: "City",
+  country: "Country",
+  slackChannels: "Slack channels",
+  cityCode: "City Code",
+  region: "Region",
+  timezone: "Timezone",
+  latitude: "Latitude",
+  longitude: "Longitude",
+  aliases: "Aliases",
+  formEnabled: "Form enabled",
+  sortOrder: "Sort order",
+  intros: "intros",
+  members: "Members",
+  active: "Active",
 } as const;
 
 export const CITY_LIST_FIELDS: string[] = [
   CITY_FIELDS.city,
   CITY_FIELDS.country,
   CITY_FIELDS.slackChannels,
+  CITY_FIELDS.cityCode,
 ];
 
 export const CITY_WLKS_FIELDS = {
@@ -183,6 +177,21 @@ export const CITY_WLKS_FIELDS = {
   status: "Status",
   slackChannels: "SLACK CHANNELS",
   registrations: "Registrations",
+} as const;
+
+export const MATCH_GROUP_FIELDS = {
+  recordId: "Record ID",
+  introductionDate: "Introduction date",
+  status: "Status",
+  member1: "Member 1",
+  member2: "Member 2",
+  member3: "Member 3",
+  source: "Source",
+  cycleId: "Cycle ID",
+  slackChannel: "Slack Channel",
+  slackConversationId: "Slack Conversation ID",
+  slackMessageTimestamp: "Slack Message Timestamp",
+  sendError: "Send error",
 } as const;
 
 export class AirtableSchemaMismatchError extends Error {
@@ -207,7 +216,9 @@ export function toAirtableSchemaError(
   const m =
     msg.match(/Unknown field name:\s*\\"([^\\"]+)\\"/i) ||
     msg.match(/Unknown field name:\s*"([^"]+)"/i) ||
-    msg.match(/Unknown field name:\s*'([^']+)'/i);
+    msg.match(/Unknown field name:\s*'([^']+)'/i) ||
+    msg.match(/does not contain expected field "([^"]+)"/i) ||
+    msg.match(/Field "([^"]+)" cannot accept/i);
   if (!m) return null;
   return new AirtableSchemaMismatchError(
     table,
@@ -215,3 +226,14 @@ export function toAirtableSchemaError(
     m[1]
   );
 }
+
+/** Validate and return a MEMBERS write payload (drops/throws on bad keys). */
+export function sanitizeMembersWriteFields(
+  fields: Record<string, unknown>,
+  context?: string
+): Record<string, unknown> {
+  return assertMembersWritePayload(fields, context);
+}
+
+// silence unused envField if only used for optional overrides elsewhere
+void envField;

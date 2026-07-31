@@ -214,7 +214,6 @@ export async function handleMemberstackEvent(input: {
         memberstackId: m.id,
         patch: {
           [MEMBER_FIELDS.onboardingStatus]: "ACCOUNT_DELETED",
-          [MEMBER_FIELDS.lastFormSource]: "memberstack_deleted",
         },
       }).catch(async () => {
         await recordIntegrationError({
