@@ -7,6 +7,7 @@ import {
   logMemberstackDiagnostics,
   tryResolveSessionAccessToken,
 } from "../../shared/memberstack-auth";
+import { WalkingLoader } from "../../shared/WalkingLoader";
 
 const profileSchema = z.object({
   firstName: z.string().trim().min(1, "Required").max(80),
@@ -17,16 +18,18 @@ const profileSchema = z.object({
     .email()
     .transform((e) => e.toLowerCase()),
   phone: z.string().trim().max(40).optional(),
-  businessName: z.string().trim().max(120).optional(),
-  businessWebsite: z.string().trim().max(500).optional(),
-  countryCode: z.string().min(2),
-  cityCode: z.string().optional(),
+  countryCode: z.string().min(10).max(64).optional().or(z.literal("")),
+  cityCode: z.string().max(64).optional(),
+  availability: z.array(z.string()).max(21).optional(),
   primaryIndustry: z.string().optional(),
   businessStage: z.string().optional(),
   annualRevenue: z.string().optional(),
   businessDescription: z.string().trim().max(400).optional(),
   ninetyDayGoal: z.string().trim().max(300).optional(),
+  helpWantedContext: z.string().trim().max(400).optional(),
+  expertiseContext: z.string().trim().max(400).optional(),
   connectionType: z.string().optional(),
+  topicsToDiscuss: z.string().trim().max(1000).optional(),
 });
 
 type ProfileForm = z.infer<typeof profileSchema>;
@@ -51,6 +54,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     industries: Array<{ code: string; label: string }>;
     businessStages: Array<{ code: string; label: string }>;
     revenueBrackets: Array<{ code: string; label: string }>;
+    availabilityOptions: Array<{ code: string; label: string }>;
     connectionTypes: Array<{ code: string; label: string }>;
   } | null>(null);
   const [billing, setBilling] = useState<{
@@ -68,16 +72,18 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       lastName: "",
       email: "",
       phone: "",
-      businessName: "",
-      businessWebsite: "",
       countryCode: "",
       cityCode: "",
+      availability: [],
       primaryIndustry: "",
       businessStage: "",
       annualRevenue: "",
       businessDescription: "",
       ninetyDayGoal: "",
+      helpWantedContext: "",
+      expertiseContext: "",
       connectionType: "",
+      topicsToDiscuss: "",
     },
     mode: "onBlur",
   });
@@ -100,26 +106,30 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           api(props.apiBase, "/api/member/profile", { token: t }),
           api(props.apiBase, "/api/member/billing-status", { token: t }),
         ]);
-        setRefData(ref as typeof refData extends infer R ? Exclude<R, null> : never);
-        const p = (profileRes.profile || {}) as Record<string, string>;
+        const rd = ref as typeof refData extends infer R ? Exclude<R, null> : never;
+        setRefData(rd);
+        const p = (profileRes.profile || {}) as Record<string, unknown>;
         form.reset({
-          firstName: p.firstName || "",
-          lastName: p.lastName || "",
-          email: p.email || "",
-          phone: p.phone || "",
-          businessName: p.businessName || "",
-          businessWebsite: p.businessWebsite || "",
+          firstName: String(p.firstName || ""),
+          lastName: String(p.lastName || ""),
+          email: String(p.email || ""),
+          phone: String(p.phone || ""),
           countryCode:
-            p.countryCode ||
-            (ref as { countries?: Array<{ code: string }> }).countries?.[0]?.code ||
-            "",
-          cityCode: p.cityCode || "",
-          primaryIndustry: p.primaryIndustry || "",
-          businessStage: p.businessStage || "",
-          annualRevenue: p.annualRevenue || "",
-          businessDescription: p.businessDescription || "",
-          ninetyDayGoal: p.ninetyDayGoal || "",
-          connectionType: p.connectionType || "",
+            String(p.countryCode || "") ||
+            (rd.countries?.[0]?.code ?? ""),
+          cityCode: String(p.cityCode || ""),
+          availability: Array.isArray(p.availability)
+            ? (p.availability as string[])
+            : [],
+          primaryIndustry: String(p.primaryIndustry || ""),
+          businessStage: String(p.businessStage || ""),
+          annualRevenue: String(p.annualRevenue || ""),
+          businessDescription: String(p.businessDescription || ""),
+          ninetyDayGoal: String(p.ninetyDayGoal || ""),
+          helpWantedContext: String(p.helpWantedContext || ""),
+          expertiseContext: String(p.expertiseContext || ""),
+          connectionType: String(p.connectionType || ""),
+          topicsToDiscuss: String(p.topicsToDiscuss || ""),
         });
         setBilling(
           (bill.billing || null) as {
@@ -162,19 +172,21 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           firstName: values.firstName,
           lastName: values.lastName,
           phone: values.phone,
-          businessName: values.businessName,
-          businessWebsite: values.businessWebsite || undefined,
-          countryCode: values.countryCode,
+          countryCode: values.countryCode || undefined,
           cityCode: values.cityCode || undefined,
+          availability: values.availability?.length ? values.availability : undefined,
           primaryIndustry: values.primaryIndustry || undefined,
           businessStage: values.businessStage || undefined,
           annualRevenue: values.annualRevenue || undefined,
           businessDescription: values.businessDescription || undefined,
           ninetyDayGoal: values.ninetyDayGoal || undefined,
+          helpWantedContext: values.helpWantedContext || undefined,
+          expertiseContext: values.expertiseContext || undefined,
           connectionType: values.connectionType || undefined,
+          topicsToDiscuss: values.topicsToDiscuss || undefined,
         }),
       });
-      setOk("Saved");
+      setOk("Your profile has been updated.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -193,11 +205,28 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     await w.$memberstackDom.launchStripeCustomerPortal();
   };
 
-  if (loading) {
+  const toggleAvail = (code: string) => {
+    const cur = form.getValues("availability") || [];
+    if (cur.includes(code)) {
+      form.setValue(
+        "availability",
+        cur.filter((c) => c !== code),
+        { shouldDirty: true }
+      );
+    } else if (cur.length < 21) {
+      form.setValue("availability", [...cur, code], { shouldDirty: true });
+    }
+  };
+
+  if (loading || saving) {
     return (
       <div className="wlth-widget">
-        <div className="wlth-card">
-          <p>Loading your details…</p>
+        <div className="wlth-card wlth-overlay-load">
+          <WalkingLoader
+            message={
+              saving ? "Updating your WLTH WLKS profile…" : "Loading your profile…"
+            }
+          />
         </div>
       </div>
     );
@@ -207,7 +236,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     <div className="wlth-widget">
       <div className="wlth-card">
         <h1>Update details</h1>
-        <p>Keep your WLTH WLKS profile up to date.</p>
+        <p>Keep your WLTH WLKS profile current so introductions stay relevant.</p>
         {error && (
           <div className="wlth-banner-error" role="alert">
             {error}
@@ -219,85 +248,102 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
         {token && refData && (
           <form onSubmit={onSave} noValidate>
-            <h2>Personal</h2>
-            <div className="wlth-field">
-              <label htmlFor="fn">First name</label>
-              <input id="fn" {...form.register("firstName")} />
-              <FieldError message={form.formState.errors.firstName?.message} />
+            <p className="wlth-section-title">Personal</p>
+            <div className="wlth-grid-2">
+              <div className="wlth-field">
+                <label htmlFor="fn">First name</label>
+                <input id="fn" {...form.register("firstName")} />
+                <FieldError message={form.formState.errors.firstName?.message} />
+              </div>
+              <div className="wlth-field">
+                <label htmlFor="ln">Last name</label>
+                <input id="ln" {...form.register("lastName")} />
+                <FieldError message={form.formState.errors.lastName?.message} />
+              </div>
             </div>
-            <div className="wlth-field">
-              <label htmlFor="ln">Last name</label>
-              <input id="ln" {...form.register("lastName")} />
-              <FieldError message={form.formState.errors.lastName?.message} />
-            </div>
-            <div className="wlth-field">
-              <label htmlFor="em">Email</label>
-              <input id="em" type="email" {...form.register("email")} />
-              <FieldError message={form.formState.errors.email?.message} />
-            </div>
-            <div className="wlth-field">
-              <label htmlFor="ph">Phone</label>
-              <input id="ph" {...form.register("phone")} />
-            </div>
-
-            <h2>Location</h2>
-            <div className="wlth-field">
-              <label htmlFor="co">Country</label>
-              <select
-                id="co"
-                {...form.register("countryCode", {
-                  onChange: () => form.setValue("cityCode", ""),
-                })}
-              >
-                {refData.countries.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="wlth-field">
-              <label htmlFor="ci">City</label>
-              <select id="ci" {...form.register("cityCode")}>
-                <option value="">Select</option>
-                {cities.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
+            <div className="wlth-grid-2">
+              <div className="wlth-field">
+                <label htmlFor="em">Email</label>
+                <input id="em" type="email" {...form.register("email")} />
+                <FieldError message={form.formState.errors.email?.message} />
+              </div>
+              <div className="wlth-field">
+                <label htmlFor="ph">Phone</label>
+                <input id="ph" {...form.register("phone")} />
+              </div>
             </div>
 
-            <h2>Business</h2>
-            <div className="wlth-field">
-              <label htmlFor="bn">Business name</label>
-              <input id="bn" {...form.register("businessName")} />
+            <p className="wlth-section-title">Location & availability</p>
+            <div className="wlth-grid-2">
+              <div className="wlth-field">
+                <label htmlFor="co">Country</label>
+                <select
+                  id="co"
+                  {...form.register("countryCode", {
+                    onChange: () => form.setValue("cityCode", ""),
+                  })}
+                >
+                  <option value="">Select</option>
+                  {refData.countries.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="wlth-field">
+                <label htmlFor="ci">City</label>
+                <select id="ci" {...form.register("cityCode")}>
+                  <option value="">Select</option>
+                  {cities.map((c) => (
+                    <option key={c.code} value={c.code}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
-            <div className="wlth-field">
-              <label htmlFor="bw">Website</label>
-              <input id="bw" {...form.register("businessWebsite")} />
+            <p className="wlth-muted">Availability (select all that apply)</p>
+            <div className="wlth-check-grid">
+              {(refData.availabilityOptions || []).map((o) => {
+                const selected = form.watch("availability") || [];
+                return (
+                  <label key={o.code} className="wlth-check">
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(o.code)}
+                      onChange={() => toggleAvail(o.code)}
+                    />
+                    <span>{o.label}</span>
+                  </label>
+                );
+              })}
             </div>
-            <div className="wlth-field">
-              <label htmlFor="ind">Industry</label>
-              <select id="ind" {...form.register("primaryIndustry")}>
-                <option value="">Select</option>
-                {refData.industries.map((i) => (
-                  <option key={i.code} value={i.code}>
-                    {i.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="wlth-field">
-              <label htmlFor="st">Stage</label>
-              <select id="st" {...form.register("businessStage")}>
-                <option value="">Select</option>
-                {refData.businessStages.map((i) => (
-                  <option key={i.code} value={i.code}>
-                    {i.label}
-                  </option>
-                ))}
-              </select>
+
+            <p className="wlth-section-title">Business</p>
+            <div className="wlth-grid-2">
+              <div className="wlth-field">
+                <label htmlFor="ind">Industry</label>
+                <select id="ind" {...form.register("primaryIndustry")}>
+                  <option value="">Select</option>
+                  {refData.industries.map((i) => (
+                    <option key={i.code} value={i.code}>
+                      {i.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="wlth-field">
+                <label htmlFor="st">Stage</label>
+                <select id="st" {...form.register("businessStage")}>
+                  <option value="">Select</option>
+                  {refData.businessStages.map((i) => (
+                    <option key={i.code} value={i.code}>
+                      {i.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div className="wlth-field">
               <label htmlFor="rv">Revenue</label>
@@ -311,57 +357,57 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               </select>
             </div>
             <div className="wlth-field">
-              <label htmlFor="bd">Description</label>
+              <label htmlFor="bd">Business description</label>
               <textarea id="bd" rows={3} {...form.register("businessDescription")} />
             </div>
 
-            <h2>Profile preferences</h2>
+            <p className="wlth-section-title">Matching preferences</p>
             <div className="wlth-field">
-              <label htmlFor="g">90-day goal</label>
+              <label htmlFor="g">Current 90-day goal</label>
               <textarea id="g" rows={3} {...form.register("ninetyDayGoal")} />
+            </div>
+            <div className="wlth-field">
+              <label htmlFor="hw">Help wanted context</label>
+              <textarea id="hw" rows={2} {...form.register("helpWantedContext")} />
+            </div>
+            <div className="wlth-field">
+              <label htmlFor="ex">Expertise context</label>
+              <textarea id="ex" rows={2} {...form.register("expertiseContext")} />
             </div>
             <div className="wlth-field">
               <label htmlFor="ct">Connection type</label>
               <select id="ct" {...form.register("connectionType")}>
                 <option value="">Select</option>
-                {refData.connectionTypes.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.label}
+                {refData.connectionTypes.map((i) => (
+                  <option key={i.code} value={i.code}>
+                    {i.label}
                   </option>
                 ))}
               </select>
             </div>
-
-            <h2>Account & billing</h2>
-            {billing && (
-              <p className="wlth-muted">
-                Membership: {billing.membership || "—"} · Payment: {billing.payment || "—"}
-                <br />
-                Service access until: {billing.serviceAccessUntil || "—"}
-                <br />
-                {billing.cancelAtPeriodEnd
-                  ? `Cancellation scheduled${
-                      billing.cancellationEffectiveAt
-                        ? ` (effective ${billing.cancellationEffectiveAt})`
-                        : ""
-                    }`
-                  : "No cancellation scheduled"}
-              </p>
-            )}
+            <div className="wlth-field">
+              <label htmlFor="td">Topics to discuss</label>
+              <textarea id="td" rows={2} {...form.register("topicsToDiscuss")} />
+            </div>
 
             <div className="wlth-actions">
               <button type="submit" className="wlth-btn-primary" disabled={saving}>
-                {saving ? "Saving…" : "Save changes"}
+                Save changes
               </button>
-              <button
-                type="button"
-                className="wlth-btn-secondary"
-                onClick={() => void openPortal()}
-              >
-                Manage membership
+              <button type="button" className="wlth-btn-secondary" onClick={() => void openPortal()}>
+                Manage billing (Stripe)
               </button>
             </div>
           </form>
+        )}
+
+        {billing && (
+          <p className="wlth-muted" style={{ marginTop: 20 }}>
+            Membership: {billing.membership || "—"} · Payment: {billing.payment || "—"}
+            {billing.serviceAccessUntil
+              ? ` · Access until ${billing.serviceAccessUntil.slice(0, 10)}`
+              : ""}
+          </p>
         )}
       </div>
     </div>

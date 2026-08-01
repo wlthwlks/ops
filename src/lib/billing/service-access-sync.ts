@@ -7,7 +7,33 @@ export const SERVICE_ACCESS_FIELD = "Service access until";
 export const STRIPE_CUSTOMER_ID_FIELD = "Stripe Customer ID";
 export const PAYMENT_FIELD = "Payment";
 export const MEMBERSHIP_FIELD = "Membership";
+export const STRIPE_PRICE_ID_FIELD = "Stripe Price ID";
+export const PAID_PLANS_FIELD = "Paid Plans (price ids)";
+export const STRIPE_SUBSCRIPTION_ID_FIELD = "Stripe Subscription ID";
+export const STRIPE_SUBSCRIPTION_STATUS_FIELD = "Stripe subscription status";
+export const LAST_INVOICE_ID_FIELD = "Last invoice ID";
+export const LAST_INVOICE_STATUS_FIELD = "Last invoice status";
+export const BILLING_LAST_SYNCED_AT_FIELD = "Billing last synced at";
+export const LAST_STRIPE_EVENT_ID_FIELD = "Last Stripe event ID";
 export const MEMBERS_TABLE = AIRTABLE_MEMBERS_TABLE;
+
+/** Deduplicate qualifying membership price ids (stable order). */
+export function dedupePriceIds(ids: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of ids) {
+    const id = raw.trim();
+    if (!id.startsWith("price_") || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/** Paid Plans is a text field on the live base — store comma-separated unique price ids. */
+export function formatPaidPlansText(priceIds: string[]): string {
+  return dedupePriceIds(priceIds).join(",");
+}
 
 /** Escape a string for use inside Airtable formula double quotes. */
 export function escapeAirtableFormulaString(value: string): string {
@@ -70,6 +96,19 @@ export function getLinePeriodEnd(line: Stripe.InvoiceLineItem): number | null {
   const period = line.period;
   if (!period || typeof period.end !== "number") return null;
   return period.end;
+}
+
+/** Qualifying configured membership Price IDs present on invoice lines (deduped). */
+export function getQualifyingMembershipPriceIds(
+  lines: Stripe.InvoiceLineItem[],
+  membershipPriceIds: Set<string>
+): string[] {
+  const found: string[] = [];
+  for (const line of lines) {
+    const priceId = getLinePriceId(line);
+    if (priceId && membershipPriceIds.has(priceId)) found.push(priceId);
+  }
+  return dedupePriceIds(found);
 }
 
 /**
@@ -202,6 +241,14 @@ export interface ServiceAccessSyncResult {
   status: ServiceAccessSyncStatus;
 }
 
+export type InvoiceBillingExtras = {
+  /** Qualifying membership price ids from the invoice (deduped). */
+  qualifyingPriceIds?: string[];
+  stripeSubscriptionId?: string | null;
+  stripeSubscriptionStatus?: string | null;
+  invoiceStatus?: string | null;
+};
+
 export async function updateServiceAccessUntilForCustomer(input: {
   airtable: AirtableClient;
   stripeCustomerId: string;
@@ -209,6 +256,7 @@ export async function updateServiceAccessUntilForCustomer(input: {
   stripeInvoiceId: string;
   stripeEventId?: string;
   dryRun?: boolean;
+  billing?: InvoiceBillingExtras;
 }): Promise<ServiceAccessSyncResult> {
   const {
     airtable,
@@ -217,6 +265,7 @@ export async function updateServiceAccessUntilForCustomer(input: {
     stripeInvoiceId,
     stripeEventId,
     dryRun = false,
+    billing,
   } = input;
 
   const paidThroughIso = paidThrough.toISOString();
@@ -268,11 +317,28 @@ export async function updateServiceAccessUntilForCustomer(input: {
       Math.floor(paidThrough.getTime() / 1000)
     );
 
-    // Always mark paid on qualifying invoice.paid (even if access date unchanged).
+    // Authoritative paid state + billing snapshot (even if access date unchanged).
+    const priceIds = dedupePriceIds(billing?.qualifyingPriceIds || []);
     const fields: Record<string, unknown> = {
       [PAYMENT_FIELD]: "Paid",
       [MEMBERSHIP_FIELD]: "Active",
+      [STRIPE_CUSTOMER_ID_FIELD]: stripeCustomerId,
+      [LAST_INVOICE_ID_FIELD]: stripeInvoiceId,
+      [LAST_INVOICE_STATUS_FIELD]: billing?.invoiceStatus || "paid",
+      [BILLING_LAST_SYNCED_AT_FIELD]: new Date().toISOString(),
     };
+    if (stripeEventId) fields[LAST_STRIPE_EVENT_ID_FIELD] = stripeEventId;
+    if (priceIds.length > 0) {
+      fields[STRIPE_PRICE_ID_FIELD] = priceIds[0];
+      // Live base: text column (not multi-select)
+      fields[PAID_PLANS_FIELD] = formatPaidPlansText(priceIds);
+    }
+    if (billing?.stripeSubscriptionId) {
+      fields[STRIPE_SUBSCRIPTION_ID_FIELD] = billing.stripeSubscriptionId;
+    }
+    if (billing?.stripeSubscriptionStatus) {
+      fields[STRIPE_SUBSCRIPTION_STATUS_FIELD] = billing.stripeSubscriptionStatus;
+    }
 
     if (comparison.invalidCurrent) {
       results.push({

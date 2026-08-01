@@ -247,19 +247,32 @@ export async function upsertMinimalSignupMember(
     [MEMBER_FIELDS.lastCompletedSignupStep]: "ACCOUNT",
   };
 
-  // First-touch attribution only on create — exact canonical UTM field names
-  if (!existing && input.attribution) {
+  // New accounts only — never promote to Active/Paid from signup alone.
+  // Airtable default Membership is Active when blank; always set Pending Payment on create.
+  if (!existing) {
+    fields[MEMBER_FIELDS.membership] = "Pending Payment";
+    fields[MEMBER_FIELDS.payment] = "Unpaid";
+  }
+
+  // First-touch attribution: fill only blank first-touch fields (never overwrite).
+  if (input.attribution) {
     const a = input.attribution;
-    if (a.utm_source) fields[MEMBER_FIELDS.utmSource] = a.utm_source;
-    if (a.utm_medium) fields[MEMBER_FIELDS.utmMedium] = a.utm_medium;
-    if (a.utm_campaign) fields[MEMBER_FIELDS.utmCampaign] = a.utm_campaign;
-    if (a.utm_content) fields[MEMBER_FIELDS.utmContent] = a.utm_content;
-    if (a.utm_term) fields[MEMBER_FIELDS.utmTerm] = a.utm_term;
-    if (a.gclid) fields[MEMBER_FIELDS.googleClickId] = a.gclid;
-    if (a.fbclid) fields[MEMBER_FIELDS.facebookClickId] = a.fbclid;
-    if (a.initialLandingPage) fields[MEMBER_FIELDS.initialLandingPage] = a.initialLandingPage;
-    if (a.initialReferrer) fields[MEMBER_FIELDS.initialReferrer] = a.initialReferrer;
-    if (a.firstAttributionAt) fields[MEMBER_FIELDS.firstAttributionAt] = a.firstAttributionAt;
+    const src = existing?.fields || {};
+    const setIfBlank = (field: string, value: string | undefined) => {
+      if (!value) return;
+      if (existing && fieldStr(src, field)) return;
+      fields[field] = value;
+    };
+    setIfBlank(MEMBER_FIELDS.utmSource, a.utm_source);
+    setIfBlank(MEMBER_FIELDS.utmMedium, a.utm_medium);
+    setIfBlank(MEMBER_FIELDS.utmCampaign, a.utm_campaign);
+    setIfBlank(MEMBER_FIELDS.utmContent, a.utm_content);
+    setIfBlank(MEMBER_FIELDS.utmTerm, a.utm_term);
+    setIfBlank(MEMBER_FIELDS.googleClickId, a.gclid);
+    setIfBlank(MEMBER_FIELDS.facebookClickId, a.fbclid);
+    setIfBlank(MEMBER_FIELDS.initialLandingPage, a.initialLandingPage);
+    setIfBlank(MEMBER_FIELDS.initialReferrer, a.initialReferrer);
+    setIfBlank(MEMBER_FIELDS.firstAttributionAt, a.firstAttributionAt);
   }
 
   if (!canWriteAirtableFromForms()) {
@@ -338,18 +351,15 @@ export async function updateOnboardingStep(
 
   const writeFields = stripComputedMemberWriteFields(fields);
 
-  // Payment confirmation must land even when other form writes are shadowed:
-  // invoice.paid only matches Stripe Customer ID (often blank until later).
-  const isPaymentConfirm =
-    input.stage === "PAYMENT_CONFIRMED" ||
-    writeFields[MEMBER_FIELDS.payment] === "Paid";
-  const allowWrite =
-    canWriteAirtableFromForms() ||
-    (isPaymentConfirm &&
-      ((process.env.MAKE_SHADOW_MODE || "").toLowerCase() !== "true" &&
-        (process.env.MAKE_SHADOW_MODE || "") !== "1"));
+  // Client must never write Payment=Paid / Membership=Active (billing authority is webhooks only).
+  if (writeFields[MEMBER_FIELDS.payment] === "Paid") {
+    delete writeFields[MEMBER_FIELDS.payment];
+  }
+  if (writeFields[MEMBER_FIELDS.membership] === "Active") {
+    delete writeFields[MEMBER_FIELDS.membership];
+  }
 
-  if (!allowWrite) {
+  if (!canWriteAirtableFromForms()) {
     return {
       record: { ...existing, fields: { ...existing.fields, ...writeFields } },
       shadowed: true,
@@ -517,6 +527,7 @@ export function recordToProfileDto(record: AirtableRecord) {
     expertiseOffered: [] as string[],
     expertiseContext: fieldStr(f, MEMBER_FIELDS.expertiseContext),
     connectionType: fieldStr(f, MEMBER_FIELDS.connectionType),
+    topicsToDiscuss: fieldStr(f, MEMBER_FIELDS.topicsToDiscuss),
     availability,
   };
 }

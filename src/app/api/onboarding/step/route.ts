@@ -119,20 +119,10 @@ function stepDataToAirtablePatch(
       };
     case "PAYMENT_PENDING":
       return {};
-    case "PAYMENT_CONFIRMED": {
-      const patch: Record<string, unknown> = {
-        [MEMBER_FIELDS.onboardingStatus]: "PAYMENT_CONFIRMED",
-        // Authoritative client-side paid mark (webhooks may lag or lack Stripe Customer ID)
-        [MEMBER_FIELDS.payment]: "Paid",
-        [MEMBER_FIELDS.membership]: "Active",
-      };
-      const cus =
-        typeof data.stripeCustomerId === "string" ? data.stripeCustomerId.trim() : "";
-      if (cus.startsWith("cus_")) {
-        patch[MEMBER_FIELDS.stripeCustomerId] = cus;
-      }
-      return patch;
-    }
+    case "PAYMENT_CONFIRMED":
+      // Navigation checkpoint only — never accept client-supplied Paid/Active/Stripe IDs.
+      // Authoritative Payment/Membership come from signed Stripe invoice.paid (or MS plan webhook).
+      return {};
     case "GOAL":
       return {
         [MEMBER_FIELDS.ninetyDayGoal]: data.ninetyDayGoal,

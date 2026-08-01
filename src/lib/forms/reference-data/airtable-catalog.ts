@@ -1,6 +1,8 @@
 /**
  * Live COUNTRIES + ALL CITIES catalogue from Airtable.
- * City/country codes are Airtable record IDs so MEMBERS.City relation can be linked exactly.
+ * Eligibility: COUNTRIES.Active === true AND ALL CITIES["Form enabled"] === true
+ * plus a valid Country linked-record relationship.
+ * City/country codes are Airtable record IDs for MEMBERS.City relation.
  */
 import {
   createAirtableClient,
@@ -31,6 +33,7 @@ export type CatalogCity = {
   airtableRecordId: string;
   hasSlackChannel: boolean;
   cityTier: string;
+  formEnabled: boolean;
 };
 
 export type LocationCatalog = {
@@ -43,7 +46,7 @@ export type LocationCatalog = {
 const CACHE_TTL_MS = 5 * 60 * 1000;
 let cache: { at: number; data: LocationCatalog } | null = null;
 
-/** Default IANA timezone by COUNTRIES.Name when ALL CITIES has no Timezone column. */
+/** Default IANA timezone by COUNTRIES.Name when city has no Timezone value. */
 const COUNTRY_TIMEZONE: Record<string, string> = {
   "United Kingdom": "Europe/London",
   Ireland: "Europe/Dublin",
@@ -84,6 +87,11 @@ function firstLinkId(fields: Record<string, unknown>, key: string): string {
   return "";
 }
 
+/** Airtable checkbox → boolean (true only for real boolean true or 1). */
+export function isAirtableChecked(value: unknown): boolean {
+  return value === true || value === 1;
+}
+
 function getClient(): AirtableClient | null {
   const token = process.env.AIRTABLE_GET_DATA_TOKEN;
   const baseId = process.env.AIRTABLE_BASE_ID;
@@ -113,18 +121,25 @@ export async function loadLocationCatalog(
     return empty;
   }
 
-  // Only request fields known to exist on the live base (unknown fields[] → 422).
+  // Only request verified live fields (unknown fields[] → Airtable 422).
   const [countryRecs, cityRecs] = await Promise.all([
     airtable.listRecords(COUNTRIES_TABLE, {
-      fields: ["Name", "ALL CITIES"],
+      fields: ["Name", "Active", "ALL CITIES"],
     }),
     airtable.listRecords(CITIES_TABLE, {
-      fields: [CITY_FIELDS.city, "Country", CITY_FIELDS.slackChannels, "City Tier"],
+      fields: [
+        CITY_FIELDS.city,
+        "Country",
+        "Form enabled",
+        CITY_FIELDS.slackChannels,
+        "City Tier",
+      ],
     }),
   ]);
 
   const countriesById = new Map<string, CatalogCountry>();
   for (const r of countryRecs) {
+    if (!isAirtableChecked(r.fields.Active)) continue;
     const label = fieldStr(r.fields, "Name");
     if (!label) continue;
     countriesById.set(r.id, { code: r.id, label });
@@ -132,14 +147,14 @@ export async function loadLocationCatalog(
 
   const cities: CatalogCity[] = [];
   for (const r of cityRecs) {
+    if (!isAirtableChecked(r.fields["Form enabled"])) continue;
     const label = fieldStr(r.fields, CITY_FIELDS.city);
     if (!label) continue;
     const countryId = firstLinkId(r.fields, "Country");
     const country = countryId ? countriesById.get(countryId) : undefined;
-    if (!country) continue; // only cities linked to a COUNTRIES row
+    if (!country) continue; // requires active country link
 
-    const tzField = fieldStr(r.fields, CITY_FIELDS.timezone);
-    const timezone = tzField || COUNTRY_TIMEZONE[country.label] || "";
+    const timezone = COUNTRY_TIMEZONE[country.label] || "";
     const slack = r.fields[CITY_FIELDS.slackChannels];
     const hasSlackChannel = Array.isArray(slack) && slack.length > 0;
 
@@ -153,10 +168,10 @@ export async function loadLocationCatalog(
       airtableRecordId: r.id,
       hasSlackChannel,
       cityTier: fieldStr(r.fields, "City Tier"),
+      formEnabled: true,
     });
   }
 
-  // Only countries that still have at least one city after filtering
   const usedCountryIds = new Set(cities.map((c) => c.countryCode));
   const countries = [...countriesById.values()]
     .filter((c) => usedCountryIds.has(c.code))

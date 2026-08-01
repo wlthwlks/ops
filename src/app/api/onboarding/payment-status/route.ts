@@ -1,3 +1,7 @@
+/**
+ * Trusted payment status for post-Stripe return polling.
+ * Reads Airtable only — never accepts client-supplied Paid/Active claims.
+ */
 import { NextResponse } from "next/server";
 import { optionsCors, withCors } from "@/lib/forms/cors";
 import {
@@ -9,12 +13,18 @@ import {
   recordToProfileDtoResolved,
 } from "@/lib/forms/airtable/members-sync";
 import { FormsError } from "@/lib/forms/errors";
-import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 
 export const runtime = "nodejs";
 
 export async function OPTIONS(request: Request) {
   return optionsCors(request);
+}
+
+function isPaid(profile: { payment: string; membership: string }): boolean {
+  return (
+    profile.payment.trim().toLowerCase() === "paid" &&
+    profile.membership.trim().toLowerCase() === "active"
+  );
 }
 
 export async function GET(request: Request) {
@@ -29,7 +39,9 @@ export async function GET(request: Request) {
         NextResponse.json({
           success: true,
           exists: false,
-          memberstackId: member.id,
+          paymentConfirmed: false,
+          payment: "",
+          membership: "",
           onboardingStatus: null,
           resumeStage: "ACCOUNT",
         }),
@@ -40,22 +52,30 @@ export async function GET(request: Request) {
       throw new FormsError("AIRTABLE_DUPLICATE_MEMBER", "Duplicate Memberstack ID");
     }
     const profile = await recordToProfileDtoResolved(rows[0]);
+    const paymentConfirmed = isPaid(profile);
     const status = profile.onboardingStatus || "ACCOUNT_CREATED";
-    // Billing truth: Airtable Payment + Membership only (not onboarding stage alone).
-    const paymentConfirmed =
-      profile.payment.trim().toLowerCase() === "paid" &&
-      profile.membership.trim().toLowerCase() === "active";
-    const resumeStage = mapResumeStage(status, paymentConfirmed);
+
     return withCors(
       NextResponse.json({
         success: true,
         exists: true,
-        memberstackId: member.id,
-        airtableRecordId: profile.airtableRecordId,
-        onboardingStatus: status,
-        resumeStage,
         paymentConfirmed,
-        profile,
+        payment: profile.payment,
+        membership: profile.membership,
+        onboardingStatus: status,
+        serviceAccessUntil: profile.serviceAccessUntil,
+        stripeCustomerId: profile.stripeCustomerId ? "set" : "",
+        airtableRecordId: profile.airtableRecordId,
+        // Safe resume hint for UI only (billing truth is paymentConfirmed)
+        resumeStage: paymentConfirmed
+          ? status === "COMPLETE"
+            ? "COMPLETE"
+            : ["GOAL", "HELP_WANTED", "EXPERTISE", "CONNECTION"].includes(status)
+              ? status
+              : "GOAL"
+          : status === "PAYMENT_PENDING" || status === "BUSINESS"
+            ? "PAYMENT_PENDING"
+            : status,
       }),
       request
     );
@@ -74,7 +94,7 @@ export async function GET(request: Request) {
         {
           success: false,
           code: "INTERNAL_UNEXPECTED_ERROR",
-          message: err instanceof Error ? err.message : "Status failed",
+          message: err instanceof Error ? err.message : "Payment status failed",
         },
         { status: 500 }
       ),
@@ -82,32 +102,3 @@ export async function GET(request: Request) {
     );
   }
 }
-
-function mapResumeStage(status: string, paymentConfirmed: boolean): string {
-  const order = [
-    "ACCOUNT_CREATED",
-    "LOCATION",
-    "BUSINESS",
-    "PAYMENT_PENDING",
-    "PAYMENT_CONFIRMED",
-    "GOAL",
-    "HELP_WANTED",
-    "EXPERTISE",
-    "CONNECTION",
-    "COMPLETE",
-  ];
-  if (status === "ACCOUNT_CREATED") return "LOCATION";
-  if (status === "COMPLETE") return "COMPLETE";
-  // Paid (or checkout return) → continue profile at GOAL, not Payment / success interstitial
-  if (
-    paymentConfirmed &&
-    (status === "PAYMENT_PENDING" || status === "PAYMENT_CONFIRMED" || status === "BUSINESS")
-  ) {
-    return "GOAL";
-  }
-  if (status === "PAYMENT_CONFIRMED") return "GOAL";
-  if (order.includes(status)) return status;
-  return "ACCOUNT";
-}
-
-void MEMBER_FIELDS;

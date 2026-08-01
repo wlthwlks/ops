@@ -19,7 +19,12 @@ These do **not** stop `invoice.paid` Airtable writes:
 Matching rule:
 
 1. Find Airtable Members where `Stripe Customer ID` **exactly** equals the invoice customer.
-2. If found → update `Service access until` (and related billing fields via existing helper).
+2. If found → update (authoritative):
+   - `Payment = Paid`, `Membership = Active`
+   - `Service access until` (monotonic — never moves backwards)
+   - `Stripe Customer ID`, `Stripe Price ID`, `Paid Plans (price ids)` (text, comma-separated)
+   - `Stripe Subscription ID` / status when present on the invoice
+   - `Last invoice ID` / status, `Billing last synced at`, `Last Stripe event ID`
 3. If **not** found:
    - **Do not** search by email.
    - **Do not** write or link Stripe Customer ID.

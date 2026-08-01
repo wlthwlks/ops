@@ -6,6 +6,7 @@ import {
   setLocationCatalogForTests,
   isAirtableRecordId,
   findCatalogCityByCode,
+  isAirtableChecked,
 } from "@/lib/forms/reference-data";
 
 describe("reference data", () => {
@@ -28,6 +29,7 @@ describe("reference data", () => {
           airtableRecordId: "rec8cL36vOg1PpgIY",
           hasSlackChannel: true,
           cityTier: "Anchor",
+          formEnabled: true,
         },
         {
           code: "rectdJywsSsFNj5Wa",
@@ -39,6 +41,7 @@ describe("reference data", () => {
           airtableRecordId: "rectdJywsSsFNj5Wa",
           hasSlackChannel: true,
           cityTier: "Anchor",
+          formEnabled: true,
         },
       ],
     });
@@ -78,5 +81,14 @@ describe("reference data", () => {
     expect(d.cities.some((c) => c.label === "London")).toBe(true);
     expect(d.businessStages.some((s) => s.code === "EARLY_TRACTION")).toBe(true);
     expect(d.locationSource).toBe("airtable");
+  });
+
+  it("treats Airtable checkboxes as boolean true only", () => {
+    expect(isAirtableChecked(true)).toBe(true);
+    expect(isAirtableChecked(1)).toBe(true);
+    expect(isAirtableChecked(false)).toBe(false);
+    expect(isAirtableChecked(0)).toBe(false);
+    expect(isAirtableChecked("true")).toBe(false);
+    expect(isAirtableChecked(null)).toBe(false);
   });
 });

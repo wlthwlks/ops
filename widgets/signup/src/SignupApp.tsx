@@ -20,6 +20,8 @@ import {
   logMemberstackDiagnostics,
   tryResolveSessionAccessToken,
 } from "../../shared/memberstack-auth";
+import { captureAttribution } from "../../shared/attribution";
+import { WalkingLoader } from "../../shared/WalkingLoader";
 
 const { useStepper } = defineStepper([
   { id: "account" },
@@ -41,11 +43,13 @@ const STEP_LABELS: Record<string, string> = {
   payment: "Payment",
   success: "You’re in",
   goal: "Matching",
-  help: "Help wanted",
-  expertise: "Expertise",
-  connection: "Connection",
+  help: "Matching",
+  expertise: "Matching",
+  connection: "Matching",
   done: "Done",
 };
+
+const MATCHING_STEPS = ["goal", "help", "expertise", "connection"] as const;
 
 /** Map Airtable / status resume stages → widget step ids */
 function resumeStageToStep(resumeStage: string, paymentConfirmed?: boolean): string | null {
@@ -81,11 +85,23 @@ function clearPaymentQueryParam() {
   }
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+/** Top-level progress phases (Matching covers goal→connection). */
+const FLOW_DOTS = ["account", "location", "business", "payment", "matching"] as const;
+
+function topPhaseForStep(stepId: string): (typeof FLOW_DOTS)[number] | null {
+  if (stepId === "account" || stepId === "location" || stepId === "business" || stepId === "payment") {
+    return stepId;
+  }
+  if (MATCHING_STEPS.includes(stepId as (typeof MATCHING_STEPS)[number]) || stepId === "success") {
+    return "matching";
+  }
+  return null;
 }
 
-const FLOW_DOTS = ["account", "location", "business", "payment", "goal"] as const;
+function matchingSubIndex(stepId: string): number {
+  const i = MATCHING_STEPS.indexOf(stepId as (typeof MATCHING_STEPS)[number]);
+  return i >= 0 ? i + 1 : 0;
+}
 
 type RefData = {
   countries: Array<{ code: string; label: string }>;
@@ -98,38 +114,6 @@ type RefData = {
   expertiseOptions: Array<{ code: string; label: string }>;
   connectionTypes: Array<{ code: string; label: string }>;
 };
-
-function captureAttribution() {
-  const p = new URLSearchParams(window.location.search);
-  const keys = [
-    "utm_source",
-    "utm_medium",
-    "utm_campaign",
-    "utm_content",
-    "utm_term",
-    "gclid",
-    "fbclid",
-  ] as const;
-  const stored = sessionStorage.getItem("wlth_attribution");
-  if (stored) {
-    try {
-      return JSON.parse(stored) as Record<string, string>;
-    } catch {
-      /* fall through */
-    }
-  }
-  const attr: Record<string, string> = {
-    initialLandingPage: window.location.href,
-    initialReferrer: document.referrer || "",
-    firstAttributionAt: new Date().toISOString(),
-  };
-  for (const k of keys) {
-    const v = p.get(k);
-    if (v) attr[k] = v;
-  }
-  sessionStorage.setItem("wlth_attribution", JSON.stringify(attr));
-  return attr;
-}
 
 async function api(
   base: string,
@@ -154,87 +138,83 @@ export function SignupApp(props: { apiBase: string }) {
     homeUrl: string;
   } | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [loadMessage, setLoadMessage] = useState<string | null>(null);
+  const [confirmingPayment, setConfirmingPayment] = useState(false);
   const attribution = useMemo(() => captureAttribution(), []);
 
-  const resolveStripeCustomerIdFromMemberstack = async (): Promise<string | undefined> => {
-    try {
-      const dom = (
-        window as unknown as {
-          $memberstackDom?: {
-            getCurrentMember?: () => Promise<unknown>;
-          };
-        }
-      ).$memberstackDom;
-      if (!dom?.getCurrentMember) return undefined;
-      const raw = await dom.getCurrentMember();
-      const root =
-        raw && typeof raw === "object" && raw !== null && "data" in raw
-          ? (raw as { data: unknown }).data
-          : raw;
-      const member =
-        root && typeof root === "object" && root !== null && "member" in root
-          ? (root as { member: unknown }).member
-          : root;
-      if (!member || typeof member !== "object") return undefined;
-      const m = member as Record<string, unknown>;
-      const candidates = [
-        m.stripeCustomerId,
-        m.stripe_customer_id,
-        m.stripeId,
-        isRecord(m.billing) ? (m.billing as Record<string, unknown>).stripeCustomerId : null,
-        isRecord(m.auth) ? (m.auth as Record<string, unknown>).stripeCustomerId : null,
-      ];
-      for (const c of candidates) {
-        if (typeof c === "string" && c.trim().startsWith("cus_")) return c.trim();
-      }
-    } catch {
-      /* optional */
-    }
-    return undefined;
-  };
-
-  const advanceAfterPayment = async (accessToken: string | null) => {
+  /**
+   * After Stripe return: poll trusted server payment status.
+   * Never claims Paid/Active from the browser — only navigates when Airtable says so.
+   */
+  const confirmPaymentFromServer = async (accessToken: string | null) => {
     markPreGoalComplete(stepper);
-    if (accessToken) {
-      const stripeCustomerId = await resolveStripeCustomerIdFromMemberstack();
-      try {
-        await api(props.apiBase, "/api/onboarding/step", {
-          method: "PATCH",
-          token: accessToken,
-          body: JSON.stringify({
-            stage: "PAYMENT_CONFIRMED",
-            data: stripeCustomerId ? { stripeCustomerId } : {},
-          }),
-        });
-      } catch {
-        // Retry once — Payment=Paid must land
-        try {
-          await api(props.apiBase, "/api/onboarding/step", {
-            method: "PATCH",
-            token: accessToken,
-            body: JSON.stringify({
-              stage: "PAYMENT_CONFIRMED",
-              data: stripeCustomerId ? { stripeCustomerId } : {},
-            }),
-          });
-        } catch {
-          /* webhooks may still confirm */
-        }
-      }
-      void api(props.apiBase, "/api/onboarding/analytics", {
-        method: "POST",
-        token: accessToken,
-        body: JSON.stringify({ eventType: "PAYMENT_RETURNED" }),
-      }).catch(() => undefined);
-    }
+    setConfirmingPayment(true);
+    setLoadMessage("Confirming your secure payment…");
     try {
-      sessionStorage.setItem("wlth_payment_ok", "1");
+      sessionStorage.setItem("wlth_checkout_pending", "1");
+    } catch {
+      /* ignore */
+    }
+
+    if (!accessToken) {
+      setConfirmingPayment(false);
+      setLoadMessage(null);
+      setError("Please stay signed in while we confirm your payment.");
+      await stepper.goTo("payment");
+      clearPaymentQueryParam();
+      return;
+    }
+
+    void api(props.apiBase, "/api/onboarding/analytics", {
+      method: "POST",
+      token: accessToken,
+      body: JSON.stringify({ eventType: "PAYMENT_RETURNED" }),
+    }).catch(() => undefined);
+
+    // Record that user returned from checkout (onboarding progress only — not billing authority)
+    await api(props.apiBase, "/api/onboarding/step", {
+      method: "PATCH",
+      token: accessToken,
+      body: JSON.stringify({ stage: "PAYMENT_PENDING", data: {} }),
+    }).catch(() => undefined);
+
+    const maxAttempts = 12;
+    const delayMs = 2000;
+    let confirmed = false;
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        const st = await api(props.apiBase, "/api/onboarding/payment-status", {
+          token: accessToken,
+        });
+        if (st.paymentConfirmed) {
+          confirmed = true;
+          break;
+        }
+      } catch {
+        /* retry */
+      }
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+
+    setConfirmingPayment(false);
+    setLoadMessage(null);
+    clearPaymentQueryParam();
+    try {
       sessionStorage.removeItem("wlth_checkout_pending");
     } catch {
       /* ignore */
     }
-    await stepper.goTo("goal");
-    clearPaymentQueryParam();
+
+    if (confirmed) {
+      setLoadMessage("Building your matching profile…");
+      await stepper.goTo("goal");
+      setLoadMessage(null);
+    } else {
+      setError(
+        "We’re still confirming your payment with Stripe. Your progress is saved — try again in a moment, or refresh this page."
+      );
+      await stepper.goTo("payment");
+    }
   };
 
   const accountForm = useForm<AccountForm>({
@@ -328,7 +308,7 @@ export function SignupApp(props: { apiBase: string }) {
 
         // Post-pay path MUST win (linear stepper + webhook lag previously left users on Payment)
         if (paymentReturn === "success" || stripeSessionOk || paymentOkFlag) {
-          await advanceAfterPayment(t);
+          await confirmPaymentFromServer(t);
         } else if (paymentReturn === "cancel") {
           try {
             sessionStorage.removeItem("wlth_checkout_pending");
@@ -363,10 +343,10 @@ export function SignupApp(props: { apiBase: string }) {
             ) {
               // Prefer goal when checkout was started; confirm paid if webhook already landed
               if (Boolean(status.paymentConfirmed)) {
-                await advanceAfterPayment(t);
+                await confirmPaymentFromServer(t);
               } else {
                 // Still pending server-side — still move UX forward after checkout attempt return
-                await advanceAfterPayment(t);
+                await confirmPaymentFromServer(t);
               }
             } else {
               const resume = resumeStageToStep(
@@ -562,7 +542,7 @@ export function SignupApp(props: { apiBase: string }) {
       let t = token;
       if (!t) t = await tryResolveSessionAccessToken();
       if (t) setToken(t);
-      await advanceAfterPayment(t);
+      await confirmPaymentFromServer(t);
     } catch (e) {
       try {
         sessionStorage.removeItem("wlth_checkout_pending");
@@ -618,26 +598,61 @@ export function SignupApp(props: { apiBase: string }) {
     );
   }
 
-  const progressPct = Math.round((stepper.progress || 0) * 100);
+  const currentStepId = String(
+    (stepper as { state?: { current?: { id?: string } } }).state?.current?.id ||
+      FLOW_DOTS.find((id) => id !== "matching" && stepper.is(id as never)) ||
+      (MATCHING_STEPS.find((id) => stepper.is(id as never)) ?? "account")
+  );
+  const activePhase = topPhaseForStep(currentStepId) || "account";
+  const matchSub = matchingSubIndex(currentStepId);
+  const phaseIndex = Math.max(0, FLOW_DOTS.indexOf(activePhase));
+  const progressPct = Math.round(((phaseIndex + (matchSub ? matchSub / 4 : 0.5)) / FLOW_DOTS.length) * 100);
+
+  if (confirmingPayment || (loading && loadMessage)) {
+    return (
+      <div className="wlth-widget">
+        <div className="wlth-card wlth-overlay-load">
+          <WalkingLoader message={loadMessage || "Saving your progress…"} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="wlth-widget">
       <div className="wlth-card">
         <div className="wlth-progress" aria-hidden>
-          <span style={{ width: `${progressPct}%` }} />
+          <span style={{ width: `${Math.min(100, progressPct)}%` }} />
         </div>
         <div className="wlth-steps" aria-label="Progress">
-          {FLOW_DOTS.map((id) => (
-            <span
-              key={id}
-              className={`wlth-step-dot ${
-                stepper.is(id) ? "is-active" : stepper.isComplete(id) ? "is-done" : ""
-              }`}
-            >
-              {STEP_LABELS[id]}
-            </span>
-          ))}
+          {FLOW_DOTS.map((id, idx) => {
+            const label =
+              id === "matching"
+                ? "Matching"
+                : id === "account"
+                  ? "Account"
+                  : id === "location"
+                    ? "Location"
+                    : id === "business"
+                      ? "Business"
+                      : "Payment";
+            const isActive = activePhase === id;
+            const isDone = idx < phaseIndex || (id === "matching" && matchSub > 0 && !isActive);
+            return (
+              <span
+                key={id}
+                className={`wlth-step-dot ${isActive ? "is-active" : isDone ? "is-done" : ""}`}
+              >
+                {label}
+              </span>
+            );
+          })}
         </div>
+        {matchSub > 0 && (
+          <p className="wlth-subprogress">
+            Matching · {matchSub} of 4
+          </p>
+        )}
 
         {error && (
           <div className="wlth-banner-error" role="alert">
@@ -649,25 +664,27 @@ export function SignupApp(props: { apiBase: string }) {
           <form onSubmit={onAccount} noValidate>
             <h1>Join WLTH WLKS</h1>
             <p>Create your account to continue.</p>
-            <div className="wlth-field">
-              <label htmlFor="fn">First name</label>
-              <input
-                id="fn"
-                autoComplete="given-name"
-                aria-invalid={!!accountForm.formState.errors.firstName}
-                {...accountForm.register("firstName")}
-              />
-              <FieldError message={accountForm.formState.errors.firstName?.message} />
-            </div>
-            <div className="wlth-field">
-              <label htmlFor="ln">Last name</label>
-              <input
-                id="ln"
-                autoComplete="family-name"
-                aria-invalid={!!accountForm.formState.errors.lastName}
-                {...accountForm.register("lastName")}
-              />
-              <FieldError message={accountForm.formState.errors.lastName?.message} />
+            <div className="wlth-grid-2">
+              <div className="wlth-field">
+                <label htmlFor="fn">First name</label>
+                <input
+                  id="fn"
+                  autoComplete="given-name"
+                  aria-invalid={!!accountForm.formState.errors.firstName}
+                  {...accountForm.register("firstName")}
+                />
+                <FieldError message={accountForm.formState.errors.firstName?.message} />
+              </div>
+              <div className="wlth-field">
+                <label htmlFor="ln">Last name</label>
+                <input
+                  id="ln"
+                  autoComplete="family-name"
+                  aria-invalid={!!accountForm.formState.errors.lastName}
+                  {...accountForm.register("lastName")}
+                />
+                <FieldError message={accountForm.formState.errors.lastName?.message} />
+              </div>
             </div>
             <div className="wlth-field">
               <label htmlFor="em">Email</label>
@@ -702,6 +719,7 @@ export function SignupApp(props: { apiBase: string }) {
         {stepper.is("location") && (
           <form onSubmit={onLocation} noValidate>
             <h2>Where are you based?</h2>
+            <div className="wlth-grid-2">
             <div className="wlth-field">
               <label htmlFor="country">Country</label>
               <select
@@ -735,6 +753,7 @@ export function SignupApp(props: { apiBase: string }) {
                 ))}
               </select>
               <FieldError message={locationForm.formState.errors.cityCode?.message} />
+            </div>
             </div>
             <p className="wlth-muted">General availability (select all that apply)</p>
             <div className="wlth-check-grid">
@@ -836,19 +855,45 @@ export function SignupApp(props: { apiBase: string }) {
         )}
 
         {stepper.is("payment") && (
-          <>
-            <h2>Payment</h2>
-            <p>Secure checkout is handled by Memberstack / Stripe.</p>
+          <div className="wlth-pay-hero">
+            <h1>Your WLTH WLKS membership starts here</h1>
+            <p>
+              Complete your secure payment through Stripe and unlock a more intentional way to
+              build valuable founder connections.
+            </p>
+            <div className="wlth-benefits">
+              <p className="wlth-benefit">
+                <strong>Curated introductions</strong>
+                Shaped by your goals, business stage, and availability.
+              </p>
+              <p className="wlth-benefit">
+                <strong>Relevant connections</strong>
+                Meet founders in your community who are building too.
+              </p>
+              <p className="wlth-benefit">
+                <strong>Ongoing growth</strong>
+                Opportunities to learn, collaborate, and stay accountable.
+              </p>
+              <p className="wlth-benefit">
+                <strong>A living profile</strong>
+                Matching improves as your priorities evolve.
+              </p>
+            </div>
             <div className="wlth-actions">
               <button
                 type="button"
                 className="wlth-btn-primary"
+                disabled={loading}
                 onClick={() => void startCheckout()}
               >
-                Continue to checkout
+                Continue to secure checkout
               </button>
             </div>
-          </>
+            <p className="wlth-trust">
+              Secure payment powered by Stripe. You can cancel anytime from your membership
+              settings. We never store your full card details on WLTH WLKS.
+            </p>
+          </div>
         )}
 
         {stepper.is("success") && (
@@ -861,7 +906,7 @@ export function SignupApp(props: { apiBase: string }) {
                 className="wlth-btn-primary"
                 onClick={() => void stepper.goTo("goal")}
               >
-                Improve your matching results
+                Continue to matching
               </button>
               <button
                 type="button"
@@ -878,28 +923,35 @@ export function SignupApp(props: { apiBase: string }) {
           <form
             onSubmit={goalForm.handleSubmit(async (v) => {
               setError(null);
+              setLoading(true);
+              setLoadMessage("Saving your progress…");
               try {
                 await saveStep("GOAL", v);
+                setLoadMessage("Preparing your next step…");
                 await stepper.goTo("help");
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
+              } finally {
+                setLoading(false);
+                setLoadMessage(null);
               }
             })}
             noValidate
           >
-            <h2>Improve your matching results!</h2>
+            <h2>Improve your matching results</h2>
             <p className="wlth-muted">
-              Tell us what you’re focused on so we can introduce you to the right people.
+              Your answers help us introduce you to the right people — they never change how
+              matching algorithms run outside this profile.
             </p>
             <div className="wlth-field">
               <label htmlFor="goal">
-                What’s the most important thing you want help with right now?
+                What is your most important goal for the next 90 days?
               </label>
               <textarea id="goal" rows={4} {...goalForm.register("ninetyDayGoal")} />
               <FieldError message={goalForm.formState.errors.ninetyDayGoal?.message as string} />
             </div>
             <div className="wlth-actions">
-              <button type="submit" className="wlth-btn-primary">
+              <button type="submit" className="wlth-btn-primary" disabled={loading}>
                 Continue
               </button>
             </div>

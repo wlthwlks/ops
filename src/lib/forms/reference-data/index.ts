@@ -10,6 +10,7 @@ export {
   findCatalogCityByRecordIds,
   resolveMemberLocationDto,
   isAirtableRecordId,
+  isAirtableChecked,
   clearLocationCatalogCache,
   setLocationCatalogForTests,
   type CatalogCity,

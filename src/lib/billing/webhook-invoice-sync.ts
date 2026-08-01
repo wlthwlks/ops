@@ -17,6 +17,7 @@ import {
   escapeAirtableFormulaString,
   findAirtableMembersByStripeCustomerId,
   updateServiceAccessUntilForCustomer,
+  type InvoiceBillingExtras,
   type ServiceAccessSyncResult,
   type ServiceAccessSyncStatus,
 } from "@/lib/billing/service-access-sync";
@@ -136,6 +137,7 @@ export async function syncInvoicePaidToAirtable(input: {
   invoiceCreatedUnix?: number | null;
   dryRun?: boolean;
   nowMs?: number;
+  billing?: InvoiceBillingExtras;
 }): Promise<WebhookBillingResult> {
   const {
     airtable,
@@ -147,6 +149,7 @@ export async function syncInvoicePaidToAirtable(input: {
     invoiceCreatedUnix,
     dryRun = false,
     nowMs,
+    billing,
   } = input;
 
   const paidThroughIso = paidThrough.toISOString();
@@ -174,6 +177,7 @@ export async function syncInvoicePaidToAirtable(input: {
       stripeInvoiceId,
       stripeEventId,
       dryRun,
+      billing,
     });
     return {
       ...base,

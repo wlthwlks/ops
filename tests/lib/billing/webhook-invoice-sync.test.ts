@@ -260,14 +260,11 @@ describe("syncInvoicePaidToAirtable", () => {
     });
     expect(r.status).toBe("existing_later");
     // Access date preserved, but Payment must still flip to Paid
-    expect(airtable.updateRecordsBatched).toHaveBeenCalledWith("MEMBERS", [
-      {
-        id: "rec1",
-        fields: {
-          Payment: "Paid",
-          Membership: "Active",
-        },
-      },
-    ]);
+    const call = airtable.updateRecordsBatched.mock.calls[0][1] as Array<{
+      fields: Record<string, unknown>;
+    }>;
+    expect(call[0].fields.Payment).toBe("Paid");
+    expect(call[0].fields.Membership).toBe("Active");
+    expect(call[0].fields[SERVICE_ACCESS_FIELD]).toBeUndefined();
   });
 });

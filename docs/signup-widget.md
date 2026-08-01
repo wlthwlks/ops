@@ -1,23 +1,34 @@
 # Signup widget
 
-Build: `npm run widgets:build:signup` → `public/widgets/signup/v1/`.
+Embed: `#wlth-signup-root` + `public/widgets/signup/v1/signup.js`.
 
-UI stack: **@stepperize/react** (linear steps) + **react-hook-form** + **Zod** (`widgets/shared/widget-schemas.ts`) + scoped `.wlth-widget` CSS.
+## Visual structure
 
-Stages: Account → Location → Business → Payment (Memberstack checkout) → Success → Goal → Help → Expertise → Connection → home.
+- Max width ~1000px; two-column grids on desktop for short fields
+- Top phases: Account → Location → Business → Payment → **Matching**
+- Matching covers Goal / Help / Expertise / Connection with sub-progress `N of 4`
+- `WalkingLoader` for config load, step saves, Stripe return confirmation
 
-Autosave via `PATCH /api/onboarding/step` when Memberstack token is present.
+## Payment
 
-### Authentication (account step)
+- Customer-facing copy mentions **Stripe only** (not Memberstack)
+- Checkout still uses Memberstack `purchasePlansWithCheckout` internally
+- After return (`?payment=success` or in-place resolve): poll `GET /api/onboarding/payment-status`
+- **Client never sets Payment=Paid or Membership=Active**
+- Billing authority: signed Stripe `invoice.paid` (qualifying price) or Memberstack plan webhook
 
-1. `signupMemberEmailPassword` (or `auth.signupMemberEmailPassword`)
-2. On documented `email-already-in-use` only → `loginMemberEmailPassword`
-3. Access token from response: `result.data.tokens.accessToken` (MemberAuth)
-4. `POST /api/onboarding/bootstrap` with header `X-Memberstack-Token`
-5. Advance stepper only after bootstrap 200
+## Location
 
-Session resume uses `getMemberCookie()` when it returns a JWT string — not required after signup.
+- Live catalogue: `COUNTRIES.Active` + `ALL CITIES.Form enabled` + Country link
+- Codes = Airtable record ids
 
-Attribution captured on load into `sessionStorage` (`wlth_attribution`) and sent on bootstrap.
+## Attribution
 
-Post-payment enrichment fields are stored only — **not** used for matching in this phase.
+- First-touch in `localStorage` key `wlth_attribution_v1`
+- Allowlist: utm_*, gclid, fbclid, wbraid, gbraid, landing, referrer, timestamp
+- Bootstrap fills blank Airtable first-touch fields only
+
+## Account create
+
+- `Membership = Pending Payment`
+- `Payment = Unpaid`

@@ -139,6 +139,7 @@ export async function PATCH(request: Request) {
     else if (d.expertiseOffered != null)
       patch[MEMBER_FIELDS.expertiseContext] = d.expertiseOffered.join(", ");
     if (d.connectionType != null) patch[MEMBER_FIELDS.connectionType] = d.connectionType;
+    if (d.topicsToDiscuss != null) patch[MEMBER_FIELDS.topicsToDiscuss] = d.topicsToDiscuss;
 
     const result = await updateMemberProfile({
       memberstackId: member.id,

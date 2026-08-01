@@ -1,60 +1,80 @@
 # Airtable form schema
 
-Canonical MEMBERS field names used by signup/onboarding/update-details. Exact names only — see `src/lib/airtable/schema.ts`.
+Verified against the live preview base via Airtable REST (Metadata API token lacks `schema.bases:read` — field types probed with read/write samples).
 
-## Writable (forms / billing)
+## MEMBERS — key columns
 
-- `email`, `First Name`, `Last Name`, `phone number`
-- `Memberstack ID`, `Stripe Customer ID`, `Stripe Subscription ID`, `Stripe Price ID`, `Memberstack Plan ID`
-- `Membership`, `Payment`, `Date joined`, `Cancellation date`, `Service access until`
-- `City`, `City relation`, `Timezone`, `Availability`, `Availability v2`, `Location data version`
-- `Industry`, `Revenue`, `Business stage`, `Business description`, `Connection type`
-- `Current 90-day goal`, `Goal updated at`
-- `Help wanted context`, `Expertise context` (no code-list columns)
-- `Onboarding status`, `Last completed signup step`, `Profile schema version`, `Onboarding completed at`, `Profile last updated at`
-- `UTM Source`, `UTM Medium`, `UTM Campaign`, `UTM Content`, `UTM Term`
-- `Google Click ID`, `Facebook Click ID`, `Initial landing page`, `Initial referrer`, `First attribution captured at`
-- Stripe lifecycle: `Stripe subscription status`, `Cancel at period end`, `Cancellation requested at`, `Cancellation effective at`, invoice/failure/billing sync fields
-- Matching-related (ops, not forms): `Recurring intro status`, `Recurring pause until`, first-intro fields, etc.
+| Field | Type (probed) | Notes |
+|---|---|---|
+| `Name` | formula | **Never write** |
+| `email` | text | |
+| `First Name` / `Last Name` | text | |
+| `phone number` | text | |
+| `Membership` | single select | Options include `Active`, **`Pending Payment`** (required for signup) |
+| `Payment` | single select | `Unpaid`, `Paid` |
+| `City` | text | City label |
+| `City relation` | linked → ALL CITIES | Write `[recordId]` |
+| `Timezone` | text | |
+| `Availability` | text | Legacy string |
+| `Availability v2` | multi-select | Codes `mon_morning` … `sun_evening` as **string[]** |
+| `Industry` / `Revenue` | single select | App codes; forms use `typecast: true` |
+| `Business stage` / `Connection type` | single select | App codes |
+| `Business description` | text | |
+| `Current 90-day goal` / `Goal updated at` | text / date | |
+| `Help wanted context` / `Expertise context` | text | No code-list columns |
+| `Topics to Discuss` | text | |
+| `Onboarding status` / `Last completed signup step` | text | Progress only — not billing |
+| `Stripe Customer ID` | text | |
+| `Service access until` | date | Monotonic |
+| `Stripe Price ID` | text | Primary qualifying price |
+| `Paid Plans (price ids)` | **text** | Comma-separated unique `price_…` ids (not multi-select) |
+| `Stripe Subscription ID` | text | |
+| `Stripe subscription status` | text | |
+| `Last invoice ID` / `Last invoice status` | text | |
+| `Billing last synced at` / `Last Stripe event ID` | date/text | |
+| UTM / click / landing / referrer / first attribution | text/date | First-touch only |
 
-## Read-only — never write
-
-- `Name` (computed formula)
-- `Record ID`, `Last Modified Date`
-
-## Does not exist on MEMBERS — never write / never create
+### Does not exist / never write
 
 - `Last form source`
-- `Country code`, `City code` (city lives on ALL CITIES as `City Code`; members store `City` text + `Timezone`)
-- `Help wanted`, `Expertise offered` (context columns only)
-- `Business name`, `Business website`
-- `Primary industry`, `Annual revenue` (use `Industry`, `Revenue`)
-- `90-day goal` (use `Current 90-day goal`)
-- `utm_source` style keys (use `UTM Source`, …)
-- `First attribution at` (use `First attribution captured at`)
+- `Country code` / `City code` on MEMBERS
+- `Business name` / `Business website`
+- `Help wanted` / `Expertise offered` code columns
 
-## Field types (probed on live base)
+## COUNTRIES
 
-| Field | Type | Write format |
+| Field | Type |
+|---|---|
+| `Name` | text |
+| `Active` | checkbox — **must be true** for forms |
+| `ALL CITIES` | linked |
+
+## ALL CITIES
+
+| Field | Type |
+|---|---|
+| `City` | text |
+| `Country` | linked → COUNTRIES |
+| `Form enabled` | checkbox — **must be true** for forms |
+| `Active` | number/rollup (not used for form eligibility) |
+| `Slack channels` | linked |
+| `City Tier` | text |
+
+## Membership state machine
+
+| Event | Membership | Payment |
 |---|---|---|
-| `Availability v2` | multi-select | `string[]` option names: `mon_morning` … `sun_evening` |
-| `Availability` | single line text | legacy label string |
-| `City` | single line text | city name e.g. `"London"` |
-| `City relation` | linked record → ALL CITIES | `[recordId]` |
-| `Timezone` | single line text | IANA e.g. `Europe/London` |
-| `Industry`, `Revenue` | single select | app codes; forms use `typecast: true` |
-| `Business stage`, `Connection type` | single select | app codes (`EXPLORING_IDEA`, …) |
+| Account created (bootstrap) | `Pending Payment` | `Unpaid` |
+| Client checkout return | *unchanged* | *unchanged* |
+| Trusted `invoice.paid` (qualifying price) | `Active` | `Paid` |
+| Trusted Memberstack plan.added (flag on) | `Active` | `Paid` |
 
-## Location catalogue (live)
+**Clients cannot set Paid/Active.** `PAYMENT_CONFIRMED` step is a navigation checkpoint only.
 
-- Forms load **COUNTRIES** + **ALL CITIES** from Airtable (not a hardcoded list).
-- Form `countryCode` / `cityCode` = Airtable record ids.
-- Signup writes both `City` (text) and `City relation` (link).
-- Live ALL CITIES columns used: `City`, `Country` (link), `Slack channels`, `City Tier`.
-  (`City Code` / `Form enabled` / `Timezone` are not present on this base.)
+## Location catalogue rules
 
-## SLACK CHANNELS
-
-- `group size`, `Channel status/donut`, `Slack Channel ID`, …
-
-Do **not** map new form fields into matching or Pinecone without an explicit ops change.
+1. Country: `Active === true` (boolean, not string `"true"`)
+2. City: `Form enabled === true`
+3. City must link to an eligible country via `Country`
+4. Countries with zero eligible cities are omitted
+5. Form codes = Airtable record ids

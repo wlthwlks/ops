@@ -7,6 +7,7 @@ import {
   getStripeWebhookSecret,
 } from "@/lib/integrations/stripe";
 import {
+  getQualifyingMembershipPriceIds,
   getStripeCustomerId,
   listAllInvoiceLines,
   paidThroughFromInvoiceLines,
@@ -116,6 +117,25 @@ export async function POST(request: NextRequest) {
         });
       }
 
+      const qualifyingPriceIds = getQualifyingMembershipPriceIds(lines, membershipPriceIds);
+      // Subscription id: parent.subscription_details / subscription (SDK shapes vary)
+      const invAny = invoice as unknown as {
+        subscription?: string | { id?: string } | null;
+        parent?: {
+          subscription_details?: { subscription?: string | { id?: string } | null } | null;
+        } | null;
+      };
+      let stripeSubscriptionId: string | null = null;
+      const subRef =
+        invAny.subscription ??
+        invAny.parent?.subscription_details?.subscription ??
+        null;
+      if (typeof subRef === "string" && subRef.startsWith("sub_")) {
+        stripeSubscriptionId = subRef;
+      } else if (subRef && typeof subRef === "object" && typeof subRef.id === "string") {
+        stripeSubscriptionId = subRef.id;
+      }
+
       const airtableToken = process.env.AIRTABLE_GET_DATA_TOKEN;
       const airtableBase = process.env.AIRTABLE_BASE_ID;
       if (!airtableToken || !airtableBase) {
@@ -133,6 +153,12 @@ export async function POST(request: NextRequest) {
         invoicePaidAtUnix: getInvoicePaidAtUnix(invoice),
         invoiceCreatedUnix: typeof invoice.created === "number" ? invoice.created : null,
         dryRun: false,
+        billing: {
+          qualifyingPriceIds,
+          stripeSubscriptionId,
+          stripeSubscriptionStatus: stripeSubscriptionId ? "active" : null,
+          invoiceStatus: invoice.status || "paid",
+        },
       });
 
       console.log(

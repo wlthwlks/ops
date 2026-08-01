@@ -19,6 +19,7 @@ const TEST_CATALOG = {
       airtableRecordId: LONDON_ID,
       hasSlackChannel: true,
       cityTier: "Anchor",
+      formEnabled: true,
     },
   ],
 };
@@ -118,6 +119,8 @@ describe("Airtable member writes never include computed Name", () => {
     expect(fields[MEMBER_FIELDS.lastName]).toBe("Lovelace");
     expect(fields[MEMBER_FIELDS.email]).toBe("ada@ex.com");
     expect(fields[MEMBER_FIELDS.memberstackId]).toBe("mem_1");
+    expect(fields[MEMBER_FIELDS.membership]).toBe("Pending Payment");
+    expect(fields[MEMBER_FIELDS.payment]).toBe("Unpaid");
     expect(fields[MEMBER_FIELDS.name]).toBeUndefined();
     expect(fields.Name).toBeUndefined();
   });

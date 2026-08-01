@@ -208,16 +208,16 @@ describe("updateServiceAccessUntilForCustomer", () => {
       stripeInvoiceId: "in_1",
     });
     expect(r.airtableRecordsUpdated).toBe(1);
-    expect(at.updateRecordsBatched).toHaveBeenCalledWith("MEMBERS", [
-      {
-        id: "rec1",
-        fields: {
-          Payment: "Paid",
-          Membership: "Active",
-          [SERVICE_ACCESS_FIELD]: "2026-09-01T00:00:00.000Z",
-        },
-      },
-    ]);
+    const call = at.updateRecordsBatched.mock.calls[0][1] as Array<{
+      id: string;
+      fields: Record<string, unknown>;
+    }>;
+    expect(call[0].id).toBe("rec1");
+    expect(call[0].fields.Payment).toBe("Paid");
+    expect(call[0].fields.Membership).toBe("Active");
+    expect(call[0].fields[SERVICE_ACCESS_FIELD]).toBe("2026-09-01T00:00:00.000Z");
+    expect(call[0].fields["Stripe Customer ID"]).toBe("cus_x");
+    expect(call[0].fields["Last invoice ID"]).toBe("in_1");
   });
 
   it("updates all duplicate records", async () => {
@@ -265,15 +265,12 @@ describe("updateServiceAccessUntilForCustomer", () => {
     });
     expect(r.status).toBe("existing_later");
     expect(r.airtableRecordsUpdated).toBe(0);
-    expect(at.updateRecordsBatched).toHaveBeenCalledWith("MEMBERS", [
-      {
-        id: "rec1",
-        fields: {
-          Payment: "Paid",
-          Membership: "Active",
-        },
-      },
-    ]);
+    const call = at.updateRecordsBatched.mock.calls[0][1] as Array<{
+      fields: Record<string, unknown>;
+    }>;
+    expect(call[0].fields.Payment).toBe("Paid");
+    expect(call[0].fields.Membership).toBe("Active");
+    expect(call[0].fields[SERVICE_ACCESS_FIELD]).toBeUndefined();
   });
 
   it("escapes customer id in formula", async () => {
