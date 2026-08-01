@@ -355,3 +355,81 @@ export function topLevelKeys(value: unknown): string[] {
   if (!isRecord(value)) return [];
   return Object.keys(value).slice(0, 20);
 }
+
+/**
+ * Change password via Memberstack DOM.
+ * Tries documented updateMemberPassword shapes; falls back to login(old)+update if needed.
+ */
+export async function changeMemberstackPassword(input: {
+  currentPassword: string;
+  newPassword: string;
+  email?: string;
+}): Promise<void> {
+  const dom = getMemberstackDom() as MemberstackDomLike & {
+    updateMemberPassword?: (p: Record<string, unknown>) => Promise<unknown>;
+    updatePassword?: (p: Record<string, unknown>) => Promise<unknown>;
+    auth?: {
+      updateMemberPassword?: (p: Record<string, unknown>) => Promise<unknown>;
+      updatePassword?: (p: Record<string, unknown>) => Promise<unknown>;
+    };
+  };
+  if (!dom) {
+    throw new Error("Memberstack is not loaded on this page.");
+  }
+
+  const attempts: Array<() => Promise<unknown>> = [];
+  const payloads = [
+    { password: input.currentPassword, newPassword: input.newPassword },
+    { currentPassword: input.currentPassword, newPassword: input.newPassword },
+    { oldPassword: input.currentPassword, newPassword: input.newPassword },
+  ];
+
+  for (const fn of [
+    dom.updateMemberPassword,
+    dom.updatePassword,
+    dom.auth?.updateMemberPassword,
+    dom.auth?.updatePassword,
+  ]) {
+    if (typeof fn !== "function") continue;
+    for (const p of payloads) {
+      attempts.push(() => fn.call(dom, p));
+    }
+  }
+
+  let lastErr: unknown;
+  for (const run of attempts) {
+    try {
+      await run();
+      return;
+    } catch (e) {
+      lastErr = e;
+      // Wrong password should surface immediately when clearly indicated
+      if (isInvalidCredentialsError(e)) {
+        throw new Error(formatMemberstackUserError(e));
+      }
+    }
+  }
+
+  // Fallback: verify current password via login, then try update with new password only
+  const login = getLoginFn(dom);
+  if (login && input.email) {
+    try {
+      await login({ email: input.email, password: input.currentPassword });
+      for (const fn of [dom.updateMemberPassword, dom.updatePassword]) {
+        if (typeof fn !== "function") continue;
+        try {
+          await fn.call(dom, { password: input.newPassword, newPassword: input.newPassword });
+          return;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+    } catch (e) {
+      throw new Error(formatMemberstackUserError(e));
+    }
+  }
+
+  throw new Error(
+    lastErr ? formatMemberstackUserError(lastErr) : "Password change is unavailable on this page."
+  );
+}

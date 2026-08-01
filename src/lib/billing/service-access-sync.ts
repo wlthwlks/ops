@@ -338,6 +338,14 @@ export async function updateServiceAccessUntilForCustomer(input: {
     }
     if (billing?.stripeSubscriptionStatus) {
       fields[STRIPE_SUBSCRIPTION_STATUS_FIELD] = billing.stripeSubscriptionStatus;
+    } else {
+      fields[STRIPE_SUBSCRIPTION_STATUS_FIELD] = "active";
+    }
+    const msPlan =
+      (process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID || "").trim() ||
+      (process.env.MEMBERSTACK_PLAN_ID || "").trim();
+    if (msPlan) {
+      fields["Memberstack Plan ID"] = msPlan;
     }
 
     if (comparison.invalidCurrent) {

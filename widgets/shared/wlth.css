@@ -424,3 +424,39 @@
   align-items: center;
   justify-content: center;
 }
+
+/* —— Step transitions —— */
+.wlth-widget .wlth-step-panel {
+  animation: wlth-step-in 0.35s ease both;
+}
+
+@keyframes wlth-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wlth-widget .wlth-step-panel {
+    animation: none;
+  }
+}
+
+.wlth-widget .wlth-reactivate {
+  border: 1px solid var(--wlth-border);
+  border-radius: var(--wlth-radius-sm);
+  background: var(--wlth-surface);
+  padding: 16px 18px;
+  margin: 18px 0;
+}
+
+.wlth-widget .wlth-reactivate h3 {
+  margin: 0 0 6px;
+  font-size: 1rem;
+  font-weight: 600;
+}

@@ -690,7 +690,7 @@ export function SignupApp(props: { apiBase: string }) {
         )}
 
         {stepper.is("account") && (
-          <form onSubmit={onAccount} noValidate>
+          <form className="wlth-step-panel" key="account" onSubmit={onAccount} noValidate>
             <h1>Join WLTH WLKS</h1>
             <p>Create your account to continue.</p>
             <div className="wlth-grid-2">
@@ -746,7 +746,7 @@ export function SignupApp(props: { apiBase: string }) {
         )}
 
         {stepper.is("location") && (
-          <form onSubmit={onLocation} noValidate>
+          <form className="wlth-step-panel" key="location" onSubmit={onLocation} noValidate>
             <h2>Where are you based?</h2>
             <div className="wlth-grid-2">
             <div className="wlth-field">
@@ -823,7 +823,7 @@ export function SignupApp(props: { apiBase: string }) {
         )}
 
         {stepper.is("business") && (
-          <form onSubmit={onBusiness} noValidate>
+          <form className="wlth-step-panel" key="business" onSubmit={onBusiness} noValidate>
             <h2>About your business</h2>
             <div className="wlth-field">
               <label htmlFor="ind">Primary industry</label>
@@ -884,7 +884,7 @@ export function SignupApp(props: { apiBase: string }) {
         )}
 
         {stepper.is("payment") && (
-          <div className="wlth-pay-hero">
+          <div className="wlth-pay-hero wlth-step-panel" key="payment">
             <h1>Your WLTH WLKS membership starts here</h1>
             <p>
               Complete your secure payment through Stripe and unlock a more intentional way to
@@ -934,7 +934,7 @@ export function SignupApp(props: { apiBase: string }) {
         )}
 
         {stepper.is("success") && (
-          <>
+          <div className="wlth-step-panel" key="success">
             <h1>You’re in!</h1>
             <p>Next: a few questions so we can improve your matching results.</p>
             <div className="wlth-actions">
@@ -953,11 +953,13 @@ export function SignupApp(props: { apiBase: string }) {
                 Go to home
               </button>
             </div>
-          </>
+          </div>
         )}
 
         {stepper.is("goal") && (
           <form
+            className="wlth-step-panel"
+            key="goal"
             onSubmit={goalForm.handleSubmit(async (v) => {
               setError(null);
               setLoading(true);
@@ -997,6 +999,8 @@ export function SignupApp(props: { apiBase: string }) {
 
         {stepper.is("help") && (
           <form
+            className="wlth-step-panel"
+            key="help"
             onSubmit={helpForm.handleSubmit(async (v) => {
               setError(null);
               try {
@@ -1042,6 +1046,8 @@ export function SignupApp(props: { apiBase: string }) {
 
         {stepper.is("expertise") && (
           <form
+            className="wlth-step-panel"
+            key="expertise"
             onSubmit={expertiseForm.handleSubmit(async (v) => {
               setError(null);
               try {
@@ -1087,6 +1093,8 @@ export function SignupApp(props: { apiBase: string }) {
 
         {stepper.is("connection") && (
           <form
+            className="wlth-step-panel"
+            key="connection"
             onSubmit={connectionForm.handleSubmit(async (v) => {
               setError(null);
               try {
@@ -1122,10 +1130,10 @@ export function SignupApp(props: { apiBase: string }) {
         )}
 
         {stepper.is("done") && (
-          <>
+          <div className="wlth-step-panel" key="done">
             <h1>Welcome</h1>
             <p>Redirecting you home…</p>
-          </>
+          </div>
         )}
       </div>
     </div>

@@ -237,14 +237,27 @@ export async function confirmCheckoutForMember(input: {
 
   const patch: Record<string, unknown> = {
     [MEMBER_FIELDS.onboardingStatus]: "PAYMENT_CONFIRMED",
+    [MEMBER_FIELDS.stripeSubscriptionStatus]: subscriptionId ? "active" : "active",
   };
   if (subscriptionId) {
     patch[MEMBER_FIELDS.stripeSubscriptionId] = subscriptionId;
-    patch[MEMBER_FIELDS.stripeSubscriptionStatus] = "active";
   }
   if (priceIds.length > 0) {
     patch[MEMBER_FIELDS.stripePriceId] = priceIds[0];
     patch["Paid Plans (price ids)"] = formatPaidPlansText(priceIds);
+  } else {
+    // Fall back to configured membership price id when line items unavailable
+    const configured = [...membershipIds];
+    if (configured[0]) {
+      patch[MEMBER_FIELDS.stripePriceId] = configured[0];
+      patch["Paid Plans (price ids)"] = formatPaidPlansText(configured);
+    }
+  }
+  const msPlan =
+    (process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID || "").trim() ||
+    (process.env.MEMBERSTACK_PLAN_ID || "").trim();
+  if (msPlan) {
+    patch[MEMBER_FIELDS.memberstackPlanId] = msPlan;
   }
   if (paidThrough) {
     patch[MEMBER_FIELDS.serviceAccessUntil] = paidThrough.toISOString().slice(0, 10);
