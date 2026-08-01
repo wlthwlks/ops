@@ -351,7 +351,7 @@ export async function updateOnboardingStep(
 
   const writeFields = stripComputedMemberWriteFields(fields);
 
-  // Client must never write Payment=Paid / Membership=Active (billing authority is webhooks only).
+  // Client onboarding steps must never write Payment=Paid / Membership=Active.
   if (writeFields[MEMBER_FIELDS.payment] === "Paid") {
     delete writeFields[MEMBER_FIELDS.payment];
   }
@@ -388,6 +388,10 @@ export async function updateOnboardingStep(
   }
 }
 
+/**
+ * Profile updates from trusted server callers (e.g. link Stripe Customer ID).
+ * Does not strip Paid/Active — callers must be server-side only.
+ */
 export async function updateMemberProfile(
   input: {
     memberstackId: string;
@@ -444,6 +448,17 @@ export async function updateMemberProfile(
   return { record: updated, shadowed: false };
 }
 
+function isMakeShadowMode(): boolean {
+  const s = (process.env.MAKE_SHADOW_MODE || "").trim().toLowerCase();
+  return s === "true" || s === "1" || s === "yes" || s === "on";
+}
+
+/** Billing writes always apply unless full shadow mode (same as invoice.paid). */
+function canWriteBillingToAirtable(): boolean {
+  if (isMakeShadowMode()) return false;
+  return true;
+}
+
 export async function updateMemberBilling(
   input: {
     stripeCustomerId: string;
@@ -464,12 +479,7 @@ export async function updateMemberBilling(
     );
   }
   const existing = matches[0];
-  const writeEnabled =
-    canWriteAirtableFromForms() ||
-    (process.env.NEW_STRIPE_WEBHOOKS_ENABLED || "").toLowerCase() === "true" ||
-    (process.env.NEW_STRIPE_WEBHOOKS_ENABLED || "") === "1";
-
-  if (!writeEnabled) {
+  if (!canWriteBillingToAirtable()) {
     return { record: existing, status: "shadowed" };
   }
 
@@ -480,6 +490,92 @@ export async function updateMemberBilling(
     existing.id
   );
   return { record: updated, status: "updated" };
+}
+
+/** Link Stripe Customer ID only (no Paid/Active) — unblocks invoice.paid matching. */
+export async function linkStripeCustomerIdByMemberstackId(
+  input: { memberstackId: string; stripeCustomerId: string },
+  airtable: AirtableClient = getFormsAirtableClient()
+): Promise<{ status: string }> {
+  const msId = input.memberstackId.trim();
+  const cus = input.stripeCustomerId.trim();
+  if (!msId || !cus.startsWith("cus_")) return { status: "invalid_ids" };
+  const existing = requireUnique(
+    await findMemberByMemberstackId(msId, airtable),
+    "Memberstack ID"
+  );
+  if (!existing) return { status: "AIRTABLE_MEMBER_NOT_FOUND" };
+  if (!canWriteBillingToAirtable()) return { status: "shadowed" };
+  await writeMembers(
+    airtable,
+    "update",
+    { [MEMBER_FIELDS.stripeCustomerId]: cus },
+    existing.id
+  );
+  return { status: "linked" };
+}
+
+/**
+ * Trusted server path: link Stripe customer + mark paid by Memberstack ID.
+ * Used after verifying Stripe Checkout Session or Memberstack plan payment.
+ * Never creates members. Never matches by email alone for identity.
+ */
+export async function applyTrustedPaymentByMemberstackId(
+  input: {
+    memberstackId: string;
+    stripeCustomerId: string;
+    patch?: Record<string, unknown>;
+  },
+  airtable: AirtableClient = getFormsAirtableClient()
+): Promise<{ record: AirtableRecord | null; status: string; shadowed: boolean }> {
+  const msId = input.memberstackId.trim();
+  const cus = input.stripeCustomerId.trim();
+  if (!msId || !cus.startsWith("cus_")) {
+    return { record: null, status: "invalid_ids", shadowed: false };
+  }
+
+  const existing = requireUnique(
+    await findMemberByMemberstackId(msId, airtable),
+    "Memberstack ID"
+  );
+  if (!existing) {
+    return { record: null, status: "AIRTABLE_MEMBER_NOT_FOUND", shadowed: false };
+  }
+
+  // Conflict: another member already owns this Stripe customer
+  const byCus = await findMemberByStripeCustomerId(cus, airtable);
+  if (byCus.length > 0 && byCus.some((r) => r.id !== existing.id)) {
+    throw new FormsError(
+      "STRIPE_CUSTOMER_CONFLICT",
+      "Stripe Customer ID assigned to another Airtable member",
+      { status: 409, details: { ids: byCus.map((r) => r.id) } }
+    );
+  }
+
+  const patch: Record<string, unknown> = {
+    [MEMBER_FIELDS.stripeCustomerId]: cus,
+    [MEMBER_FIELDS.payment]: "Paid",
+    [MEMBER_FIELDS.membership]: "Active",
+    [MEMBER_FIELDS.onboardingStatus]: "PAYMENT_CONFIRMED",
+    [MEMBER_FIELDS.billingLastSyncedAt]: new Date().toISOString(),
+    ...(input.patch || {}),
+  };
+
+  if (!canWriteBillingToAirtable()) {
+    return {
+      record: { ...existing, fields: { ...existing.fields, ...patch } },
+      status: "shadowed",
+      shadowed: true,
+    };
+  }
+
+  const updated = await writeMembers(
+    airtable,
+    "update",
+    stripComputedMemberWriteFields(patch),
+    existing.id
+  );
+  return { record: updated, status: "updated", shadowed: false };
 }
 
 export function recordToProfileDto(record: AirtableRecord) {

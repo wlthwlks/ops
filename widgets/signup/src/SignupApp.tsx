@@ -153,12 +153,13 @@ export function SignupApp(props: { apiBase: string }) {
   };
 
   /**
-   * After an explicit Stripe return: poll trusted server payment status.
-   * Never claims Paid/Active from the browser. Never rewrites earlier onboarding stages.
+   * After Stripe return: server verifies checkout + links Stripe Customer ID by Memberstack ID,
+   * then polls until Airtable shows Paid/Active. Client never asserts Paid itself.
    */
   const confirmPaymentFromServer = async (accessToken: string | null) => {
     setConfirmingPayment(true);
     setLoadMessage("Confirming your secure payment…");
+    setError(null);
 
     if (!accessToken) {
       setConfirmingPayment(false);
@@ -176,11 +177,37 @@ export function SignupApp(props: { apiBase: string }) {
       body: JSON.stringify({ eventType: "PAYMENT_RETURNED" }),
     }).catch(() => undefined);
 
-    const maxAttempts = 12;
+    const params = new URLSearchParams(window.location.search);
+    const sessionId =
+      params.get("session_id") ||
+      params.get("checkout_session_id") ||
+      params.get("cs_id") ||
+      "";
+
+    // Trusted server confirm — links cus_… and marks Paid when Stripe verifies membership
+    try {
+      await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+        method: "POST",
+        token: accessToken,
+        body: JSON.stringify(sessionId ? { sessionId } : {}),
+      });
+    } catch {
+      /* continue to poll — webhooks may still land */
+    }
+
+    const maxAttempts = 15;
     const delayMs = 2000;
     let confirmed = false;
     for (let i = 0; i < maxAttempts; i++) {
       try {
+        // Re-run confirm periodically (idempotent) then check status
+        if (i > 0 && i % 3 === 0) {
+          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+            method: "POST",
+            token: accessToken,
+            body: JSON.stringify(sessionId ? { sessionId } : {}),
+          }).catch(() => undefined);
+        }
         const st = await api(props.apiBase, "/api/onboarding/payment-status", {
           token: accessToken,
         });
@@ -205,9 +232,8 @@ export function SignupApp(props: { apiBase: string }) {
       await stepper.goTo("goal");
       setLoadMessage(null);
     } else {
-      // Stay on Payment — do not rewind earlier steps in Airtable
       setError(
-        "We’re still confirming your payment with Stripe. Your progress is saved — try again in a moment, or refresh this page."
+        "We’re still confirming your payment with Stripe. Tap “Check payment status” below, or refresh in a moment — your progress is saved."
       );
       await stepper.goTo("payment");
     }
@@ -886,10 +912,18 @@ export function SignupApp(props: { apiBase: string }) {
               <button
                 type="button"
                 className="wlth-btn-primary"
-                disabled={loading}
+                disabled={loading || confirmingPayment}
                 onClick={() => void startCheckout()}
               >
                 Continue to secure checkout
+              </button>
+              <button
+                type="button"
+                className="wlth-btn-secondary"
+                disabled={loading || confirmingPayment || !token}
+                onClick={() => void confirmPaymentFromServer(token)}
+              >
+                Check payment status
               </button>
             </div>
             <p className="wlth-trust">
