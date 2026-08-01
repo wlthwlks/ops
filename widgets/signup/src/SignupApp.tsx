@@ -142,19 +142,23 @@ export function SignupApp(props: { apiBase: string }) {
   const [confirmingPayment, setConfirmingPayment] = useState(false);
   const attribution = useMemo(() => captureAttribution(), []);
 
-  /**
-   * After Stripe return: poll trusted server payment status.
-   * Never claims Paid/Active from the browser — only navigates when Airtable says so.
-   */
-  const confirmPaymentFromServer = async (accessToken: string | null) => {
-    markPreGoalComplete(stepper);
-    setConfirmingPayment(true);
-    setLoadMessage("Confirming your secure payment…");
+  const clearCheckoutFlags = () => {
     try {
-      sessionStorage.setItem("wlth_checkout_pending", "1");
+      sessionStorage.removeItem("wlth_checkout_pending");
+      sessionStorage.removeItem("wlth_checkout_started_at");
+      sessionStorage.removeItem("wlth_payment_ok"); // legacy — never treat as payment proof
     } catch {
       /* ignore */
     }
+  };
+
+  /**
+   * After an explicit Stripe return: poll trusted server payment status.
+   * Never claims Paid/Active from the browser. Never rewrites earlier onboarding stages.
+   */
+  const confirmPaymentFromServer = async (accessToken: string | null) => {
+    setConfirmingPayment(true);
+    setLoadMessage("Confirming your secure payment…");
 
     if (!accessToken) {
       setConfirmingPayment(false);
@@ -162,6 +166,7 @@ export function SignupApp(props: { apiBase: string }) {
       setError("Please stay signed in while we confirm your payment.");
       await stepper.goTo("payment");
       clearPaymentQueryParam();
+      clearCheckoutFlags();
       return;
     }
 
@@ -169,13 +174,6 @@ export function SignupApp(props: { apiBase: string }) {
       method: "POST",
       token: accessToken,
       body: JSON.stringify({ eventType: "PAYMENT_RETURNED" }),
-    }).catch(() => undefined);
-
-    // Record that user returned from checkout (onboarding progress only — not billing authority)
-    await api(props.apiBase, "/api/onboarding/step", {
-      method: "PATCH",
-      token: accessToken,
-      body: JSON.stringify({ stage: "PAYMENT_PENDING", data: {} }),
     }).catch(() => undefined);
 
     const maxAttempts = 12;
@@ -199,22 +197,51 @@ export function SignupApp(props: { apiBase: string }) {
     setConfirmingPayment(false);
     setLoadMessage(null);
     clearPaymentQueryParam();
-    try {
-      sessionStorage.removeItem("wlth_checkout_pending");
-    } catch {
-      /* ignore */
-    }
+    clearCheckoutFlags();
 
     if (confirmed) {
+      markPreGoalComplete(stepper);
       setLoadMessage("Building your matching profile…");
       await stepper.goTo("goal");
       setLoadMessage(null);
     } else {
+      // Stay on Payment — do not rewind earlier steps in Airtable
       setError(
         "We’re still confirming your payment with Stripe. Your progress is saved — try again in a moment, or refresh this page."
       );
       await stepper.goTo("payment");
     }
+  };
+
+  /** Resume from Airtable onboarding status only (no stale checkout flags). */
+  const resumeFromStatus = async (accessToken: string) => {
+    const status = await api(props.apiBase, "/api/onboarding/status", {
+      token: accessToken,
+    });
+    const resume = resumeStageToStep(
+      String(status.resumeStage || ""),
+      Boolean(status.paymentConfirmed)
+    );
+    if (!resume || resume === "account") return;
+    if (
+      resume === "goal" ||
+      resume === "help" ||
+      resume === "expertise" ||
+      resume === "connection" ||
+      resume === "done"
+    ) {
+      markPreGoalComplete(stepper);
+    } else if (resume === "payment") {
+      stepper.setComplete("account" as never);
+      stepper.setComplete("location" as never);
+      stepper.setComplete("business" as never);
+    } else if (resume === "business") {
+      stepper.setComplete("account" as never);
+      stepper.setComplete("location" as never);
+    } else if (resume === "location") {
+      stepper.setComplete("account" as never);
+    }
+    await stepper.goTo(resume as never);
   };
 
   const accountForm = useForm<AccountForm>({
@@ -295,79 +322,53 @@ export function SignupApp(props: { apiBase: string }) {
           hashParams.get("payment") ||
           ""
         ).toLowerCase();
-        // Stripe Checkout often appends session_id on success redirect
-        const stripeSessionOk = Boolean(params.get("session_id"));
+        // Only treat Stripe return when we also started checkout recently (avoids random session_id)
         let checkoutPending = false;
-        let paymentOkFlag = false;
+        let checkoutFresh = false;
         try {
           checkoutPending = sessionStorage.getItem("wlth_checkout_pending") === "1";
-          paymentOkFlag = sessionStorage.getItem("wlth_payment_ok") === "1";
+          const startedAt = Number(sessionStorage.getItem("wlth_checkout_started_at") || "0");
+          checkoutFresh = checkoutPending && startedAt > 0 && Date.now() - startedAt < 2 * 60 * 60 * 1000;
+        } catch {
+          /* ignore */
+        }
+        // Drop legacy flag that previously forced every reload onto Payment
+        try {
+          sessionStorage.removeItem("wlth_payment_ok");
         } catch {
           /* ignore */
         }
 
-        // Post-pay path MUST win (linear stepper + webhook lag previously left users on Payment)
-        if (paymentReturn === "success" || stripeSessionOk || paymentOkFlag) {
+        const explicitPaySuccess =
+          paymentReturn === "success" ||
+          (Boolean(params.get("session_id")) && checkoutFresh);
+
+        if (explicitPaySuccess && checkoutFresh) {
           await confirmPaymentFromServer(t);
         } else if (paymentReturn === "cancel") {
-          try {
-            sessionStorage.removeItem("wlth_checkout_pending");
-          } catch {
-            /* ignore */
-          }
+          clearCheckoutFlags();
+          clearPaymentQueryParam();
           if (t) {
             try {
-              const status = await api(props.apiBase, "/api/onboarding/status", { token: t });
-              const resume = resumeStageToStep(
-                String(status.resumeStage || ""),
-                Boolean(status.paymentConfirmed)
-              );
-              if (resume && resume !== "account") await stepper.goTo(resume as never);
-              else await stepper.goTo("payment");
+              await resumeFromStatus(t);
             } catch {
               await stepper.goTo("payment");
             }
           } else {
             await stepper.goTo("payment");
           }
-          clearPaymentQueryParam();
-        } else if (t) {
-          try {
-            const status = await api(props.apiBase, "/api/onboarding/status", { token: t });
-            // Left for checkout and came back without query params — if paid or still pending after checkout, advance
-            if (
-              checkoutPending &&
-              (Boolean(status.paymentConfirmed) ||
-                String(status.onboardingStatus || "") === "PAYMENT_PENDING" ||
-                String(status.onboardingStatus || "") === "PAYMENT_CONFIRMED")
-            ) {
-              // Prefer goal when checkout was started; confirm paid if webhook already landed
-              if (Boolean(status.paymentConfirmed)) {
-                await confirmPaymentFromServer(t);
-              } else {
-                // Still pending server-side — still move UX forward after checkout attempt return
-                await confirmPaymentFromServer(t);
-              }
-            } else {
-              const resume = resumeStageToStep(
-                String(status.resumeStage || ""),
-                Boolean(status.paymentConfirmed)
-              );
-              if (resume) {
-                if (
-                  resume === "goal" ||
-                  resume === "help" ||
-                  resume === "expertise" ||
-                  resume === "connection" ||
-                  resume === "done"
-                ) {
-                  markPreGoalComplete(stepper);
-                }
-                await stepper.goTo(resume as never);
-              }
+        } else if (checkoutFresh && t) {
+          // Returned from Stripe without our query param (some MS/Stripe configs strip it)
+          await confirmPaymentFromServer(t);
+        } else {
+          // Normal visit / resume — never jump to Payment from stale flags
+          if (checkoutPending && !checkoutFresh) clearCheckoutFlags();
+          if (t) {
+            try {
+              await resumeFromStatus(t);
+            } catch {
+              // stay on account
             }
-          } catch {
-            // Session token present but status failed — stay on account
           }
         }
 
@@ -523,6 +524,8 @@ export function SignupApp(props: { apiBase: string }) {
     const base = window.location.origin + window.location.pathname;
     try {
       sessionStorage.setItem("wlth_checkout_pending", "1");
+      sessionStorage.setItem("wlth_checkout_started_at", String(Date.now()));
+      sessionStorage.removeItem("wlth_payment_ok");
     } catch {
       /* ignore */
     }
