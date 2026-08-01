@@ -117,8 +117,9 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      const qualifyingPriceIds = getQualifyingMembershipPriceIds(lines, membershipPriceIds);
-      // Subscription id: parent.subscription_details / subscription (SDK shapes vary)
+      // Prefer real Stripe price_ ids from lines; empty allowlist accepts all price_ lines
+      let qualifyingPriceIds = getQualifyingMembershipPriceIds(lines, membershipPriceIds);
+      // Subscription id + live status from Stripe
       const invAny = invoice as unknown as {
         subscription?: string | { id?: string } | null;
         parent?: {
@@ -126,6 +127,7 @@ export async function POST(request: NextRequest) {
         } | null;
       };
       let stripeSubscriptionId: string | null = null;
+      let stripeSubscriptionStatus: string | null = null;
       const subRef =
         invAny.subscription ??
         invAny.parent?.subscription_details?.subscription ??
@@ -134,6 +136,22 @@ export async function POST(request: NextRequest) {
         stripeSubscriptionId = subRef;
       } else if (subRef && typeof subRef === "object" && typeof subRef.id === "string") {
         stripeSubscriptionId = subRef.id;
+      }
+      if (stripeSubscriptionId) {
+        try {
+          const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+          stripeSubscriptionStatus = sub.status; // active | trialing | past_due | canceled | …
+          const subPrices = sub.items.data
+            .map((it) => it.price?.id)
+            .filter((id): id is string => Boolean(id) && id.startsWith("price_"));
+          if (subPrices.length > 0) {
+            // Merge subscription prices so Stripe Price ID is always set
+            const merged = new Set([...qualifyingPriceIds, ...subPrices]);
+            qualifyingPriceIds = [...merged];
+          }
+        } catch {
+          stripeSubscriptionStatus = "active";
+        }
       }
 
       const airtableToken = process.env.AIRTABLE_GET_DATA_TOKEN;
@@ -156,7 +174,7 @@ export async function POST(request: NextRequest) {
         billing: {
           qualifyingPriceIds,
           stripeSubscriptionId,
-          stripeSubscriptionStatus: stripeSubscriptionId ? "active" : null,
+          stripeSubscriptionStatus,
           invoiceStatus: invoice.status || "paid",
         },
       });

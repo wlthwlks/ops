@@ -23,7 +23,8 @@ export function getStripeClient(): Stripe {
 
 /**
  * Parse STRIPE_MEMBERSHIP_PRICE_IDS into a normalized Set.
- * Throws if empty when requireConfigured is true.
+ * Supports both Stripe Dashboard ids (`price_…`) and Memberstack commerce ids (`prc_…` / `pln_…`).
+ * WLTH test membership: prc_wlth-wlks-45-quarter-pdpa0cyx
  */
 export function getConfiguredMembershipPriceIds(options?: {
   requireConfigured?: boolean;
@@ -35,12 +36,45 @@ export function getConfiguredMembershipPriceIds(options?: {
       .map((s) => s.trim())
       .filter(Boolean)
   );
+  // Also include dedicated Memberstack plan env so one source of truth is enough
+  const ms = getConfiguredMemberstackPlanId();
+  if (ms) ids.add(ms);
   if (options?.requireConfigured && ids.size === 0) {
     throw new Error(
-      "STRIPE_MEMBERSHIP_PRICE_IDS is missing or empty. Configure comma-separated membership Price IDs."
+      "STRIPE_MEMBERSHIP_PRICE_IDS / MEMBERSTACK_MEMBERSHIP_PRICE_ID missing. Configure membership price id(s)."
     );
   }
   return ids;
+}
+
+/**
+ * Primary membership price/plan id to store on Airtable:
+ * - "Stripe Price ID" and "Memberstack Plan ID" both use this when that is the commerce id.
+ */
+export function getConfiguredMemberstackPlanId(): string {
+  return (
+    (process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID || "").trim() ||
+    (process.env.MEMBERSTACK_PLAN_ID || "").trim() ||
+    (process.env.STRIPE_MEMBERSHIP_PRICE_IDS || "")
+      .split(",")
+      .map((s) => s.trim())
+      .find((id) => id.startsWith("prc_") || id.startsWith("pln_") || id.startsWith("price_")) ||
+    ""
+  );
+}
+
+/** Ids that can appear on Stripe Invoice line items (native Stripe price_ only). */
+export function getStripeNativeMembershipPriceIds(): Set<string> {
+  return new Set(
+    [...getConfiguredMembershipPriceIds()].filter((id) => id.startsWith("price_"))
+  );
+}
+
+/** True when config only has Memberstack-style ids (prc_/pln_) — invoice lines won't match by id. */
+export function membershipConfigIsMemberstackStyleOnly(): boolean {
+  const ids = [...getConfiguredMembershipPriceIds()];
+  if (ids.length === 0) return false;
+  return ids.every((id) => id.startsWith("prc_") || id.startsWith("pln_"));
 }
 
 export function getStripeWebhookSecret(): string {

@@ -1,10 +1,13 @@
 /**
  * Trusted post-checkout confirmation.
- * Verifies payment with Stripe and/or Memberstack Admin API, then links
- * Stripe Customer ID onto the Airtable member matched by Memberstack ID.
+ * Verifies payment with Stripe, links cus_… by Memberstack ID, writes billing columns.
  */
 import type Stripe from "stripe";
-import { getStripeClient, getConfiguredMembershipPriceIds } from "@/lib/integrations/stripe";
+import {
+  getStripeClient,
+  getConfiguredMembershipPriceIds,
+  getConfiguredMemberstackPlanId,
+} from "@/lib/integrations/stripe";
 import {
   applyTrustedPaymentByMemberstackId,
   findMemberByMemberstackId,
@@ -24,7 +27,6 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
-/** Pull cus_… from Memberstack Admin member payload shapes. */
 export function extractStripeCustomerIdFromMemberstackRaw(
   raw: Record<string, unknown>
 ): string {
@@ -61,6 +63,23 @@ function sessionSubscriptionId(session: Stripe.Checkout.Session): string {
   return "";
 }
 
+/** Load subscription prices + real Stripe status. */
+async function loadSubscriptionBilling(
+  stripe: Stripe,
+  subscriptionId: string
+): Promise<{
+  status: string;
+  priceIds: string[];
+}> {
+  const sub = await stripe.subscriptions.retrieve(subscriptionId);
+  const priceIds = dedupePriceIds(
+    sub.items.data
+      .map((it) => it.price?.id)
+      .filter((id): id is string => Boolean(id) && id.startsWith("price_"))
+  );
+  return { status: sub.status, priceIds };
+}
+
 export type ConfirmCheckoutResult = {
   paymentConfirmed: boolean;
   status: string;
@@ -69,9 +88,6 @@ export type ConfirmCheckoutResult = {
   shadowed?: boolean;
 };
 
-/**
- * Confirm payment for an authenticated Memberstack member.
- */
 export async function confirmCheckoutForMember(input: {
   memberstackId: string;
   memberEmail: string;
@@ -91,12 +107,16 @@ export async function confirmCheckoutForMember(input: {
     const pay = String(f[MEMBER_FIELDS.payment] || "").toLowerCase();
     const mem = String(f[MEMBER_FIELDS.membership] || "").toLowerCase();
     const cus = String(f[MEMBER_FIELDS.stripeCustomerId] || "").trim();
-    if (pay === "paid" && mem === "active" && cus.startsWith("cus_")) {
+    const hasPrice = String(f[MEMBER_FIELDS.stripePriceId] || "").startsWith("price_");
+    const hasStatus = Boolean(String(f[MEMBER_FIELDS.stripeSubscriptionStatus] || "").trim());
+    const hasMsPlan = Boolean(String(f[MEMBER_FIELDS.memberstackPlanId] || "").trim());
+    // Already fully paid with billing columns — still refresh missing columns below if needed
+    if (pay === "paid" && mem === "active" && cus.startsWith("cus_") && hasPrice && hasStatus && hasMsPlan) {
       return {
         paymentConfirmed: true,
         status: "already_paid",
         stripeCustomerId: cus,
-        reason: "Airtable already shows Paid + Active with Stripe Customer ID",
+        reason: "Airtable already shows Paid + Active with billing columns",
       };
     }
   }
@@ -104,6 +124,7 @@ export async function confirmCheckoutForMember(input: {
   const stripe = getStripeClient();
   let stripeCustomerId = "";
   let subscriptionId = "";
+  let subscriptionStatus = "";
   let priceIds: string[] = [];
   let paidThrough: Date | null = null;
   let verifiedPaid = false;
@@ -125,12 +146,15 @@ export async function confirmCheckoutForMember(input: {
       verifiedPaid = true;
       for (const li of session.line_items?.data || []) {
         const p = li.price;
-        if (p && typeof p === "object" && typeof p.id === "string") priceIds.push(p.id);
+        if (p && typeof p === "object" && typeof p.id === "string" && p.id.startsWith("price_")) {
+          priceIds.push(p.id);
+        }
       }
-      priceIds =
-        membershipIds.size > 0
-          ? dedupePriceIds(priceIds.filter((id) => membershipIds.has(id)))
-          : dedupePriceIds(priceIds);
+      priceIds = dedupePriceIds(priceIds);
+      if (membershipIds.size > 0) {
+        const filtered = priceIds.filter((id) => membershipIds.has(id));
+        if (filtered.length > 0) priceIds = filtered;
+      }
     }
   }
 
@@ -139,7 +163,15 @@ export async function confirmCheckoutForMember(input: {
     stripeCustomerId = extractStripeCustomerIdFromMemberstackRaw(input.memberstackRaw);
   }
 
-  // 3) Authenticated email → customer with active membership sub (post-auth only)
+  // 3) Existing Airtable Stripe Customer ID
+  if (!stripeCustomerId && existingRows.length === 1) {
+    const existingCus = String(
+      existingRows[0].fields[MEMBER_FIELDS.stripeCustomerId] || ""
+    ).trim();
+    if (existingCus.startsWith("cus_")) stripeCustomerId = existingCus;
+  }
+
+  // 4) Email → customer with subscription
   if (!stripeCustomerId && input.memberEmail) {
     const list = await stripe.customers.list({
       email: input.memberEmail.toLowerCase(),
@@ -152,29 +184,25 @@ export async function confirmCheckoutForMember(input: {
         status: "all",
         limit: 10,
       });
-      const active = subs.data.find(
-        (s) => s.status === "active" || s.status === "trialing" || s.status === "past_due"
+      const pick = subs.data.find((s) =>
+        ["active", "trialing", "past_due", "unpaid", "paused"].includes(s.status)
+      ) || subs.data[0];
+      if (!pick) continue;
+      stripeCustomerId = customer.id;
+      subscriptionId = pick.id;
+      subscriptionStatus = pick.status;
+      priceIds = dedupePriceIds(
+        pick.items.data
+          .map((it) => it.price?.id)
+          .filter((id): id is string => Boolean(id) && id.startsWith("price_"))
       );
-      if (!active) continue;
-      const subPrices = active.items.data
-        .map((it) => it.price?.id)
-        .filter((id): id is string => Boolean(id));
-      if (membershipIds.size === 0 || subPrices.some((id) => membershipIds.has(id))) {
-        stripeCustomerId = customer.id;
-        subscriptionId = active.id;
-        priceIds = dedupePriceIds(
-          membershipIds.size > 0
-            ? subPrices.filter((id) => membershipIds.has(id))
-            : subPrices
-        );
-        verifiedPaid = true;
-        break;
-      }
+      verifiedPaid = ["active", "trialing", "past_due"].includes(pick.status);
+      if (verifiedPaid) break;
     }
   }
 
-  // 4) Verify via paid membership invoices
-  if (stripeCustomerId && !verifiedPaid && membershipIds.size > 0) {
+  // 5) Paid invoices for customer
+  if (stripeCustomerId && !verifiedPaid) {
     const invoices = await stripe.invoices.list({
       customer: stripeCustomerId,
       status: "paid",
@@ -193,21 +221,45 @@ export async function confirmCheckoutForMember(input: {
     }
   }
 
-  // 5) Any active subscription on customer counts as paid if no price allowlist configured
-  if (stripeCustomerId && !verifiedPaid) {
+  // 6) Any subscription on customer
+  if (stripeCustomerId && (!subscriptionId || !subscriptionStatus || priceIds.length === 0)) {
     const subs = await stripe.subscriptions.list({
       customer: stripeCustomerId,
-      status: "active",
-      limit: 5,
+      status: "all",
+      limit: 10,
     });
-    if (subs.data.length > 0) {
-      verifiedPaid = true;
-      subscriptionId = subs.data[0].id;
-      priceIds = dedupePriceIds(
-        subs.data[0].items.data
-          .map((it) => it.price?.id)
-          .filter((id): id is string => Boolean(id))
-      );
+    const pick =
+      subs.data.find((s) => ["active", "trialing", "past_due"].includes(s.status)) ||
+      subs.data[0];
+    if (pick) {
+      subscriptionId = subscriptionId || pick.id;
+      if (!subscriptionStatus) subscriptionStatus = pick.status;
+      if (priceIds.length === 0) {
+        priceIds = dedupePriceIds(
+          pick.items.data
+            .map((it) => it.price?.id)
+            .filter((id): id is string => Boolean(id) && id.startsWith("price_"))
+        );
+      }
+      if (["active", "trialing", "past_due"].includes(pick.status)) {
+        verifiedPaid = true;
+      }
+    }
+  }
+
+  // Refresh subscription status/prices from Stripe when we have sub id
+  if (subscriptionId) {
+    try {
+      const live = await loadSubscriptionBilling(stripe, subscriptionId);
+      subscriptionStatus = live.status;
+      if (live.priceIds.length > 0) {
+        priceIds = dedupePriceIds([...priceIds, ...live.priceIds]);
+      }
+      if (["active", "trialing", "past_due"].includes(live.status)) {
+        verifiedPaid = true;
+      }
+    } catch {
+      /* keep prior */
     }
   }
 
@@ -231,33 +283,43 @@ export async function confirmCheckoutForMember(input: {
       status: "customer_linked_payment_pending",
       stripeCustomerId,
       reason:
-        "Linked Stripe Customer ID; waiting for paid membership invoice. Retry in a moment.",
+        "Linked Stripe Customer ID; waiting for paid membership. Retry in a moment.",
     };
   }
 
+  // Canonical membership price for this product (prc_wlth-wlks-… or price_…)
+  const configuredPlan = getConfiguredMemberstackPlanId();
+  const allPriceIds = dedupePriceIds([
+    ...priceIds,
+    ...(configuredPlan ? [configuredPlan] : []),
+    ...[...membershipIds],
+  ]);
+  // Prefer Memberstack commerce id (prc_…) for Airtable Stripe Price ID when configured
+  const primaryPriceId =
+    allPriceIds.find((id) => id.startsWith("prc_") || id.startsWith("pln_")) ||
+    configuredPlan ||
+    allPriceIds.find((id) => id.startsWith("price_")) ||
+    allPriceIds[0] ||
+    "";
+
   const patch: Record<string, unknown> = {
     [MEMBER_FIELDS.onboardingStatus]: "PAYMENT_CONFIRMED",
-    [MEMBER_FIELDS.stripeSubscriptionStatus]: subscriptionId ? "active" : "active",
   };
   if (subscriptionId) {
     patch[MEMBER_FIELDS.stripeSubscriptionId] = subscriptionId;
   }
-  if (priceIds.length > 0) {
-    patch[MEMBER_FIELDS.stripePriceId] = priceIds[0];
-    patch["Paid Plans (price ids)"] = formatPaidPlansText(priceIds);
-  } else {
-    // Fall back to configured membership price id when line items unavailable
-    const configured = [...membershipIds];
-    if (configured[0]) {
-      patch[MEMBER_FIELDS.stripePriceId] = configured[0];
-      patch["Paid Plans (price ids)"] = formatPaidPlansText(configured);
-    }
+  // Always write status from Stripe when known
+  patch[MEMBER_FIELDS.stripeSubscriptionStatus] = subscriptionStatus || "active";
+
+  if (primaryPriceId) {
+    patch[MEMBER_FIELDS.stripePriceId] = primaryPriceId;
+    patch["Paid Plans (price ids)"] = formatPaidPlansText(
+      dedupePriceIds([primaryPriceId, ...allPriceIds])
+    );
   }
-  const msPlan =
-    (process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID || "").trim() ||
-    (process.env.MEMBERSTACK_PLAN_ID || "").trim();
-  if (msPlan) {
-    patch[MEMBER_FIELDS.memberstackPlanId] = msPlan;
+  // Same id on Memberstack Plan ID
+  if (configuredPlan || primaryPriceId) {
+    patch[MEMBER_FIELDS.memberstackPlanId] = configuredPlan || primaryPriceId;
   }
   if (paidThrough) {
     patch[MEMBER_FIELDS.serviceAccessUntil] = paidThrough.toISOString().slice(0, 10);
@@ -275,7 +337,7 @@ export async function confirmCheckoutForMember(input: {
     stripeCustomerId,
     reason:
       result.status === "updated"
-        ? "Linked Stripe Customer ID and marked Paid/Active"
+        ? `Paid/Active + Stripe Price ID=${primaryPriceId || "—"} Status=${subscriptionStatus || "active"} Memberstack Plan ID=${configuredPlan || primaryPriceId || "—"}`
         : result.status === "shadowed"
           ? "Shadow mode — would mark Paid"
           : result.status,

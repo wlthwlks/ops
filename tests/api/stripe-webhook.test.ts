@@ -9,6 +9,8 @@ const listRecords = vi.fn();
 const createRecords = vi.fn();
 const createRecordsBatched = vi.fn();
 
+const retrieveSubscription = vi.fn();
+
 vi.mock("@/lib/integrations/stripe", () => ({
   getStripeClient: () => ({
     webhooks: { constructEvent },
@@ -19,9 +21,16 @@ vi.mock("@/lib/integrations/stripe", () => ({
     customers: {
       retrieve: retrieveCustomer,
     },
+    subscriptions: {
+      retrieve: retrieveSubscription,
+    },
   }),
   getStripeWebhookSecret: () => "whsec_test",
-  getConfiguredMembershipPriceIds: () => new Set(["price_membership"]),
+  getConfiguredMembershipPriceIds: () =>
+    new Set(["price_membership", "prc_wlth-wlks-45-quarter-pdpa0cyx"]),
+  getConfiguredMemberstackPlanId: () => "prc_wlth-wlks-45-quarter-pdpa0cyx",
+  getStripeNativeMembershipPriceIds: () => new Set(["price_membership"]),
+  membershipConfigIsMemberstackStyleOnly: () => false,
 }));
 
 vi.mock("@/lib/integrations/airtable", () => ({
@@ -131,12 +140,20 @@ describe("POST /api/webhooks/stripe", () => {
       id: "in_paid",
       customer: "cus_1",
       status: "paid",
+      subscription: "sub_paid1",
       created: periodEnd - 1000,
       status_transitions: { paid_at: periodEnd - 500 },
     });
     listLineItems.mockResolvedValue({
       data: [membershipLine(periodEnd)],
       has_more: false,
+    });
+    retrieveSubscription.mockResolvedValue({
+      id: "sub_paid1",
+      status: "active",
+      items: {
+        data: [{ price: { id: "price_membership" } }],
+      },
     });
     listRecords.mockResolvedValue([
       { id: "rec_m1", fields: { "Stripe Customer ID": "cus_1" } },
@@ -150,6 +167,15 @@ describe("POST /api/webhooks/stripe", () => {
     expect(json.status).toBe("updated");
     expect(json.airtableRecordsUpdated).toBe(1);
     expect(updateRecordsBatched).toHaveBeenCalled();
+    const fields = updateRecordsBatched.mock.calls[0][1][0].fields as Record<
+      string,
+      unknown
+    >;
+    // Configured commerce id (prc_…) is preferred for Stripe Price ID column
+    expect(fields["Stripe Price ID"]).toBe("prc_wlth-wlks-45-quarter-pdpa0cyx");
+    expect(fields["Stripe subscription status"]).toBe("active");
+    expect(fields["Memberstack Plan ID"]).toBe("prc_wlth-wlks-45-quarter-pdpa0cyx");
+    expect(fields["Stripe Subscription ID"]).toBe("sub_paid1");
     expect(createRecords).not.toHaveBeenCalled();
   });
 

@@ -1,6 +1,10 @@
 import type Stripe from "stripe";
 import type { AirtableClient, AirtableRecord } from "@/lib/integrations/airtable";
-import { getConfiguredMembershipPriceIds } from "@/lib/integrations/stripe";
+import {
+  getConfiguredMembershipPriceIds,
+  getConfiguredMemberstackPlanId,
+  membershipConfigIsMemberstackStyleOnly,
+} from "@/lib/integrations/stripe";
 import { MEMBERS_TABLE as AIRTABLE_MEMBERS_TABLE } from "@/lib/ops/airtable-fields";
 
 export const SERVICE_ACCESS_FIELD = "Service access until";
@@ -98,30 +102,66 @@ export function getLinePeriodEnd(line: Stripe.InvoiceLineItem): number | null {
   return period.end;
 }
 
-/** Qualifying configured membership Price IDs present on invoice lines (deduped). */
+/**
+ * Price ids found on invoice lines that qualify as membership.
+ * - If allowlist has native Stripe `price_…` ids → match those on lines.
+ * - If allowlist is empty OR only Memberstack `prc_`/`pln_` ids → accept any line with a price + period
+ *   (Memberstack commerce ids never appear on Stripe Invoice line items).
+ * Returns Stripe line price ids (usually price_…) plus configured commerce ids for Airtable storage.
+ */
 export function getQualifyingMembershipPriceIds(
   lines: Stripe.InvoiceLineItem[],
   membershipPriceIds: Set<string>
 ): string[] {
+  const nativeAllow = new Set(
+    [...membershipPriceIds].filter((id) => id.startsWith("price_"))
+  );
+  const allowAll =
+    membershipPriceIds.size === 0 ||
+    nativeAllow.size === 0 ||
+    membershipConfigIsMemberstackStyleOnly();
+
   const found: string[] = [];
   for (const line of lines) {
     const priceId = getLinePriceId(line);
-    if (priceId && membershipPriceIds.has(priceId)) found.push(priceId);
+    if (!priceId) continue;
+    if (allowAll || nativeAllow.has(priceId) || membershipPriceIds.has(priceId)) {
+      found.push(priceId);
+    }
   }
+  // Always include configured commerce id (e.g. prc_wlth-wlks-…) for Airtable "Stripe Price ID"
+  const configured = getConfiguredMemberstackPlanId();
+  if (configured) found.push(configured);
+  for (const id of membershipPriceIds) found.push(id);
   return dedupePriceIds(found);
 }
 
 /**
  * Among invoice lines, find qualifying membership lines and return max period.end (unix seconds).
+ * Memberstack-only allowlists (prc_) → any line with period end qualifies.
  */
 export function getMembershipPeriodEnd(
   lines: Stripe.InvoiceLineItem[],
   membershipPriceIds: Set<string>
 ): number | null {
   let maxEnd: number | null = null;
+  const nativeAllow = new Set(
+    [...membershipPriceIds].filter((id) => id.startsWith("price_"))
+  );
+  const allowAll =
+    membershipPriceIds.size === 0 ||
+    nativeAllow.size === 0 ||
+    membershipConfigIsMemberstackStyleOnly();
+
   for (const line of lines) {
     const priceId = getLinePriceId(line);
-    if (!priceId || !membershipPriceIds.has(priceId)) continue;
+    if (!allowAll) {
+      if (!priceId || (!nativeAllow.has(priceId) && !membershipPriceIds.has(priceId))) {
+        continue;
+      }
+    } else if (!priceId && !getLinePeriodEnd(line)) {
+      continue;
+    }
     const end = getLinePeriodEnd(line);
     if (end == null) continue;
     if (maxEnd == null || end > maxEnd) maxEnd = end;
@@ -318,7 +358,20 @@ export async function updateServiceAccessUntilForCustomer(input: {
     );
 
     // Authoritative paid state + billing snapshot (even if access date unchanged).
-    const priceIds = dedupePriceIds(billing?.qualifyingPriceIds || []);
+    const configuredPlan = getConfiguredMemberstackPlanId();
+    const priceIds = dedupePriceIds([
+      ...(billing?.qualifyingPriceIds || []),
+      // Prefer configured commerce id (prc_wlth-wlks-…) as canonical membership price
+      ...(configuredPlan ? [configuredPlan] : []),
+    ]);
+    // Prefer prc_/pln_ configured id for "Stripe Price ID" when that is the membership product id
+    const primaryPriceId =
+      priceIds.find((id) => id.startsWith("prc_") || id.startsWith("pln_")) ||
+      configuredPlan ||
+      priceIds.find((id) => id.startsWith("price_")) ||
+      priceIds[0] ||
+      "";
+
     const fields: Record<string, unknown> = {
       [PAYMENT_FIELD]: "Paid",
       [MEMBERSHIP_FIELD]: "Active",
@@ -328,24 +381,24 @@ export async function updateServiceAccessUntilForCustomer(input: {
       [BILLING_LAST_SYNCED_AT_FIELD]: new Date().toISOString(),
     };
     if (stripeEventId) fields[LAST_STRIPE_EVENT_ID_FIELD] = stripeEventId;
-    if (priceIds.length > 0) {
-      fields[STRIPE_PRICE_ID_FIELD] = priceIds[0];
-      // Live base: text column (not multi-select)
-      fields[PAID_PLANS_FIELD] = formatPaidPlansText(priceIds);
+    if (primaryPriceId) {
+      fields[STRIPE_PRICE_ID_FIELD] = primaryPriceId;
+      fields[PAID_PLANS_FIELD] = formatPaidPlansText(
+        dedupePriceIds([primaryPriceId, ...priceIds])
+      );
     }
     if (billing?.stripeSubscriptionId) {
       fields[STRIPE_SUBSCRIPTION_ID_FIELD] = billing.stripeSubscriptionId;
     }
+    // Real Stripe status when provided (active, trialing, past_due, canceled, unpaid, …)
     if (billing?.stripeSubscriptionStatus) {
       fields[STRIPE_SUBSCRIPTION_STATUS_FIELD] = billing.stripeSubscriptionStatus;
-    } else {
+    } else if (billing?.stripeSubscriptionId) {
       fields[STRIPE_SUBSCRIPTION_STATUS_FIELD] = "active";
     }
-    const msPlan =
-      (process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID || "").trim() ||
-      (process.env.MEMBERSTACK_PLAN_ID || "").trim();
-    if (msPlan) {
-      fields["Memberstack Plan ID"] = msPlan;
+    // Same commerce id on Memberstack Plan ID column
+    if (configuredPlan || primaryPriceId) {
+      fields["Memberstack Plan ID"] = configuredPlan || primaryPriceId;
     }
 
     if (comparison.invalidCurrent) {
@@ -573,17 +626,12 @@ export async function computeLatestMembershipPeriodEndForCustomer(
 
     lineRequests++;
     const lines = await listAllInvoiceLines(stripe, invoiceId);
-    let invoiceQualified = false;
-    for (const line of lines) {
-      const priceId = getLinePriceId(line);
-      if (!priceId || !membershipPriceIds.has(priceId)) continue;
-      const end = getLinePeriodEnd(line);
-      if (end == null) continue;
-      qualifyingLines++;
-      invoiceQualified = true;
+    const end = getMembershipPeriodEnd(lines, membershipPriceIds);
+    if (end != null) {
+      qualifyingInvoices++;
+      qualifyingLines += 1;
       if (maxEnd == null || end > maxEnd) maxEnd = end;
     }
-    if (invoiceQualified) qualifyingInvoices++;
   }
 
   return {

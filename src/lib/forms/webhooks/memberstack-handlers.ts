@@ -182,6 +182,13 @@ export async function handleMemberstackEvent(input: {
       [MEMBER_FIELDS.payment]: "Paid",
       [MEMBER_FIELDS.onboardingStatus]: "PAYMENT_CONFIRMED",
     };
+    if (m.planId) patch[MEMBER_FIELDS.memberstackPlanId] = m.planId;
+    else {
+      const msPlan =
+        (process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID || "").trim() ||
+        (process.env.MEMBERSTACK_PLAN_ID || "").trim();
+      if (msPlan) patch[MEMBER_FIELDS.memberstackPlanId] = msPlan;
+    }
     if (m.stripeCustomerId.startsWith("cus_")) {
       patch[MEMBER_FIELDS.stripeCustomerId] = m.stripeCustomerId;
       await updateMemberBilling({
