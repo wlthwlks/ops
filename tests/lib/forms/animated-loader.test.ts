@@ -1,19 +1,16 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   ANIMATION_FILES,
   animationRelativePath,
+  animationAbsoluteUrl,
   type AnimationVariant,
 } from "../../../widgets/shared/animations";
 
-vi.mock("@lottiefiles/dotlottie-react", () => ({
-  DotLottieReact: (props: { src?: string; loop?: boolean; autoplay?: boolean }) => {
-    // lightweight mock for import side-effects
-    void props;
-    return null;
-  },
-}));
-
 describe("animation variant mapping", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("maps walking to walking-business-woman asset", () => {
     expect(ANIMATION_FILES.walking).toBe("walking-business-woman.lottie");
     expect(animationRelativePath("walking")).toBe(
@@ -30,17 +27,25 @@ describe("animation variant mapping", () => {
     );
   });
 
-  it("maps profile-loading to Hello asset file", () => {
+  it("maps profile-loading and profile-updating", () => {
     expect(ANIMATION_FILES["profile-loading"]).toBe("profile-loading.lottie");
-  });
-
-  it("marks profile-updating as missing until asset is added", () => {
-    expect(ANIMATION_FILES["profile-updating"]).toBeNull();
-    expect(animationRelativePath("profile-updating")).toBeNull();
+    expect(ANIMATION_FILES["profile-updating"]).toBe("profile-updating.lottie");
   });
 
   it("includes payment-confirmed for post-pay success", () => {
-    expect(ANIMATION_FILES["payment-confirmed"]).toBe("payment-confirmed.lottie");
+    expect(ANIMATION_FILES["payment-confirmed"]).toBe(
+      "payment-confirmed.lottie"
+    );
+  });
+
+  it("resolves absolute URL against widget script href", () => {
+    const url = animationAbsoluteUrl(
+      "walking",
+      "https://ops.wlthwlks.com/widgets/signup/v1/signup.js"
+    );
+    expect(url).toBe(
+      "https://ops.wlthwlks.com/widgets/signup/v1/assets/animations/walking-business-woman.lottie"
+    );
   });
 
   it("all non-null variants resolve under assets/animations", () => {

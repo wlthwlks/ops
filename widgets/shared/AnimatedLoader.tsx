@@ -1,8 +1,9 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { DotLottieReact } from "@lottiefiles/dotlottie-react";
 import {
   type AnimationVariant,
-  animationRelativePath,
+  loadAnimationData,
+  prefetchAnimations,
 } from "./animations";
 
 export type AnimatedLoaderSize = "small" | "medium" | "large";
@@ -15,6 +16,21 @@ export type AnimatedLoaderProps = {
   fullScreen?: boolean;
   className?: string;
 };
+
+const SIZE_PX: Record<AnimatedLoaderSize, number> = {
+  small: 140,
+  medium: 210,
+  large: 280,
+};
+
+// Kick off fetches as soon as the widget bundle evaluates
+if (typeof window !== "undefined") {
+  try {
+    prefetchAnimations();
+  } catch {
+    /* ignore */
+  }
+}
 
 function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
@@ -29,32 +45,10 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
-/** Resolve ./assets/… relative to the widget <script src>. */
-function resolveAssetUrl(relPath: string): string {
-  if (typeof document === "undefined") return relPath;
-  try {
-    const scripts = Array.from(document.getElementsByTagName("script"));
-    const self = scripts.find((s) => {
-      const src = s.getAttribute("src") || "";
-      return (
-        src.includes("/widgets/signup/") ||
-        src.includes("/widgets/update-details/") ||
-        /\/signup\.js(\?|$)/.test(src) ||
-        /\/update-details\.js(\?|$)/.test(src)
-      );
-    });
-    if (self?.src) {
-      return new URL(relPath.replace(/^\.\//, ""), self.src).href;
-    }
-  } catch {
-    /* ignore */
-  }
-  return relPath;
-}
-
 /**
  * Shared animated loader for Signup + Update Details.
- * One Lottie player instance; variant selects the local .lottie asset.
+ * Loads local .lottie bytes (cached) and feeds DotLottie via `data`
+ * so playback does not depend on a fragile relative src mid-transition.
  */
 function AnimatedLoaderImpl(props: AnimatedLoaderProps) {
   const {
@@ -67,19 +61,44 @@ function AnimatedLoaderImpl(props: AnimatedLoaderProps) {
   } = props;
 
   const reducedMotion = usePrefersReducedMotion();
-  const [assetFailed, setAssetFailed] = useState(false);
-  const failLogged = useRef(false);
+  const [data, setData] = useState<ArrayBuffer | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [ready, setReady] = useState(false);
 
-  const rel = animationRelativePath(variant);
-  const src = useMemo(() => (rel ? resolveAssetUrl(rel) : null), [rel]);
+  const px = SIZE_PX[size];
 
-  // Reset failure when variant changes
   useEffect(() => {
-    setAssetFailed(false);
-    failLogged.current = false;
+    let cancelled = false;
+    setFailed(false);
+    setReady(false);
+    setData(null);
+
+    void loadAnimationData(variant).then((buf) => {
+      if (cancelled) return;
+      if (!buf) {
+        setFailed(true);
+        return;
+      }
+      // Clone so DotLottie can take ownership without detaching our cache
+      setData(buf.slice(0));
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [variant]);
 
-  const showPlayer = Boolean(src) && !assetFailed;
+  const showPlayer = Boolean(data) && !failed;
+
+  const playerStyle = useMemo(
+    () => ({
+      width: px,
+      height: px,
+      maxWidth: "100%",
+      maxHeight: "100%",
+    }),
+    [px]
+  );
 
   return (
     <div
@@ -95,44 +114,57 @@ function AnimatedLoaderImpl(props: AnimatedLoaderProps) {
       aria-live="polite"
       aria-busy="true"
     >
-      <div className="wlth-animated-loader__animation" aria-hidden="true">
+      <div
+        className="wlth-animated-loader__animation"
+        aria-hidden="true"
+        style={{ width: px, height: px }}
+      >
         {showPlayer ? (
           <DotLottieReact
             key={variant}
-            src={src!}
+            data={data!}
             loop={!reducedMotion}
             autoplay={!reducedMotion}
             segment={reducedMotion ? [0, 1] : undefined}
-            className="wlth-animated-loader__canvas"
-            style={{ width: "100%", height: "100%" }}
+            layout={{ fit: "contain", align: [0.5, 0.5] }}
             renderConfig={{ autoResize: true }}
+            // Do NOT pass className — DotLottie skips 100% size styles when className is set
+            style={playerStyle}
             dotLottieRefCallback={(inst) => {
               if (!inst) return;
-              const onLoadError = () => {
-                setAssetFailed(true);
-                if (!failLogged.current) {
-                  failLogged.current = true;
-                  try {
-                    console.warn(
-                      `[wlth] Lottie failed to load variant="${variant}"`
-                    );
-                  } catch {
-                    /* ignore */
-                  }
+              const markReady = () => setReady(true);
+              const markFail = () => {
+                setFailed(true);
+                try {
+                  console.warn(
+                    `[wlth] Lottie runtime failed variant="${variant}"`
+                  );
+                } catch {
+                  /* ignore */
                 }
               };
               try {
-                inst.addEventListener?.("loadError", onLoadError);
+                inst.addEventListener?.("load", markReady);
+                inst.addEventListener?.("loadError", markFail);
+                // Already loaded by the time callback runs
+                if ((inst as { isLoaded?: boolean }).isLoaded) markReady();
               } catch {
-                /* older runtimes */
+                markReady();
               }
             }}
           />
-        ) : (
+        ) : null}
+
+        {/* Soft placeholder until first frame (not a black “failed” pulse) */}
+        {!ready && !failed ? (
+          <div className="wlth-animated-loader__placeholder" aria-hidden="true" />
+        ) : null}
+
+        {failed ? (
           <div className="wlth-animated-loader__fallback" aria-hidden="true">
             <span className="wlth-animated-loader__pulse" />
           </div>
-        )}
+        ) : null}
       </div>
       <p className="wlth-animated-loader__title">{title}</p>
       {description ? (
@@ -144,7 +176,7 @@ function AnimatedLoaderImpl(props: AnimatedLoaderProps) {
 
 export const AnimatedLoader = memo(AnimatedLoaderImpl);
 
-/** @deprecated Use AnimatedLoader — kept as alias for gradual migration */
+/** @deprecated Use AnimatedLoader */
 export function WalkingLoader(props: {
   message?: string;
   compact?: boolean;

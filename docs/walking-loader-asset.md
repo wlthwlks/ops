@@ -12,7 +12,7 @@ Source directory: `widgets/shared/assets/animations/`
 | Stripe payment verification | `payment-verification` | `payment-verification.lottie` | Confirming your secure payment… |
 | Payment confirmed (brief) | `payment-confirmed` | `payment-confirmed.lottie` | Payment confirmed |
 | Loading Update Details | `profile-loading` | `profile-loading.lottie` | Welcome back! We’re loading your profile… |
-| Saving Update Details | `profile-updating` | **MISSING** `profile-updating.lottie` | Updating your details… (CSS fallback until asset added) |
+| Saving Update Details | `profile-updating` | `profile-updating.lottie` | Updating your details… |
 
 ## Assets on disk
 
@@ -22,7 +22,7 @@ Source directory: `widgets/shared/assets/animations/`
 | `payment-verification.lottie` | Payment verification | LottieFiles (`dotLottie-js`) | Stripe return / webhook wait | 2026-08-02 |
 | `payment-confirmed.lottie` | Payment confirmed | LottieFiles (`dotLottie-js`) | Brief success after Paid | 2026-08-02 |
 | `profile-loading.lottie` | Hello — Olena | LottieFiles (`dotLottie-js`) | Load member profile | 2026-08-02 |
-| `profile-updating.lottie` | Get things done — Olena | — | **Not present in repo** | — |
+| `profile-updating.lottie` | Get things done — Olena | LottieFiles (`dotLottie-js`) | Save profile | 2026-08-02 |
 
 **Licence:** As provided by the LottieFiles download for each asset (confirm Free/Premium terms on the original listing before redistribution). Player: `@lottiefiles/dotlottie-react` (MIT).
 
@@ -50,12 +50,12 @@ Runtime resolves URLs relative to the widget `<script src>` so Webflow embeds lo
 - Title/description always visible
 - `prefers-reduced-motion: reduce` → no loop/autoplay; first-frame segment
 
-## Missing asset action
+## Runtime loading
 
-Add `widgets/shared/assets/animations/profile-updating.lottie`, then set in `animations.ts`:
+1. Widget JS resolves `./assets/animations/*.lottie` against the **script** URL (`signup.js` / `update-details.js`), not the Webflow page URL.
+2. Bytes are fetched once, cached in memory, and passed to DotLottie as `data` (so step transitions do not re-download).
+3. A soft placeholder shows until the first frame; the small black pulse is **only** the hard failure fallback (404 / corrupt / blocked).
 
-```ts
-"profile-updating": "profile-updating.lottie",
-```
+If you only see a black dot: the `.lottie` files were not deployed next to the JS, or the request 404s. Deploy the full `public/widgets/*/v1/` folder including `assets/animations/`.
 
-and add the filename to `ANIMATION_SOURCE_FILES`.
+DotLottie WASM still loads from jsDelivr/unpkg CDN (library default). Allow those hosts if you use a strict CSP.

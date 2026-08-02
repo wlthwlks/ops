@@ -349,15 +349,17 @@
 }
 
 .wlth-widget .wlth-animated-loader__animation {
-  width: min(var(--wlth-loader-size, 200px), 72vw);
+  position: relative;
+  width: min(var(--wlth-loader-size, 210px), 72vw);
+  height: min(var(--wlth-loader-size, 210px), 42vh);
   max-width: 100%;
   aspect-ratio: 1 / 1;
-  max-height: min(var(--wlth-loader-size, 200px), 42vh);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
   background: transparent;
+  flex-shrink: 0;
 }
 
 .wlth-widget .wlth-animated-loader--small {
@@ -373,15 +375,32 @@
   --wlth-loader-size: 280px;
 }
 
-.wlth-widget .wlth-animated-loader__animation canvas,
-.wlth-widget .wlth-animated-loader__canvas,
-.wlth-widget .wlth-animated-loader__animation > * {
+/* DotLottie root is a bare div+canvas — size must be explicit (library skips % styles when className is set) */
+.wlth-widget .wlth-animated-loader__animation > div {
   width: 100% !important;
   height: 100% !important;
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
+  line-height: 0;
+  display: block;
+}
+
+.wlth-widget .wlth-animated-loader__animation canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
   background: transparent !important;
+}
+
+.wlth-widget .wlth-animated-loader__placeholder {
+  position: absolute;
+  inset: 18%;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(15, 23, 42, 0.06) 0%,
+    rgba(15, 23, 42, 0.02) 55%,
+    transparent 70%
+  );
+  pointer-events: none;
 }
 
 .wlth-widget .wlth-animated-loader__title {

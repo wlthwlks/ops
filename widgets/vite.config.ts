@@ -14,7 +14,18 @@ function emitLottieAnimations(): Plugin {
     name: "emit-lottie-animations",
     apply: "build",
     generateBundle() {
-      for (const file of ANIMATION_SOURCE_FILES) {
+      if (!fs.existsSync(ANIM_SRC_DIR)) {
+        this.warn(`Animation source dir missing: ${ANIM_SRC_DIR}`);
+        return;
+      }
+      // Emit every .lottie present + known list (so newly dropped files ship)
+      const onDisk = fs
+        .readdirSync(ANIM_SRC_DIR)
+        .filter((f) => f.endsWith(".lottie"));
+      const files = Array.from(
+        new Set<string>([...ANIMATION_SOURCE_FILES, ...onDisk])
+      );
+      for (const file of files) {
         const src = path.join(ANIM_SRC_DIR, file);
         if (!fs.existsSync(src)) {
           this.warn(`Missing Lottie asset (skipped): ${src}`);
