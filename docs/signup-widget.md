@@ -7,7 +7,8 @@ Embed: `#wlth-signup-root` + `public/widgets/signup/v1/signup.js`.
 - Max width ~1000px; two-column grids on desktop for short fields
 - Top phases: Account → Location → Business → Payment → **Matching**
 - Matching covers Goal / Help / Expertise / Connection with sub-progress `N of 4`
-- `WalkingLoader` for config load, step saves, Stripe return confirmation
+- `AnimatedLoader` variants for config load, step saves, Stripe verify/confirm (local DotLottie — see `docs/walking-loader-asset.md`)
+- Deploy full `public/widgets/signup/v1/` (JS + CSS + `assets/animations/*.lottie`)
 
 ## Payment
 

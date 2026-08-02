@@ -21,7 +21,72 @@ import {
   tryResolveSessionAccessToken,
 } from "../../shared/memberstack-auth";
 import { captureAttribution } from "../../shared/attribution";
-import { WalkingLoader } from "../../shared/WalkingLoader";
+import {
+  AnimatedLoader,
+  type AnimationVariant,
+} from "../../shared/AnimatedLoader";
+
+type SignupAsyncState =
+  | { kind: "idle" }
+  | { kind: "loading-form" }
+  | {
+      kind: "busy";
+      variant: AnimationVariant;
+      title: string;
+      description?: string;
+    };
+
+const BUSY = {
+  saving: {
+    kind: "busy" as const,
+    variant: "walking" as const,
+    title: "Saving your progress…",
+    description: "Your answers are being added securely to your profile.",
+  },
+  next: {
+    kind: "busy" as const,
+    variant: "walking" as const,
+    title: "Preparing your next step…",
+    description: "You’re making great progress.",
+  },
+  account: {
+    kind: "busy" as const,
+    variant: "walking" as const,
+    title: "Creating your account…",
+    description: "Setting up your WLTH WLKS profile.",
+  },
+  payment: {
+    kind: "busy" as const,
+    variant: "payment-verification" as const,
+    title: "Confirming your secure payment…",
+    description:
+      "Stripe is completing the final verification. This usually takes only a moment.",
+  },
+  paymentOk: {
+    kind: "busy" as const,
+    variant: "payment-confirmed" as const,
+    title: "Payment confirmed",
+    description: "Your membership is ready. We’re preparing your matching profile.",
+  },
+  matching: {
+    kind: "busy" as const,
+    variant: "walking" as const,
+    title: "Building your matching profile…",
+    description: "We’re getting your preferences ready for the next questions.",
+  },
+  finish: {
+    kind: "busy" as const,
+    variant: "walking" as const,
+    title: "Finishing your profile…",
+    description: "We’re preparing your WLTH WLKS membership experience.",
+  },
+  redirect: {
+    kind: "busy" as const,
+    variant: "walking" as const,
+    title: "Taking you to WLTH WLKS…",
+    description: "Almost there.",
+  },
+};
 
 const { useStepper } = defineStepper([
   { id: "account" },
@@ -131,16 +196,18 @@ export function SignupApp(props: { apiBase: string }) {
   // linear:false — resume / Stripe return must jump to goal (linear only allows +1 step)
   const stepper = useStepper({ linear: false, defaultStep: "account" });
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [asyncState, setAsyncState] = useState<SignupAsyncState>({
+    kind: "loading-form",
+  });
   const [refData, setRefData] = useState<RefData | null>(null);
   const [config, setConfig] = useState<{
     membershipPriceId: string;
     homeUrl: string;
   } | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const [loadMessage, setLoadMessage] = useState<string | null>(null);
-  const [confirmingPayment, setConfirmingPayment] = useState(false);
   const attribution = useMemo(() => captureAttribution(), []);
+  const busy = asyncState.kind === "busy" || asyncState.kind === "loading-form";
+  const loading = busy; // alias for disabled buttons
 
   const clearCheckoutFlags = () => {
     try {
@@ -157,13 +224,11 @@ export function SignupApp(props: { apiBase: string }) {
    * then polls until Airtable shows Paid/Active. Client never asserts Paid itself.
    */
   const confirmPaymentFromServer = async (accessToken: string | null) => {
-    setConfirmingPayment(true);
-    setLoadMessage("Confirming your secure payment…");
+    setAsyncState(BUSY.payment);
     setError(null);
 
     if (!accessToken) {
-      setConfirmingPayment(false);
-      setLoadMessage(null);
+      setAsyncState({ kind: "idle" });
       setError("Please stay signed in while we confirm your payment.");
       await stepper.goTo("payment");
       clearPaymentQueryParam();
@@ -184,7 +249,6 @@ export function SignupApp(props: { apiBase: string }) {
       params.get("cs_id") ||
       "";
 
-    // Trusted server confirm — links cus_… and marks Paid when Stripe verifies membership
     try {
       await api(props.apiBase, "/api/onboarding/confirm-checkout", {
         method: "POST",
@@ -192,15 +256,15 @@ export function SignupApp(props: { apiBase: string }) {
         body: JSON.stringify(sessionId ? { sessionId } : {}),
       });
     } catch {
-      /* continue to poll — webhooks may still land */
+      /* continue to poll */
     }
 
     const maxAttempts = 15;
     const delayMs = 2000;
     let confirmed = false;
+    let cancelled = false;
     for (let i = 0; i < maxAttempts; i++) {
       try {
-        // Re-run confirm periodically (idempotent) then check status
         if (i > 0 && i % 3 === 0) {
           await api(props.apiBase, "/api/onboarding/confirm-checkout", {
             method: "POST",
@@ -221,17 +285,18 @@ export function SignupApp(props: { apiBase: string }) {
       await new Promise((r) => setTimeout(r, delayMs));
     }
 
-    setConfirmingPayment(false);
-    setLoadMessage(null);
     clearPaymentQueryParam();
     clearCheckoutFlags();
 
     if (confirmed) {
+      setAsyncState(BUSY.paymentOk);
+      await new Promise((r) => setTimeout(r, 600));
       markPreGoalComplete(stepper);
-      setLoadMessage("Building your matching profile…");
+      setAsyncState(BUSY.matching);
       await stepper.goTo("goal");
-      setLoadMessage(null);
-    } else {
+      setAsyncState({ kind: "idle" });
+    } else if (!cancelled) {
+      setAsyncState({ kind: "idle" });
       setError(
         "We’re still confirming your payment with Stripe. Your progress is saved — refresh this page in a moment, or continue when you’re ready."
       );
@@ -324,6 +389,7 @@ export function SignupApp(props: { apiBase: string }) {
         setConfig(cfg as { membershipPriceId: string; homeUrl: string });
         const rd = ref as unknown as RefData;
         setRefData(rd);
+        // leave loading-form until mount path finishes
         if (!locationForm.getValues("countryCode") && rd.countries?.[0]?.code) {
           locationForm.setValue("countryCode", rd.countries[0].code);
         }
@@ -407,8 +473,18 @@ export function SignupApp(props: { apiBase: string }) {
             utm_campaign: attribution.utm_campaign,
           }),
         }).catch(() => undefined);
+
+        // Payment confirm owns busy until it finishes; don't clobber mid-verify
+        setAsyncState((s) =>
+          s.kind === "busy" &&
+          (s.variant === "payment-verification" ||
+            s.variant === "payment-confirmed")
+            ? s
+            : { kind: "idle" }
+        );
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load form");
+        setAsyncState({ kind: "idle" });
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount once
@@ -424,10 +500,9 @@ export function SignupApp(props: { apiBase: string }) {
   };
 
   const onAccount = accountForm.handleSubmit(async (values) => {
-    if (loading) return;
+    if (busy) return;
     setError(null);
-    setLoading(true);
-    setLoadMessage("Creating your account…");
+    setAsyncState(BUSY.account);
     try {
       logMemberstackDiagnostics("account_submit_start");
       const auth = await authenticateEmailPassword({
@@ -444,7 +519,7 @@ export function SignupApp(props: { apiBase: string }) {
       });
 
       setToken(auth.accessToken);
-      setLoadMessage("Saving your progress…");
+      setAsyncState(BUSY.saving);
 
       await api(props.apiBase, "/api/onboarding/bootstrap", {
         method: "POST",
@@ -457,7 +532,7 @@ export function SignupApp(props: { apiBase: string }) {
         }),
       });
 
-      setLoadMessage("Preparing your next step…");
+      setAsyncState(BUSY.next);
       try {
         const status = await api(props.apiBase, "/api/onboarding/status", {
           token: auth.accessToken,
@@ -492,49 +567,44 @@ export function SignupApp(props: { apiBase: string }) {
       });
       setError(e instanceof Error ? e.message : "Account step failed");
     } finally {
-      setLoading(false);
-      setLoadMessage(null);
+      setAsyncState({ kind: "idle" });
     }
   });
 
   const onLocation = locationForm.handleSubmit(async (values) => {
     setError(null);
-    setLoading(true);
-    setLoadMessage("Saving your progress…");
+    setAsyncState(BUSY.saving);
     try {
       await saveStep("LOCATION", values);
-      setLoadMessage("Preparing your next step…");
+      setAsyncState(BUSY.next);
       stepper.setComplete("location");
       await stepper.next();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Location save failed");
     } finally {
-      setLoading(false);
-      setLoadMessage(null);
+      setAsyncState({ kind: "idle" });
     }
   });
 
   const onBusiness = businessForm.handleSubmit(async (values) => {
     setError(null);
-    setLoading(true);
-    setLoadMessage("Saving your progress…");
+    setAsyncState(BUSY.saving);
     try {
       await saveStep("BUSINESS", values);
       await saveStep("PAYMENT_PENDING", {});
-      setLoadMessage("Preparing your next step…");
+      setAsyncState(BUSY.next);
       stepper.setComplete("business");
       await stepper.next();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Business save failed");
     } finally {
-      setLoading(false);
-      setLoadMessage(null);
+      setAsyncState({ kind: "idle" });
     }
   });
 
   const startCheckout = async () => {
     setError(null);
-    setLoading(true);
+    setAsyncState(BUSY.saving);
     const w = window as unknown as {
       $memberstackDom?: {
         purchasePlansWithCheckout?: (p: {
@@ -547,12 +617,12 @@ export function SignupApp(props: { apiBase: string }) {
     const priceId = config?.membershipPriceId;
     if (!priceId) {
       setError("Membership price is not configured (MEMBERSTACK_MEMBERSHIP_PRICE_ID).");
-      setLoading(false);
+      setAsyncState({ kind: "idle" });
       return;
     }
     if (!w.$memberstackDom?.purchasePlansWithCheckout) {
       setError("Memberstack checkout is unavailable on this page.");
-      setLoading(false);
+      setAsyncState({ kind: "idle" });
       return;
     }
     const base = window.location.origin + window.location.pathname;
@@ -568,14 +638,11 @@ export function SignupApp(props: { apiBase: string }) {
       body: JSON.stringify({ eventType: "CHECKOUT_STARTED" }),
     }).catch(() => undefined);
     try {
-      // If checkout is embedded/modal, this promise resolves on success without a full redirect.
-      // If it full-page redirects to Stripe, mount handler + sessionStorage covers the return.
       await w.$memberstackDom.purchasePlansWithCheckout({
         priceId,
         successUrl: `${base}?payment=success`,
         cancelUrl: `${base}?payment=cancel`,
       });
-      // Resolved without unload → payment finished in-place
       let t = token;
       if (!t) t = await tryResolveSessionAccessToken();
       if (t) setToken(t);
@@ -586,20 +653,17 @@ export function SignupApp(props: { apiBase: string }) {
       } catch {
         /* ignore */
       }
-      // User closed checkout / cancel — stay on payment
       const msg = e instanceof Error ? e.message : "";
       if (msg && !/cancel|closed|abort/i.test(msg)) {
         setError(msg);
       }
-    } finally {
-      setLoading(false);
+      setAsyncState({ kind: "idle" });
     }
   };
 
   const finish = async () => {
     setError(null);
-    setLoading(true);
-    setLoadMessage("Finishing your profile…");
+    setAsyncState(BUSY.finish);
     try {
       if (token) {
         await api(props.apiBase, "/api/onboarding/complete", {
@@ -607,13 +671,12 @@ export function SignupApp(props: { apiBase: string }) {
           token,
         });
       }
-      setLoadMessage("Taking you to WLTH WLKS…");
+      setAsyncState(BUSY.redirect);
       // Keep loader visible until navigation unloads the page — do not clear loading
       window.location.assign(config?.homeUrl || "https://wlthwlks.com");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not complete");
-      setLoading(false);
-      setLoadMessage(null);
+      setAsyncState({ kind: "idle" });
     }
   };
 
@@ -627,12 +690,54 @@ export function SignupApp(props: { apiBase: string }) {
     else if (list.length < max) onChange([...list, code]);
   };
 
+  if (asyncState.kind === "loading-form") {
+    return (
+      <div className="wlth-widget">
+        <div className="wlth-card wlth-overlay-load">
+          <AnimatedLoader
+            variant="walking"
+            title="Preparing your WLTH WLKS journey…"
+            description="Loading everything you need to get started."
+            size="large"
+            fullScreen
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (asyncState.kind === "busy") {
+    return (
+      <div className="wlth-widget">
+        <div className="wlth-card wlth-overlay-load">
+          <AnimatedLoader
+            variant={asyncState.variant}
+            title={asyncState.title}
+            description={asyncState.description}
+            size={
+              asyncState.variant === "payment-verification" ? "large" : "medium"
+            }
+            fullScreen
+          />
+        </div>
+      </div>
+    );
+  }
+
   if (!refData) {
     return (
       <div className="wlth-widget">
         <div className="wlth-card">
-          <p>Loading…</p>
-          {error && <div className="wlth-banner-error">{error}</div>}
+          {error ? (
+            <div className="wlth-banner-error">{error}</div>
+          ) : (
+            <AnimatedLoader
+              variant="walking"
+              title="Preparing your WLTH WLKS journey…"
+              size="large"
+              fullScreen
+            />
+          )}
         </div>
       </div>
     );
@@ -647,16 +752,6 @@ export function SignupApp(props: { apiBase: string }) {
   const matchSub = matchingSubIndex(currentStepId);
   const phaseIndex = Math.max(0, FLOW_DOTS.indexOf(activePhase));
   const progressPct = Math.round(((phaseIndex + (matchSub ? matchSub / 4 : 0.5)) / FLOW_DOTS.length) * 100);
-
-  if (confirmingPayment || (loading && loadMessage)) {
-    return (
-      <div className="wlth-widget">
-        <div className="wlth-card wlth-overlay-load">
-          <WalkingLoader message={loadMessage || "Saving your progress…"} />
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="wlth-widget">
@@ -749,7 +844,7 @@ export function SignupApp(props: { apiBase: string }) {
               <FieldError message={accountForm.formState.errors.password?.message} />
             </div>
             <div className="wlth-actions">
-              <button type="submit" className="wlth-btn-primary" disabled={loading}>
+              <button type="submit" className="wlth-btn-primary" disabled={busy}>
                 Continue
               </button>
             </div>
@@ -826,7 +921,7 @@ export function SignupApp(props: { apiBase: string }) {
               >
                 Back
               </button>
-              <button type="submit" className="wlth-btn-primary" disabled={loading}>
+              <button type="submit" className="wlth-btn-primary" disabled={busy}>
                 Continue
               </button>
             </div>
@@ -887,7 +982,7 @@ export function SignupApp(props: { apiBase: string }) {
               >
                 Back
               </button>
-              <button type="submit" className="wlth-btn-primary" disabled={loading}>
+              <button type="submit" className="wlth-btn-primary" disabled={busy}>
                 Continue to payment
               </button>
             </div>
@@ -923,7 +1018,7 @@ export function SignupApp(props: { apiBase: string }) {
               <button
                 type="button"
                 className="wlth-btn-primary"
-                disabled={loading || confirmingPayment}
+                disabled={busy}
                 onClick={() => void startCheckout()}
               >
                 Continue to secure checkout
@@ -965,17 +1060,15 @@ export function SignupApp(props: { apiBase: string }) {
             key="goal"
             onSubmit={goalForm.handleSubmit(async (v) => {
               setError(null);
-              setLoading(true);
-              setLoadMessage("Saving your progress…");
-              try {
+                  setAsyncState(BUSY.saving);
+try {
                 await saveStep("GOAL", v);
-                setLoadMessage("Preparing your next step…");
+                setAsyncState(BUSY.next);
                 await stepper.goTo("help");
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
               } finally {
-                setLoading(false);
-                setLoadMessage(null);
+                setAsyncState({ kind: "idle" });
               }
             })}
             noValidate
@@ -993,7 +1086,7 @@ export function SignupApp(props: { apiBase: string }) {
               <FieldError message={goalForm.formState.errors.ninetyDayGoal?.message as string} />
             </div>
             <div className="wlth-actions">
-              <button type="submit" className="wlth-btn-primary" disabled={loading}>
+              <button type="submit" className="wlth-btn-primary" disabled={busy}>
                 Continue
               </button>
             </div>
@@ -1006,17 +1099,15 @@ export function SignupApp(props: { apiBase: string }) {
             key="help"
             onSubmit={helpForm.handleSubmit(async (v) => {
               setError(null);
-              setLoading(true);
-              setLoadMessage("Saving your progress…");
-              try {
+                  setAsyncState(BUSY.saving);
+try {
                 await saveStep("HELP_WANTED", v);
-                setLoadMessage("Preparing your next step…");
+                setAsyncState(BUSY.next);
                 await stepper.goTo("expertise");
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
               } finally {
-                setLoading(false);
-                setLoadMessage(null);
+                setAsyncState({ kind: "idle" });
               }
             })}
           >
@@ -1046,7 +1137,7 @@ export function SignupApp(props: { apiBase: string }) {
               <textarea id="hc" rows={2} {...helpForm.register("helpWantedContext")} />
             </div>
             <div className="wlth-actions">
-              <button type="submit" className="wlth-btn-primary" disabled={loading}>
+              <button type="submit" className="wlth-btn-primary" disabled={busy}>
                 Continue
               </button>
             </div>
@@ -1059,17 +1150,15 @@ export function SignupApp(props: { apiBase: string }) {
             key="expertise"
             onSubmit={expertiseForm.handleSubmit(async (v) => {
               setError(null);
-              setLoading(true);
-              setLoadMessage("Saving your progress…");
-              try {
+                  setAsyncState(BUSY.saving);
+try {
                 await saveStep("EXPERTISE", v);
-                setLoadMessage("Preparing your next step…");
+                setAsyncState(BUSY.next);
                 await stepper.goTo("connection");
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
               } finally {
-                setLoading(false);
-                setLoadMessage(null);
+                setAsyncState({ kind: "idle" });
               }
             })}
           >
@@ -1099,7 +1188,7 @@ export function SignupApp(props: { apiBase: string }) {
               <textarea id="ec" rows={2} {...expertiseForm.register("expertiseContext")} />
             </div>
             <div className="wlth-actions">
-              <button type="submit" className="wlth-btn-primary" disabled={loading}>
+              <button type="submit" className="wlth-btn-primary" disabled={busy}>
                 Continue
               </button>
             </div>
@@ -1112,16 +1201,14 @@ export function SignupApp(props: { apiBase: string }) {
             key="connection"
             onSubmit={connectionForm.handleSubmit(async (v) => {
               setError(null);
-              setLoading(true);
-              setLoadMessage("Saving your progress…");
-              try {
+                  setAsyncState(BUSY.saving);
+try {
                 await saveStep("CONNECTION", v);
                 // finish() keeps the loader until redirect — never re-show this step
                 await finish();
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
-                setLoading(false);
-                setLoadMessage(null);
+                setAsyncState({ kind: "idle" });
               }
             })}
             noValidate
@@ -1142,7 +1229,7 @@ export function SignupApp(props: { apiBase: string }) {
               />
             </div>
             <div className="wlth-actions">
-              <button type="submit" className="wlth-btn-primary" disabled={loading}>
+              <button type="submit" className="wlth-btn-primary" disabled={busy}>
                 Finish
               </button>
             </div>

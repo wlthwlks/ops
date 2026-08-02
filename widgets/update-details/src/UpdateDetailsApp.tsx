@@ -8,7 +8,7 @@ import {
   logMemberstackDiagnostics,
   tryResolveSessionAccessToken,
 } from "../../shared/memberstack-auth";
-import { WalkingLoader } from "../../shared/WalkingLoader";
+import { AnimatedLoader } from "../../shared/AnimatedLoader";
 
 const profileSchema = z.object({
   firstName: z.string().trim().min(1, "Required").max(80),
@@ -398,18 +398,40 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     }
   }, [token, props.apiBase]);
 
-  if (loading || saving || reactivating) {
+  if (loading) {
     return (
       <div className="wlth-widget">
         <div className="wlth-card wlth-overlay-load">
-          <WalkingLoader
-            message={
+          <AnimatedLoader
+            variant="profile-loading"
+            title="Welcome back! We’re loading your profile…"
+            description="Gathering your details and matching preferences."
+            size="large"
+            fullScreen
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (saving || reactivating) {
+    return (
+      <div className="wlth-widget">
+        <div className="wlth-card wlth-overlay-load">
+          <AnimatedLoader
+            variant={reactivating ? "payment-verification" : "profile-updating"}
+            title={
               reactivating
                 ? "Confirming your secure payment…"
-                : saving
-                  ? "Updating your WLTH WLKS profile…"
-                  : "Loading your profile…"
+                : "Updating your details…"
             }
+            description={
+              reactivating
+                ? "Stripe is completing the final verification. This usually takes only a moment."
+                : "Saving your latest profile and matching preferences."
+            }
+            size="medium"
+            fullScreen
           />
         </div>
       </div>
