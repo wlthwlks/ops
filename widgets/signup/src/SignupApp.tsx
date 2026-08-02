@@ -599,6 +599,7 @@ export function SignupApp(props: { apiBase: string }) {
   const finish = async () => {
     setError(null);
     setLoading(true);
+    setLoadMessage("Finishing your profile…");
     try {
       if (token) {
         await api(props.apiBase, "/api/onboarding/complete", {
@@ -606,11 +607,13 @@ export function SignupApp(props: { apiBase: string }) {
           token,
         });
       }
-      window.location.href = config?.homeUrl || "https://wlthwlks.com";
+      setLoadMessage("Taking you to WLTH WLKS…");
+      // Keep loader visible until navigation unloads the page — do not clear loading
+      window.location.assign(config?.homeUrl || "https://wlthwlks.com");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not complete");
-    } finally {
       setLoading(false);
+      setLoadMessage(null);
     }
   };
 
@@ -1113,11 +1116,10 @@ export function SignupApp(props: { apiBase: string }) {
               setLoadMessage("Saving your progress…");
               try {
                 await saveStep("CONNECTION", v);
-                setLoadMessage("Finishing your profile…");
+                // finish() keeps the loader until redirect — never re-show this step
                 await finish();
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
-              } finally {
                 setLoading(false);
                 setLoadMessage(null);
               }

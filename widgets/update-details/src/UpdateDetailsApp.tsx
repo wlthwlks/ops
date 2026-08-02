@@ -314,67 +314,59 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   };
 
   /**
-   * Prefer Stripe Customer Portal when a card is already on file (same payment method).
-   * Fall back to Memberstack checkout for brand-new payers.
+   * One-click reactivate with card on file (server charges Stripe customer).
+   * Manage billing stays separate for cards / cancel.
    */
   const reactivateMembership = async () => {
+    if (!token) return;
     setReactivating(true);
     setError(null);
     setOk(null);
     try {
-      const w = window as unknown as {
-        $memberstackDom?: {
-          purchasePlansWithCheckout?: (p: {
-            priceId: string;
-            successUrl: string;
-            cancelUrl: string;
-          }) => Promise<unknown>;
-          launchStripeCustomerPortal?: () => Promise<unknown>;
-        };
-      };
-
-      // Returning members with a Stripe customer: portal reuses the saved card
-      const hadStripeBilling =
-        Boolean(billing?.membership) ||
-        Boolean(billing?.payment) ||
-        Boolean(billing?.serviceAccessUntil);
-
-      if (hadStripeBilling && w.$memberstackDom?.launchStripeCustomerPortal) {
-        await w.$memberstackDom.launchStripeCustomerPortal();
-        setOk(
-          "Manage or renew your plan in the billing portal — your saved card can be used again."
-        );
-        if (token) {
-          const bill = await api(props.apiBase, "/api/member/billing-status", { token });
-          setBilling((bill.billing || null) as typeof billing);
-        }
-        return;
-      }
-
-      if (!membershipPriceId) {
-        setError("Membership price is not configured.");
-        return;
-      }
-      if (!w.$memberstackDom?.purchasePlansWithCheckout) {
-        setError("Checkout is unavailable on this page.");
-        return;
-      }
-      const base = window.location.origin + window.location.pathname;
-      await w.$memberstackDom.purchasePlansWithCheckout({
-        priceId: membershipPriceId,
-        successUrl: `${base}?reactivated=1`,
-        cancelUrl: `${base}?reactivated=0`,
+      const res = await api(props.apiBase, "/api/member/reactivate", {
+        method: "POST",
+        token,
+        body: JSON.stringify({}),
       });
-      if (token) {
-        await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-          method: "POST",
-          token,
-          body: JSON.stringify({}),
-        }).catch(() => undefined);
-        const bill2 = await api(props.apiBase, "/api/member/billing-status", { token });
-        setBilling((bill2.billing || null) as typeof billing);
-        setOk("Membership reactivation submitted. Status updates once payment confirms.");
+      if (!res.success) {
+        // No card / no customer → Memberstack checkout once to save a card
+        if (
+          res.status === "no_payment_method" ||
+          res.status === "no_stripe_customer"
+        ) {
+          const w = window as unknown as {
+            $memberstackDom?: {
+              purchasePlansWithCheckout?: (p: {
+                priceId: string;
+                successUrl: string;
+                cancelUrl: string;
+              }) => Promise<unknown>;
+            };
+          };
+          if (!membershipPriceId || !w.$memberstackDom?.purchasePlansWithCheckout) {
+            setError(String(res.reason || "Could not reactivate membership"));
+            return;
+          }
+          const base = window.location.origin + window.location.pathname;
+          await w.$memberstackDom.purchasePlansWithCheckout({
+            priceId: membershipPriceId,
+            successUrl: `${base}?reactivated=1`,
+            cancelUrl: `${base}?reactivated=0`,
+          });
+          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+            method: "POST",
+            token,
+            body: JSON.stringify({}),
+          }).catch(() => undefined);
+        } else {
+          setError(String(res.reason || "Could not reactivate membership"));
+          return;
+        }
+      } else {
+        setOk(String(res.reason || "Membership reactivated with your card on file."));
       }
+      const bill = await api(props.apiBase, "/api/member/billing-status", { token });
+      setBilling((bill.billing || null) as typeof billing);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       if (msg && !/cancel|closed|abort/i.test(msg)) setError(msg);
@@ -445,8 +437,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               Your membership is not fully active
               {billing.membership ? ` (${billing.membership}` : ""}
               {billing.payment ? `${billing.membership ? " · " : " ("}${billing.payment}` : ""}
-              {billing.membership || billing.payment ? ")" : ""}. You can renew with the card already
-              on file in billing, or update your payment method there.
+              {billing.membership || billing.payment ? ")" : ""}. Reactivate charges the card already
+              on file when possible. Use Manage billing to change cards or cancel.
             </p>
             <div className="wlth-actions">
               <button
