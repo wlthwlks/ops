@@ -474,11 +474,38 @@
   padding: clamp(24px, 4vw, 40px);
 }
 
-.wlth-widget .wlth-overlay-load {
-  min-height: 220px;
+.wlth-widget .wlth-card--relative {
+  position: relative;
+}
+
+/* Blocking popup over Update Details (save / reactivate) */
+.wlth-widget.is-blocked .wlth-card > :not(.wlth-modal-block) {
+  pointer-events: none;
+  user-select: none;
+}
+
+.wlth-widget .wlth-modal-block {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 24px 16px;
+  border-radius: inherit;
+  background: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  pointer-events: auto;
+}
+
+.wlth-widget .wlth-modal-block__panel {
+  width: min(100%, 360px);
+  background: var(--wlth-surface, #fff);
+  border: 1px solid var(--wlth-border, rgba(15, 23, 42, 0.1));
+  border-radius: var(--wlth-radius-sm, 12px);
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.14);
+  padding: 8px 12px 16px;
 }
 
 /* —— Step transitions —— */

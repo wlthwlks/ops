@@ -55,24 +55,23 @@ const BUSY = {
     title: "Creating your account…",
     description: "Setting up your WLTH WLKS profile.",
   },
-  payment: {
+  /** Leaving for Stripe — single payment-verification Lottie only */
+  checkout: {
     kind: "busy" as const,
     variant: "payment-verification" as const,
-    title: "Confirming your secure payment…",
-    description:
-      "Stripe is completing the final verification. This usually takes only a moment.",
+    title: "Taking you to secure checkout…",
+    description: "Stripe is opening so you can complete your membership payment.",
   },
-  paymentOk: {
+  /**
+   * Back from Stripe — single payment-confirmed Lottie for the whole wait
+   * (shown even while server is still confirming).
+   */
+  paymentReturn: {
     kind: "busy" as const,
     variant: "payment-confirmed" as const,
     title: "Payment confirmed",
-    description: "Your membership is ready. We’re preparing your matching profile.",
-  },
-  matching: {
-    kind: "busy" as const,
-    variant: "walking" as const,
-    title: "Building your matching profile…",
-    description: "We’re getting your preferences ready for the next questions.",
+    description:
+      "We’re finishing setup with Stripe. This usually takes only a moment.",
   },
   finish: {
     kind: "busy" as const,
@@ -87,6 +86,29 @@ const BUSY = {
     description: "Almost there.",
   },
 };
+
+/** Scroll the embed (and window) so the form top is in view after step changes. */
+function scrollSignupToTop() {
+  try {
+    const root =
+      document.getElementById("wlth-signup-root") ||
+      document.querySelector(".wlth-widget");
+    if (root) {
+      root.scrollIntoView({ behavior: "smooth", block: "start" });
+      const rect = root.getBoundingClientRect();
+      const y = window.scrollY + rect.top - 12;
+      window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
+    } else {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  } catch {
+    try {
+      window.scrollTo(0, 0);
+    } catch {
+      /* ignore */
+    }
+  }
+}
 
 const { useStepper } = defineStepper([
   { id: "account" },
@@ -224,13 +246,16 @@ export function SignupApp(props: { apiBase: string }) {
    * then polls until Airtable shows Paid/Active. Client never asserts Paid itself.
    */
   const confirmPaymentFromServer = async (accessToken: string | null) => {
-    setAsyncState(BUSY.payment);
+    // One Lottie only for the whole return path (payment-confirmed)
+    setAsyncState(BUSY.paymentReturn);
     setError(null);
+    scrollSignupToTop();
 
     if (!accessToken) {
       setAsyncState({ kind: "idle" });
       setError("Please stay signed in while we confirm your payment.");
       await stepper.goTo("payment");
+      scrollSignupToTop();
       clearPaymentQueryParam();
       clearCheckoutFlags();
       return;
@@ -289,18 +314,19 @@ export function SignupApp(props: { apiBase: string }) {
     clearCheckoutFlags();
 
     if (confirmed) {
-      setAsyncState(BUSY.paymentOk);
-      await new Promise((r) => setTimeout(r, 600));
+      // Brief hold on the same payment-confirmed state, then matching form
+      await new Promise((r) => setTimeout(r, 700));
       markPreGoalComplete(stepper);
-      setAsyncState(BUSY.matching);
       await stepper.goTo("goal");
       setAsyncState({ kind: "idle" });
+      scrollSignupToTop();
     } else if (!cancelled) {
       setAsyncState({ kind: "idle" });
       setError(
         "We’re still confirming your payment with Stripe. Your progress is saved — refresh this page in a moment, or continue when you’re ready."
       );
       await stepper.goTo("payment");
+      scrollSignupToTop();
     }
   };
 
@@ -474,7 +500,7 @@ export function SignupApp(props: { apiBase: string }) {
           }),
         }).catch(() => undefined);
 
-        // Payment confirm owns busy until it finishes; don't clobber mid-verify
+        // Payment checkout/return owns busy until it finishes
         setAsyncState((s) =>
           s.kind === "busy" &&
           (s.variant === "payment-verification" ||
@@ -482,6 +508,7 @@ export function SignupApp(props: { apiBase: string }) {
             ? s
             : { kind: "idle" }
         );
+        scrollSignupToTop();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load form");
         setAsyncState({ kind: "idle" });
@@ -568,6 +595,7 @@ export function SignupApp(props: { apiBase: string }) {
       setError(e instanceof Error ? e.message : "Account step failed");
     } finally {
       setAsyncState({ kind: "idle" });
+      scrollSignupToTop();
     }
   });
 
@@ -583,6 +611,7 @@ export function SignupApp(props: { apiBase: string }) {
       setError(e instanceof Error ? e.message : "Location save failed");
     } finally {
       setAsyncState({ kind: "idle" });
+      scrollSignupToTop();
     }
   });
 
@@ -599,12 +628,15 @@ export function SignupApp(props: { apiBase: string }) {
       setError(e instanceof Error ? e.message : "Business save failed");
     } finally {
       setAsyncState({ kind: "idle" });
+      scrollSignupToTop();
     }
   });
 
   const startCheckout = async () => {
     setError(null);
-    setAsyncState(BUSY.saving);
+    // Single Lottie outbound — payment-verification only (no walking first)
+    setAsyncState(BUSY.checkout);
+    scrollSignupToTop();
     const w = window as unknown as {
       $memberstackDom?: {
         purchasePlansWithCheckout?: (p: {
@@ -663,7 +695,9 @@ export function SignupApp(props: { apiBase: string }) {
 
   const finish = async () => {
     setError(null);
+    // End of flow: walking woman only
     setAsyncState(BUSY.finish);
+    scrollSignupToTop();
     try {
       if (token) {
         await api(props.apiBase, "/api/onboarding/complete", {
@@ -715,7 +749,10 @@ export function SignupApp(props: { apiBase: string }) {
             title={asyncState.title}
             description={asyncState.description}
             size={
-              asyncState.variant === "payment-verification" ? "large" : "medium"
+              asyncState.variant === "payment-verification" ||
+              asyncState.variant === "payment-confirmed"
+                ? "large"
+                : "medium"
             }
             fullScreen
           />
@@ -1060,8 +1097,8 @@ export function SignupApp(props: { apiBase: string }) {
             key="goal"
             onSubmit={goalForm.handleSubmit(async (v) => {
               setError(null);
-                  setAsyncState(BUSY.saving);
-try {
+              setAsyncState(BUSY.saving);
+              try {
                 await saveStep("GOAL", v);
                 setAsyncState(BUSY.next);
                 await stepper.goTo("help");
@@ -1069,6 +1106,7 @@ try {
                 setError(e instanceof Error ? e.message : "Save failed");
               } finally {
                 setAsyncState({ kind: "idle" });
+                scrollSignupToTop();
               }
             })}
             noValidate
@@ -1099,8 +1137,8 @@ try {
             key="help"
             onSubmit={helpForm.handleSubmit(async (v) => {
               setError(null);
-                  setAsyncState(BUSY.saving);
-try {
+              setAsyncState(BUSY.saving);
+              try {
                 await saveStep("HELP_WANTED", v);
                 setAsyncState(BUSY.next);
                 await stepper.goTo("expertise");
@@ -1108,6 +1146,7 @@ try {
                 setError(e instanceof Error ? e.message : "Save failed");
               } finally {
                 setAsyncState({ kind: "idle" });
+                scrollSignupToTop();
               }
             })}
           >
@@ -1150,8 +1189,8 @@ try {
             key="expertise"
             onSubmit={expertiseForm.handleSubmit(async (v) => {
               setError(null);
-                  setAsyncState(BUSY.saving);
-try {
+              setAsyncState(BUSY.saving);
+              try {
                 await saveStep("EXPERTISE", v);
                 setAsyncState(BUSY.next);
                 await stepper.goTo("connection");
@@ -1159,6 +1198,7 @@ try {
                 setError(e instanceof Error ? e.message : "Save failed");
               } finally {
                 setAsyncState({ kind: "idle" });
+                scrollSignupToTop();
               }
             })}
           >
@@ -1201,14 +1241,15 @@ try {
             key="connection"
             onSubmit={connectionForm.handleSubmit(async (v) => {
               setError(null);
-                  setAsyncState(BUSY.saving);
-try {
+              setAsyncState(BUSY.saving);
+              try {
                 await saveStep("CONNECTION", v);
-                // finish() keeps the loader until redirect — never re-show this step
+                // finish() keeps walking loader until redirect — never re-show this step
                 await finish();
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
                 setAsyncState({ kind: "idle" });
+                scrollSignupToTop();
               }
             })}
             noValidate

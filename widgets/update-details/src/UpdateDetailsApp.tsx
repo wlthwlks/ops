@@ -239,9 +239,34 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     }
   };
 
+  const scrollDetailsToTop = () => {
+    try {
+      const root =
+        document.getElementById("wlth-update-details-root") ||
+        document.querySelector(".wlth-widget");
+      if (root) {
+        root.scrollIntoView({ behavior: "smooth", block: "start" });
+        const rect = root.getBoundingClientRect();
+        window.scrollTo({
+          top: Math.max(0, window.scrollY + rect.top - 12),
+          behavior: "smooth",
+        });
+      } else {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    } catch {
+      try {
+        window.scrollTo(0, 0);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
   const onSave = form.handleSubmit(async (values) => {
     if (!token) return;
     setSaving(true);
+    scrollDetailsToTop();
     setError(null);
     setOk(null);
     try {
@@ -320,6 +345,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const reactivateMembership = async () => {
     if (!token) return;
     setReactivating(true);
+    scrollDetailsToTop();
     setError(null);
     setOk(null);
     try {
@@ -414,33 +440,42 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     );
   }
 
-  if (saving || reactivating) {
-    return (
-      <div className="wlth-widget">
-        <div className="wlth-card wlth-overlay-load">
-          <AnimatedLoader
-            variant={reactivating ? "payment-verification" : "profile-updating"}
-            title={
-              reactivating
-                ? "Confirming your secure payment…"
-                : "Updating your details…"
-            }
-            description={
-              reactivating
-                ? "Stripe is completing the final verification. This usually takes only a moment."
-                : "Saving your latest profile and matching preferences."
-            }
-            size="medium"
-            fullScreen
-          />
-        </div>
-      </div>
-    );
-  }
+  const blocking = saving || reactivating;
 
   return (
-    <div className="wlth-widget">
-      <div className="wlth-card wlth-step-panel">
+    <div className={`wlth-widget${blocking ? " is-blocked" : ""}`}>
+      <div className="wlth-card wlth-step-panel wlth-card--relative">
+        {blocking ? (
+          <div
+            className="wlth-modal-block"
+            role="alertdialog"
+            aria-modal="true"
+            aria-busy="true"
+            aria-label={
+              reactivating ? "Confirming payment" : "Saving profile"
+            }
+          >
+            <div className="wlth-modal-block__panel">
+              <AnimatedLoader
+                variant={
+                  reactivating ? "payment-verification" : "profile-updating"
+                }
+                title={
+                  reactivating
+                    ? "Confirming your secure payment…"
+                    : "Updating your details…"
+                }
+                description={
+                  reactivating
+                    ? "Stripe is completing the final verification. This usually takes only a moment."
+                    : "Saving your latest profile and matching preferences."
+                }
+                size="medium"
+              />
+            </div>
+          </div>
+        ) : null}
+
         <h1>Update details</h1>
         <p>Keep your WLTH WLKS profile current so introductions stay relevant.</p>
         {error && (
