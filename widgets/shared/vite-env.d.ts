@@ -1,8 +1,9 @@
 /// <reference types="vite/client" />
 
+/** Inlined by widgets/vite.config.ts `inline-lottie-assets` plugin */
 declare module "*.lottie" {
-  const src: string;
-  export default src;
+  const data: ArrayBuffer;
+  export default data;
 }
 
 declare module "*.lottie?url" {

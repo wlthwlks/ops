@@ -52,10 +52,8 @@ Runtime resolves URLs relative to the widget `<script src>` so Webflow embeds lo
 
 ## Runtime loading
 
-1. Widget JS resolves `./assets/animations/*.lottie` against the **script** URL (`signup.js` / `update-details.js`), not the Webflow page URL.
-2. Bytes are fetched once, cached in memory, and passed to DotLottie as `data` (so step transitions do not re-download).
-3. A soft placeholder shows until the first frame; the small black pulse is **only** the hard failure fallback (404 / corrupt / blocked).
+1. **Animation bytes are inlined** into `signup.js` / `update-details.js` at build time (no separate `.lottie` request required for playback).
+2. Loose copies are still emitted under `assets/animations/` for debugging/CDN, but the player uses the inlined `ArrayBuffer`.
+3. A CSS spinner ring shows until DotLottie fires `load`. If WASM cannot load, the ring stays (no blank screen).
 
-If you only see a black dot: the `.lottie` files were not deployed next to the JS, or the request 404s. Deploy the full `public/widgets/*/v1/` folder including `assets/animations/`.
-
-DotLottie WASM still loads from jsDelivr/unpkg CDN (library default). Allow those hosts if you use a strict CSP.
+DotLottie WASM still loads from jsDelivr/unpkg CDN (library default). Allow those hosts if you use a strict CSP, or animations will never leave the spinner state.

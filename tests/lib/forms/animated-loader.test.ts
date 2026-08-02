@@ -1,16 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   ANIMATION_FILES,
   animationRelativePath,
-  animationAbsoluteUrl,
   type AnimationVariant,
-} from "../../../widgets/shared/animations";
+} from "../../../widgets/shared/animations-meta";
 
 describe("animation variant mapping", () => {
-  beforeEach(() => {
-    vi.unstubAllGlobals();
-  });
-
   it("maps walking to walking-business-woman asset", () => {
     expect(ANIMATION_FILES.walking).toBe("walking-business-woman.lottie");
     expect(animationRelativePath("walking")).toBe(
@@ -38,12 +33,13 @@ describe("animation variant mapping", () => {
     );
   });
 
-  it("resolves absolute URL against widget script href", () => {
-    const url = animationAbsoluteUrl(
-      "walking",
+  it("resolves asset path against widget script href", () => {
+    const rel = animationRelativePath("walking")!;
+    const abs = new URL(
+      rel.replace(/^\.\//, ""),
       "https://ops.wlthwlks.com/widgets/signup/v1/signup.js"
-    );
-    expect(url).toBe(
+    ).href;
+    expect(abs).toBe(
       "https://ops.wlthwlks.com/widgets/signup/v1/assets/animations/walking-business-woman.lottie"
     );
   });

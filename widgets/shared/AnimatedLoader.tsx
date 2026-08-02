@@ -1,9 +1,8 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { DotLottieReact } from "@lottiefiles/dotlottie-react";
 import {
   type AnimationVariant,
-  loadAnimationData,
-  prefetchAnimations,
+  getAnimationData,
 } from "./animations";
 
 export type AnimatedLoaderSize = "small" | "medium" | "large";
@@ -23,15 +22,6 @@ const SIZE_PX: Record<AnimatedLoaderSize, number> = {
   large: 280,
 };
 
-// Kick off fetches as soon as the widget bundle evaluates
-if (typeof window !== "undefined") {
-  try {
-    prefetchAnimations();
-  } catch {
-    /* ignore */
-  }
-}
-
 function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
   useEffect(() => {
@@ -46,9 +36,8 @@ function usePrefersReducedMotion(): boolean {
 }
 
 /**
- * Shared animated loader for Signup + Update Details.
- * Loads local .lottie bytes (cached) and feeds DotLottie via `data`
- * so playback does not depend on a fragile relative src mid-transition.
+ * Shared animated loader. Animation bytes are inlined in the widget bundle.
+ * A CSS ring is always visible until DotLottie reports load (or fails).
  */
 function AnimatedLoaderImpl(props: AnimatedLoaderProps) {
   const {
@@ -61,44 +50,21 @@ function AnimatedLoaderImpl(props: AnimatedLoaderProps) {
   } = props;
 
   const reducedMotion = usePrefersReducedMotion();
-  const [data, setData] = useState<ArrayBuffer | null>(null);
-  const [failed, setFailed] = useState(false);
-  const [ready, setReady] = useState(false);
-
   const px = SIZE_PX[size];
 
-  useEffect(() => {
-    let cancelled = false;
-    setFailed(false);
-    setReady(false);
-    setData(null);
-
-    void loadAnimationData(variant).then((buf) => {
-      if (cancelled) return;
-      if (!buf) {
-        setFailed(true);
-        return;
-      }
-      // Clone so DotLottie can take ownership without detaching our cache
-      setData(buf.slice(0));
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [variant]);
-
-  const showPlayer = Boolean(data) && !failed;
-
-  const playerStyle = useMemo(
-    () => ({
-      width: px,
-      height: px,
-      maxWidth: "100%",
-      maxHeight: "100%",
-    }),
-    [px]
+  // Synchronous — data is bundled, no fetch race
+  const [payload, setPayload] = useState<ArrayBuffer | null>(() =>
+    getAnimationData(variant)
   );
+  const [status, setStatus] = useState<"loading" | "ready" | "error">(
+    payload ? "loading" : "error"
+  );
+
+  useEffect(() => {
+    const next = getAnimationData(variant);
+    setPayload(next);
+    setStatus(next ? "loading" : "error");
+  }, [variant]);
 
   return (
     <div
@@ -117,55 +83,61 @@ function AnimatedLoaderImpl(props: AnimatedLoaderProps) {
       <div
         className="wlth-animated-loader__animation"
         aria-hidden="true"
-        style={{ width: px, height: px }}
+        style={{ width: px, height: px, minWidth: px, minHeight: px }}
       >
-        {showPlayer ? (
-          <DotLottieReact
-            key={variant}
-            data={data!}
-            loop={!reducedMotion}
-            autoplay={!reducedMotion}
-            segment={reducedMotion ? [0, 1] : undefined}
-            layout={{ fit: "contain", align: [0.5, 0.5] }}
-            renderConfig={{ autoResize: true }}
-            // Do NOT pass className — DotLottie skips 100% size styles when className is set
-            style={playerStyle}
-            dotLottieRefCallback={(inst) => {
-              if (!inst) return;
-              const markReady = () => setReady(true);
-              const markFail = () => {
-                setFailed(true);
-                try {
-                  console.warn(
-                    `[wlth] Lottie runtime failed variant="${variant}"`
-                  );
-                } catch {
-                  /* ignore */
-                }
-              };
-              try {
-                inst.addEventListener?.("load", markReady);
-                inst.addEventListener?.("loadError", markFail);
-                // Already loaded by the time callback runs
-                if ((inst as { isLoaded?: boolean }).isLoaded) markReady();
-              } catch {
-                markReady();
-              }
+        {payload && status !== "error" ? (
+          <div
+            className="wlth-animated-loader__player"
+            style={{
+              width: px,
+              height: px,
+              opacity: status === "ready" ? 1 : 0,
+              transition: "opacity 0.2s ease",
             }}
-          />
+          >
+            <DotLottieReact
+              key={variant}
+              data={payload}
+              loop={!reducedMotion}
+              autoplay={!reducedMotion}
+              segment={reducedMotion ? [0, 1] : undefined}
+              layout={{ fit: "contain", align: [0.5, 0.5] }}
+              renderConfig={{ autoResize: true, devicePixelRatio: 2 }}
+              style={{ width: px, height: px, display: "block" }}
+              dotLottieRefCallback={(inst) => {
+                if (!inst) return;
+                const onLoad = () => setStatus("ready");
+                const onErr = () => {
+                  setStatus("error");
+                  try {
+                    console.warn(
+                      `[wlth] Lottie runtime failed variant="${variant}"`
+                    );
+                  } catch {
+                    /* ignore */
+                  }
+                };
+                try {
+                  inst.addEventListener("load", onLoad);
+                  inst.addEventListener("loadError", onErr);
+                  if (inst.isLoaded) onLoad();
+                } catch {
+                  // If events unavailable, reveal after a short beat
+                  window.setTimeout(() => setStatus("ready"), 400);
+                }
+              }}
+            />
+          </div>
         ) : null}
 
-        {/* Soft placeholder until first frame (not a black “failed” pulse) */}
-        {!ready && !failed ? (
-          <div className="wlth-animated-loader__placeholder" aria-hidden="true" />
-        ) : null}
-
-        {failed ? (
-          <div className="wlth-animated-loader__fallback" aria-hidden="true">
-            <span className="wlth-animated-loader__pulse" />
+        {/* Always-on visible ring until Lottie is ready (or if it failed) */}
+        {status !== "ready" ? (
+          <div className="wlth-animated-loader__spinner" aria-hidden="true">
+            <span className="wlth-animated-loader__spinner-ring" />
           </div>
         ) : null}
       </div>
+
       <p className="wlth-animated-loader__title">{title}</p>
       {description ? (
         <p className="wlth-animated-loader__description">{description}</p>
