@@ -427,13 +427,22 @@
 
 /* —— Step transitions —— */
 .wlth-widget .wlth-step-panel {
-  animation: wlth-step-in 0.35s ease both;
+  animation: wlth-step-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: opacity, transform;
+}
+
+.wlth-widget .wlth-card {
+  transition: min-height 0.25s ease;
+}
+
+.wlth-widget .wlth-overlay-load {
+  animation: wlth-step-in 0.3s ease both;
 }
 
 @keyframes wlth-step-in {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(14px);
   }
   to {
     opacity: 1;
@@ -442,8 +451,13 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wlth-widget .wlth-step-panel {
+  .wlth-widget .wlth-step-panel,
+  .wlth-widget .wlth-overlay-load {
     animation: none;
+  }
+
+  .wlth-widget .wlth-card {
+    transition: none;
   }
 }
 

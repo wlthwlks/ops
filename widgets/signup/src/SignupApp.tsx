@@ -233,7 +233,7 @@ export function SignupApp(props: { apiBase: string }) {
       setLoadMessage(null);
     } else {
       setError(
-        "We’re still confirming your payment with Stripe. Tap “Check payment status” below, or refresh in a moment — your progress is saved."
+        "We’re still confirming your payment with Stripe. Your progress is saved — refresh this page in a moment, or continue when you’re ready."
       );
       await stepper.goTo("payment");
     }
@@ -424,9 +424,10 @@ export function SignupApp(props: { apiBase: string }) {
   };
 
   const onAccount = accountForm.handleSubmit(async (values) => {
-    if (loading) return; // prevent double submit
+    if (loading) return;
     setError(null);
     setLoading(true);
+    setLoadMessage("Creating your account…");
     try {
       logMemberstackDiagnostics("account_submit_start");
       const auth = await authenticateEmailPassword({
@@ -443,6 +444,7 @@ export function SignupApp(props: { apiBase: string }) {
       });
 
       setToken(auth.accessToken);
+      setLoadMessage("Saving your progress…");
 
       await api(props.apiBase, "/api/onboarding/bootstrap", {
         method: "POST",
@@ -455,7 +457,7 @@ export function SignupApp(props: { apiBase: string }) {
         }),
       });
 
-      // Resume correct stage when existing member returns
+      setLoadMessage("Preparing your next step…");
       try {
         const status = await api(props.apiBase, "/api/onboarding/status", {
           token: auth.accessToken,
@@ -486,41 +488,47 @@ export function SignupApp(props: { apiBase: string }) {
     } catch (e) {
       logMemberstackDiagnostics("account_submit_error", {
         errorName: e instanceof Error ? e.name : "unknown",
-        // message only — no tokens/passwords
         hasMessage: e instanceof Error && Boolean(e.message),
       });
       setError(e instanceof Error ? e.message : "Account step failed");
     } finally {
       setLoading(false);
+      setLoadMessage(null);
     }
   });
 
   const onLocation = locationForm.handleSubmit(async (values) => {
     setError(null);
     setLoading(true);
+    setLoadMessage("Saving your progress…");
     try {
       await saveStep("LOCATION", values);
+      setLoadMessage("Preparing your next step…");
       stepper.setComplete("location");
       await stepper.next();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Location save failed");
     } finally {
       setLoading(false);
+      setLoadMessage(null);
     }
   });
 
   const onBusiness = businessForm.handleSubmit(async (values) => {
     setError(null);
     setLoading(true);
+    setLoadMessage("Saving your progress…");
     try {
       await saveStep("BUSINESS", values);
       await saveStep("PAYMENT_PENDING", {});
+      setLoadMessage("Preparing your next step…");
       stepper.setComplete("business");
       await stepper.next();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Business save failed");
     } finally {
       setLoading(false);
+      setLoadMessage(null);
     }
   });
 
@@ -917,14 +925,6 @@ export function SignupApp(props: { apiBase: string }) {
               >
                 Continue to secure checkout
               </button>
-              <button
-                type="button"
-                className="wlth-btn-secondary"
-                disabled={loading || confirmingPayment || !token}
-                onClick={() => void confirmPaymentFromServer(token)}
-              >
-                Check payment status
-              </button>
             </div>
             <p className="wlth-trust">
               Secure payment powered by Stripe. You can cancel anytime from your membership
@@ -1003,11 +1003,17 @@ export function SignupApp(props: { apiBase: string }) {
             key="help"
             onSubmit={helpForm.handleSubmit(async (v) => {
               setError(null);
+              setLoading(true);
+              setLoadMessage("Saving your progress…");
               try {
                 await saveStep("HELP_WANTED", v);
+                setLoadMessage("Preparing your next step…");
                 await stepper.goTo("expertise");
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
+              } finally {
+                setLoading(false);
+                setLoadMessage(null);
               }
             })}
           >
@@ -1037,7 +1043,7 @@ export function SignupApp(props: { apiBase: string }) {
               <textarea id="hc" rows={2} {...helpForm.register("helpWantedContext")} />
             </div>
             <div className="wlth-actions">
-              <button type="submit" className="wlth-btn-primary">
+              <button type="submit" className="wlth-btn-primary" disabled={loading}>
                 Continue
               </button>
             </div>
@@ -1050,11 +1056,17 @@ export function SignupApp(props: { apiBase: string }) {
             key="expertise"
             onSubmit={expertiseForm.handleSubmit(async (v) => {
               setError(null);
+              setLoading(true);
+              setLoadMessage("Saving your progress…");
               try {
                 await saveStep("EXPERTISE", v);
+                setLoadMessage("Preparing your next step…");
                 await stepper.goTo("connection");
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
+              } finally {
+                setLoading(false);
+                setLoadMessage(null);
               }
             })}
           >
@@ -1084,7 +1096,7 @@ export function SignupApp(props: { apiBase: string }) {
               <textarea id="ec" rows={2} {...expertiseForm.register("expertiseContext")} />
             </div>
             <div className="wlth-actions">
-              <button type="submit" className="wlth-btn-primary">
+              <button type="submit" className="wlth-btn-primary" disabled={loading}>
                 Continue
               </button>
             </div>
@@ -1097,11 +1109,17 @@ export function SignupApp(props: { apiBase: string }) {
             key="connection"
             onSubmit={connectionForm.handleSubmit(async (v) => {
               setError(null);
+              setLoading(true);
+              setLoadMessage("Saving your progress…");
               try {
                 await saveStep("CONNECTION", v);
+                setLoadMessage("Finishing your profile…");
                 await finish();
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
+              } finally {
+                setLoading(false);
+                setLoadMessage(null);
               }
             })}
             noValidate

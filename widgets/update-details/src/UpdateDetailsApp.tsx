@@ -313,6 +313,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     await w.$memberstackDom.launchStripeCustomerPortal();
   };
 
+  /**
+   * Prefer Stripe Customer Portal when a card is already on file (same payment method).
+   * Fall back to Memberstack checkout for brand-new payers.
+   */
   const reactivateMembership = async () => {
     setReactivating(true);
     setError(null);
@@ -325,8 +329,28 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
             successUrl: string;
             cancelUrl: string;
           }) => Promise<unknown>;
+          launchStripeCustomerPortal?: () => Promise<unknown>;
         };
       };
+
+      // Returning members with a Stripe customer: portal reuses the saved card
+      const hadStripeBilling =
+        Boolean(billing?.membership) ||
+        Boolean(billing?.payment) ||
+        Boolean(billing?.serviceAccessUntil);
+
+      if (hadStripeBilling && w.$memberstackDom?.launchStripeCustomerPortal) {
+        await w.$memberstackDom.launchStripeCustomerPortal();
+        setOk(
+          "Manage or renew your plan in the billing portal — your saved card can be used again."
+        );
+        if (token) {
+          const bill = await api(props.apiBase, "/api/member/billing-status", { token });
+          setBilling((bill.billing || null) as typeof billing);
+        }
+        return;
+      }
+
       if (!membershipPriceId) {
         setError("Membership price is not configured.");
         return;
@@ -341,10 +365,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         successUrl: `${base}?reactivated=1`,
         cancelUrl: `${base}?reactivated=0`,
       });
-      // In-place resolve → refresh billing
       if (token) {
-        const bill = await api(props.apiBase, "/api/member/billing-status", { token });
-        setBilling((bill.billing || null) as typeof billing);
         await api(props.apiBase, "/api/onboarding/confirm-checkout", {
           method: "POST",
           token,
@@ -352,7 +373,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         }).catch(() => undefined);
         const bill2 = await api(props.apiBase, "/api/member/billing-status", { token });
         setBilling((bill2.billing || null) as typeof billing);
-        setOk("Membership reactivation submitted. Status will update once Stripe confirms payment.");
+        setOk("Membership reactivation submitted. Status updates once payment confirms.");
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
@@ -424,8 +445,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               Your membership is not fully active
               {billing.membership ? ` (${billing.membership}` : ""}
               {billing.payment ? `${billing.membership ? " · " : " ("}${billing.payment}` : ""}
-              {billing.membership || billing.payment ? ")" : ""}. Complete secure checkout through
-              Stripe to restore access.
+              {billing.membership || billing.payment ? ")" : ""}. You can renew with the card already
+              on file in billing, or update your payment method there.
             </p>
             <div className="wlth-actions">
               <button
@@ -437,7 +458,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 Reactivate membership
               </button>
               <button type="button" className="wlth-btn-secondary" onClick={() => void openPortal()}>
-                Manage billing (Stripe)
+                Manage billing
               </button>
             </div>
           </div>
@@ -633,7 +654,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                     className="wlth-btn-secondary"
                     onClick={() => void openPortal()}
                   >
-                    Manage billing (Stripe)
+                    Manage billing
                   </button>
                 )}
               </div>
