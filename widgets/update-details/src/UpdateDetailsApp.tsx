@@ -283,11 +283,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           api(props.apiBase, "/api/reference-data/onboarding"),
           api(props.apiBase, "/api/member/profile", { token: t }),
           api(props.apiBase, "/api/member/billing-status", { token: t }),
-          api(props.apiBase, "/api/onboarding/status", { token: t }).catch(() => ({
-            onboardingStatus: null,
-            resumeStage: "LOCATION",
-            paymentConfirmed: false,
-          })),
+          api(props.apiBase, "/api/onboarding/status", { token: t }).catch(() => null),
         ]);
         const rd = ref as unknown as RefData;
         setRefData(rd);
@@ -295,11 +291,18 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           String((cfg as { membershipPriceId?: string }).membershipPriceId || "")
         );
         const p = (profileRes.profile || {}) as Record<string, unknown>;
-        const onboardingStatus = String(statusRes.onboardingStatus || "");
-        const paidOk = Boolean(statusRes.paymentConfirmed);
+        const status = (statusRes || {}) as {
+          exists?: boolean;
+          onboardingStatus?: string | null;
+          resumeStage?: string;
+          paymentConfirmed?: boolean;
+        };
+        const onboardingStatus = String(status.onboardingStatus || "");
+        const paidOk = Boolean(status.paymentConfirmed);
         setPaymentConfirmed(paidOk);
+        const memberExists = status.exists !== false;
         const incomplete =
-          Boolean(statusRes.exists !== false) &&
+          memberExists &&
           onboardingStatus !== "COMPLETE" &&
           onboardingStatus !== "";
         // Also treat missing/blank status with unpaid membership as incomplete
@@ -381,7 +384,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         if (looksIncomplete) {
           setNeedsRefresh(true);
           const resume = resumeStageToRefreshStep(
-            String(statusRes.resumeStage || "LOCATION"),
+            String(status.resumeStage || "LOCATION"),
             paidOk
           );
           setRefreshStep(resume === "done" ? "location" : resume);
