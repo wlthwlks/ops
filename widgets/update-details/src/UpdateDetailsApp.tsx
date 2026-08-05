@@ -68,7 +68,55 @@ type RefData = {
   connectionTypes: Array<{ code: string; label: string }>;
 };
 
-type RefreshStep = "location" | "business" | "matching" | "payment";
+/** Progressive steps — matching is split like signup (after payment). */
+type RefreshStep =
+  | "location"
+  | "business"
+  | "payment"
+  | "goal"
+  | "help"
+  | "expertise"
+  | "connection";
+
+const MATCHING_REFRESH_STEPS: RefreshStep[] = ["goal", "help", "expertise", "connection"];
+
+function resumeStageToRefreshStep(
+  resumeStage: string,
+  paymentConfirmed: boolean
+): RefreshStep | "done" {
+  if (resumeStage === "COMPLETE") return "done";
+  if (
+    paymentConfirmed &&
+    (resumeStage === "PAYMENT_PENDING" ||
+      resumeStage === "PAYMENT_CONFIRMED" ||
+      resumeStage === "BUSINESS")
+  ) {
+    return "goal";
+  }
+  const map: Record<string, RefreshStep> = {
+    LOCATION: "location",
+    BUSINESS: "business",
+    PAYMENT_PENDING: "payment",
+    PAYMENT_CONFIRMED: "goal",
+    GOAL: "goal",
+    HELP_WANTED: "help",
+    EXPERTISE: "expertise",
+    CONNECTION: "connection",
+    ACCOUNT: "location",
+    ACCOUNT_CREATED: "location",
+  };
+  return map[resumeStage] || "location";
+}
+
+function topPhaseForRefreshStep(
+  step: RefreshStep,
+  includePayment: boolean
+): "location" | "business" | "payment" | "matching" {
+  if (step === "location") return "location";
+  if (step === "business") return "business";
+  if (step === "payment") return "payment";
+  return includePayment ? "matching" : "matching";
+}
 
 async function api(base: string, path: string, opts: RequestInit & { token?: string } = {}) {
   return widgetApi(base, path, opts) as Promise<Record<string, unknown>>;
@@ -103,6 +151,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     hasPaymentMethod?: boolean;
   } | null>(null);
   const [needsRefresh, setNeedsRefresh] = useState(false);
+  /** True when Airtable onboarding is not COMPLETE — use step API + resume. */
+  const [onboardingIncomplete, setOnboardingIncomplete] = useState(false);
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false);
   const [refreshStep, setRefreshStep] = useState<RefreshStep>("location");
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [previousCityUnavailable, setPreviousCityUnavailable] = useState(false);
@@ -227,11 +278,16 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         const sid = deriveLoginSessionId({ memberId: mid, accessToken: t }) || `m:${mid}`;
         setSessionId(sid);
 
-        const [cfg, ref, profileRes, bill] = await Promise.all([
+        const [cfg, ref, profileRes, bill, statusRes] = await Promise.all([
           api(props.apiBase, "/api/forms/config"),
           api(props.apiBase, "/api/reference-data/onboarding"),
           api(props.apiBase, "/api/member/profile", { token: t }),
           api(props.apiBase, "/api/member/billing-status", { token: t }),
+          api(props.apiBase, "/api/onboarding/status", { token: t }).catch(() => ({
+            onboardingStatus: null,
+            resumeStage: "LOCATION",
+            paymentConfirmed: false,
+          })),
         ]);
         const rd = ref as unknown as RefData;
         setRefData(rd);
@@ -239,6 +295,28 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           String((cfg as { membershipPriceId?: string }).membershipPriceId || "")
         );
         const p = (profileRes.profile || {}) as Record<string, unknown>;
+        const onboardingStatus = String(statusRes.onboardingStatus || "");
+        const paidOk = Boolean(statusRes.paymentConfirmed);
+        setPaymentConfirmed(paidOk);
+        const incomplete =
+          Boolean(statusRes.exists !== false) &&
+          onboardingStatus !== "COMPLETE" &&
+          onboardingStatus !== "";
+        // Also treat missing/blank status with unpaid membership as incomplete
+        const billSnap = (bill.billing || {}) as {
+          membership?: string;
+          payment?: string;
+          hasPaymentMethod?: boolean;
+        };
+        const mem = (billSnap.membership || "").toLowerCase();
+        const pay = (billSnap.payment || "").toLowerCase();
+        const looksIncomplete =
+          incomplete ||
+          mem === "pending payment" ||
+          pay === "unpaid" ||
+          pay === "failed" ||
+          (onboardingStatus !== "COMPLETE" && !paidOk);
+        setOnboardingIncomplete(looksIncomplete);
 
         const cityUnavailable = Boolean(p.previousCityUnavailable);
         setPreviousCityUnavailable(cityUnavailable);
@@ -295,9 +373,22 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         });
         refreshConnection.reset({ connectionType: defaults.connectionType || "" });
 
-        const done =
+        const sessionDone =
           mid && sid ? isProfileRefreshComplete({ memberId: mid, sessionId: sid }) : false;
-        setNeedsRefresh(!done);
+
+        // Incomplete onboarding always continues until COMPLETE (resumable).
+        // Complete members get a once-per-login soft refresh only.
+        if (looksIncomplete) {
+          setNeedsRefresh(true);
+          const resume = resumeStageToRefreshStep(
+            String(statusRes.resumeStage || "LOCATION"),
+            paidOk
+          );
+          setRefreshStep(resume === "done" ? "location" : resume);
+        } else {
+          setNeedsRefresh(!sessionDone);
+          setRefreshStep("location");
+        }
 
         setBilling(
           (bill.billing || null) as {
@@ -340,16 +431,31 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     return false;
   }, [billing]);
 
-  /** Payment step in refresh only when membership needs activation and no card on file. */
+  /**
+   * Payment step when membership is not Paid+Active.
+   * Soft session refresh for already-complete members skips payment.
+   */
   const refreshNeedsPaymentStep = useMemo(() => {
+    if (paymentConfirmed) return false;
+    if (onboardingIncomplete) return true;
     if (!needsReactivation) return false;
     return !billing?.hasPaymentMethod;
-  }, [needsReactivation, billing?.hasPaymentMethod]);
+  }, [
+    paymentConfirmed,
+    onboardingIncomplete,
+    needsReactivation,
+    billing?.hasPaymentMethod,
+  ]);
 
-  const refreshSteps = useMemo((): RefreshStep[] => {
-    const base: RefreshStep[] = ["location", "business", "matching"];
-    if (refreshNeedsPaymentStep) base.push("payment");
-    return base;
+  /** Top-level dots: Location → Business → [Payment] → Matching */
+  const refreshTopPhases = useMemo(() => {
+    const phases: Array<"location" | "business" | "payment" | "matching"> = [
+      "location",
+      "business",
+    ];
+    if (refreshNeedsPaymentStep) phases.push("payment");
+    phases.push("matching");
+    return phases;
   }, [refreshNeedsPaymentStep]);
 
   const scrollDetailsToTop = () => {
@@ -365,10 +471,51 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     });
   };
 
+  /** Save progress like signup — updates Onboarding status + Last completed signup step. */
+  const saveOnboardingStep = async (stage: string, data: unknown) => {
+    if (!token) throw new Error("Not signed in");
+    await api(props.apiBase, "/api/onboarding/step", {
+      method: "PATCH",
+      token,
+      body: JSON.stringify({ stage, data }),
+    });
+  };
+
+  const syncFormFromPartial = (payload: Record<string, unknown>) => {
+    form.reset({
+      ...form.getValues(),
+      ...payload,
+      countryCode: String(payload.countryCode ?? form.getValues("countryCode") ?? ""),
+      cityCode: String(payload.cityCode ?? form.getValues("cityCode") ?? ""),
+      availability: (payload.availability as string[]) || form.getValues("availability"),
+      primaryIndustry: String(
+        payload.primaryIndustry ?? form.getValues("primaryIndustry") ?? ""
+      ),
+      otherIndustry: String(payload.otherIndustry ?? form.getValues("otherIndustry") ?? ""),
+      businessStage: String(payload.businessStage ?? form.getValues("businessStage") ?? ""),
+      annualRevenue: String(payload.annualRevenue ?? form.getValues("annualRevenue") ?? ""),
+      businessDescription: String(
+        payload.businessDescription ?? form.getValues("businessDescription") ?? ""
+      ),
+      ninetyDayGoal: String(payload.ninetyDayGoal ?? form.getValues("ninetyDayGoal") ?? ""),
+      helpWanted: (payload.helpWanted as string[]) || form.getValues("helpWanted") || [],
+      helpWantedContext: String(
+        payload.helpWantedContext ?? form.getValues("helpWantedContext") ?? ""
+      ),
+      expertiseOffered:
+        (payload.expertiseOffered as string[]) || form.getValues("expertiseOffered") || [],
+      expertiseContext: String(
+        payload.expertiseContext ?? form.getValues("expertiseContext") ?? ""
+      ),
+      connectionType: String(payload.connectionType ?? form.getValues("connectionType") ?? ""),
+    });
+  };
+
   const finishRefreshSession = (message?: string) => {
     if (memberId && sessionId) {
       markProfileRefreshComplete({ memberId, sessionId });
     }
+    setOnboardingIncomplete(false);
     setNeedsRefresh(false);
     setOk(
       message ||
@@ -378,54 +525,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     scrollDetailsToTop();
   };
 
-  const completeRefresh = async (payload: Record<string, unknown>) => {
-    setRefreshBusy(true);
-    setError(null);
+  const goAfterPaymentToMatching = () => {
+    setPaymentConfirmed(true);
+    setRefreshStep("goal");
     scrollDetailsToTop();
-    try {
-      await patchProfile(payload);
-      // Sync main form from refresh answers
-      form.reset({
-        ...form.getValues(),
-        ...payload,
-        countryCode: String(payload.countryCode ?? form.getValues("countryCode") ?? ""),
-        cityCode: String(payload.cityCode ?? form.getValues("cityCode") ?? ""),
-        availability: (payload.availability as string[]) || form.getValues("availability"),
-        primaryIndustry: String(
-          payload.primaryIndustry ?? form.getValues("primaryIndustry") ?? ""
-        ),
-        otherIndustry: String(payload.otherIndustry ?? form.getValues("otherIndustry") ?? ""),
-        businessStage: String(payload.businessStage ?? form.getValues("businessStage") ?? ""),
-        annualRevenue: String(payload.annualRevenue ?? form.getValues("annualRevenue") ?? ""),
-        businessDescription: String(
-          payload.businessDescription ?? form.getValues("businessDescription") ?? ""
-        ),
-        ninetyDayGoal: String(payload.ninetyDayGoal ?? form.getValues("ninetyDayGoal") ?? ""),
-        helpWanted: (payload.helpWanted as string[]) || form.getValues("helpWanted") || [],
-        helpWantedContext: String(
-          payload.helpWantedContext ?? form.getValues("helpWantedContext") ?? ""
-        ),
-        expertiseOffered:
-          (payload.expertiseOffered as string[]) || form.getValues("expertiseOffered") || [],
-        expertiseContext: String(
-          payload.expertiseContext ?? form.getValues("expertiseContext") ?? ""
-        ),
-        connectionType: String(
-          payload.connectionType ?? form.getValues("connectionType") ?? ""
-        ),
-      });
-
-      if (refreshNeedsPaymentStep) {
-        setRefreshStep("payment");
-        scrollDetailsToTop();
-      } else {
-        finishRefreshSession();
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not refresh profile");
-    } finally {
-      if (mountedRef.current) setRefreshBusy(false);
-    }
   };
 
   const startRefreshCheckout = async () => {
@@ -434,6 +537,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     setRefreshBusy(true);
     scrollDetailsToTop();
     try {
+      if (onboardingIncomplete) {
+        await saveOnboardingStep("PAYMENT_PENDING", {});
+      }
       const w = window as unknown as {
         $memberstackDom?: {
           purchasePlansWithCheckout?: (p: {
@@ -453,19 +559,19 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         successUrl: `${base}?refresh_paid=1`,
         cancelUrl: `${base}?refresh_paid=0`,
       });
-      // If still on page (popup closed), stay on payment step
+      // Popup closed without navigation — try confirm, then matching if paid
       await api(props.apiBase, "/api/onboarding/confirm-checkout", {
         method: "POST",
         token,
         body: JSON.stringify({}),
       }).catch(() => undefined);
+      const st = await api(props.apiBase, "/api/onboarding/status", { token }).catch(
+        () => null
+      );
       const bill = await api(props.apiBase, "/api/member/billing-status", { token });
       setBilling((bill.billing || null) as typeof billing);
-      const b = bill.billing as { hasPaymentMethod?: boolean; payment?: string } | undefined;
-      if (b?.hasPaymentMethod || (b?.payment || "").toLowerCase() === "paid") {
-        finishRefreshSession(
-          "Payment details saved. Your profile is refreshed and ready for stronger introductions."
-        );
+      if (st && st.paymentConfirmed) {
+        goAfterPaymentToMatching();
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
@@ -475,95 +581,230 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     }
   };
 
-  const onRefreshLocation = refreshLocation.handleSubmit(
-    async (values) => {
+  const reactivateFromRefreshPayment = async () => {
+    if (!token || refreshBusy) return;
     setError(null);
     setRefreshBusy(true);
     scrollDetailsToTop();
     try {
-      // Save location now via profile (not onboarding/step)
-      await patchProfile({
-        countryCode: values.countryCode,
-        cityCode: values.cityCode,
-        availability: values.availability,
+      const res = await api(props.apiBase, "/api/member/reactivate", {
+        method: "POST",
+        token,
+        body: JSON.stringify({}),
       });
-      form.setValue("countryCode", values.countryCode);
-      form.setValue("cityCode", values.cityCode);
-      form.setValue("availability", values.availability);
-      if (!phonePrefixManual.current && refData) {
-        const dial = dialCodeForCountryCode(refData.countries, values.countryCode);
-        if (dial) form.setValue("phonePrefix", dial);
+      if (!res.success) {
+        if (
+          res.status === "no_payment_method" ||
+          res.status === "no_stripe_customer"
+        ) {
+          await startRefreshCheckout();
+          return;
+        }
+        setError(String(res.reason || "Could not activate membership"));
+        return;
       }
-      setPreviousCityUnavailable(false);
-      setRefreshStep("business");
-      scrollDetailsToTop();
+      await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+        method: "POST",
+        token,
+        body: JSON.stringify({}),
+      }).catch(() => undefined);
+      const bill = await api(props.apiBase, "/api/member/billing-status", { token });
+      setBilling((bill.billing || null) as typeof billing);
+      goAfterPaymentToMatching();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save location");
+      setError(e instanceof Error ? e.message : "Could not activate membership");
     } finally {
       if (mountedRef.current) setRefreshBusy(false);
     }
+  };
+
+  const onRefreshLocation = refreshLocation.handleSubmit(
+    async (values) => {
+      setError(null);
+      setRefreshBusy(true);
+      scrollDetailsToTop();
+      try {
+        if (onboardingIncomplete) {
+          await saveOnboardingStep("LOCATION", values);
+        } else {
+          await patchProfile({
+            countryCode: values.countryCode,
+            cityCode: values.cityCode,
+            availability: values.availability,
+          });
+        }
+        form.setValue("countryCode", values.countryCode);
+        form.setValue("cityCode", values.cityCode);
+        form.setValue("availability", values.availability);
+        if (!phonePrefixManual.current && refData) {
+          const dial = dialCodeForCountryCode(refData.countries, values.countryCode);
+          if (dial) form.setValue("phonePrefix", dial);
+        }
+        setPreviousCityUnavailable(false);
+        setRefreshStep("business");
+        scrollDetailsToTop();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not save location");
+      } finally {
+        if (mountedRef.current) setRefreshBusy(false);
+      }
     },
     (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
   );
 
   const onRefreshBusiness = refreshBusiness.handleSubmit(
     async (values) => {
-    setError(null);
-    setRefreshBusy(true);
-    scrollDetailsToTop();
-    try {
-      await patchProfile({
-        primaryIndustry: values.primaryIndustry,
-        otherIndustry: values.otherIndustry,
-        businessStage: values.businessStage,
-        annualRevenue: values.annualRevenue,
-        businessDescription: values.businessDescription,
-      });
-      form.setValue("primaryIndustry", values.primaryIndustry);
-      form.setValue("otherIndustry", values.otherIndustry || "");
-      form.setValue("businessStage", values.businessStage);
-      form.setValue("annualRevenue", values.annualRevenue);
-      form.setValue("businessDescription", values.businessDescription);
-      setRefreshStep("matching");
+      setError(null);
+      setRefreshBusy(true);
       scrollDetailsToTop();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save business details");
-    } finally {
-      if (mountedRef.current) setRefreshBusy(false);
-    }
+      try {
+        if (onboardingIncomplete) {
+          await saveOnboardingStep("BUSINESS", values);
+          await saveOnboardingStep("PAYMENT_PENDING", {});
+        } else {
+          await patchProfile({
+            primaryIndustry: values.primaryIndustry,
+            otherIndustry: values.otherIndustry,
+            businessStage: values.businessStage,
+            annualRevenue: values.annualRevenue,
+            businessDescription: values.businessDescription,
+          });
+        }
+        form.setValue("primaryIndustry", values.primaryIndustry);
+        form.setValue("otherIndustry", values.otherIndustry || "");
+        form.setValue("businessStage", values.businessStage);
+        form.setValue("annualRevenue", values.annualRevenue);
+        form.setValue("businessDescription", values.businessDescription);
+        // Payment before matching when still unpaid
+        if (refreshNeedsPaymentStep && !paymentConfirmed) {
+          setRefreshStep("payment");
+        } else {
+          setRefreshStep("goal");
+        }
+        scrollDetailsToTop();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not save business details");
+      } finally {
+        if (mountedRef.current) setRefreshBusy(false);
+      }
     },
     (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
   );
 
-  const onRefreshMatching = async () => {
-    const goalOk = await refreshGoal.trigger();
-    const helpOk = await refreshHelp.trigger();
-    const expOk = await refreshExpertise.trigger();
-    const connOk = await refreshConnection.trigger();
-    if (!goalOk || !helpOk || !expOk || !connOk) {
-      onInvalidScrollToError({
-        ...(goalOk ? {} : { ninetyDayGoal: true }),
-        ...(helpOk ? {} : { helpWanted: true }),
-        ...(expOk ? {} : { expertiseOffered: true }),
-        ...(connOk ? {} : { connectionType: true }),
-      });
-      return;
-    }
+  const onRefreshGoal = refreshGoal.handleSubmit(
+    async (values) => {
+      setError(null);
+      setRefreshBusy(true);
+      scrollDetailsToTop();
+      try {
+        if (onboardingIncomplete) {
+          await saveOnboardingStep("GOAL", values);
+        } else {
+          await patchProfile({ ninetyDayGoal: values.ninetyDayGoal });
+        }
+        form.setValue("ninetyDayGoal", values.ninetyDayGoal);
+        setRefreshStep("help");
+        scrollDetailsToTop();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not save goal");
+      } finally {
+        if (mountedRef.current) setRefreshBusy(false);
+      }
+    },
+    (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+  );
 
-    const goal = refreshGoal.getValues();
-    const help = refreshHelp.getValues();
-    const exp = refreshExpertise.getValues();
-    const conn = refreshConnection.getValues();
+  const onRefreshHelp = refreshHelp.handleSubmit(
+    async (values) => {
+      setError(null);
+      setRefreshBusy(true);
+      scrollDetailsToTop();
+      try {
+        if (onboardingIncomplete) {
+          await saveOnboardingStep("HELP_WANTED", values);
+        } else {
+          await patchProfile({
+            helpWanted: values.helpWanted || [],
+            helpWantedContext: values.helpWantedContext || "",
+          });
+        }
+        form.setValue("helpWanted", values.helpWanted || []);
+        form.setValue("helpWantedContext", values.helpWantedContext || "");
+        setRefreshStep("expertise");
+        scrollDetailsToTop();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not save help preferences");
+      } finally {
+        if (mountedRef.current) setRefreshBusy(false);
+      }
+    },
+    (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+  );
 
-    await completeRefresh({
-      ninetyDayGoal: goal.ninetyDayGoal,
-      helpWanted: help.helpWanted || [],
-      helpWantedContext: help.helpWantedContext || "",
-      expertiseOffered: exp.expertiseOffered || [],
-      expertiseContext: exp.expertiseContext || "",
-      connectionType: conn.connectionType,
-    });
-  };
+  const onRefreshExpertise = refreshExpertise.handleSubmit(
+    async (values) => {
+      setError(null);
+      setRefreshBusy(true);
+      scrollDetailsToTop();
+      try {
+        if (onboardingIncomplete) {
+          await saveOnboardingStep("EXPERTISE", values);
+        } else {
+          await patchProfile({
+            expertiseOffered: values.expertiseOffered || [],
+            expertiseContext: values.expertiseContext || "",
+          });
+        }
+        form.setValue("expertiseOffered", values.expertiseOffered || []);
+        form.setValue("expertiseContext", values.expertiseContext || "");
+        setRefreshStep("connection");
+        scrollDetailsToTop();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not save expertise");
+      } finally {
+        if (mountedRef.current) setRefreshBusy(false);
+      }
+    },
+    (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+  );
+
+  const onRefreshConnection = refreshConnection.handleSubmit(
+    async (values) => {
+      setError(null);
+      setRefreshBusy(true);
+      scrollDetailsToTop();
+      try {
+        if (onboardingIncomplete) {
+          await saveOnboardingStep("CONNECTION", values);
+          // Mark COMPLETE + Last completed signup step (same as signup finish)
+          await api(props.apiBase, "/api/onboarding/complete", {
+            method: "POST",
+            token: token!,
+          });
+          setOnboardingIncomplete(false);
+        } else {
+          await patchProfile({ connectionType: values.connectionType });
+        }
+        form.setValue("connectionType", values.connectionType);
+        syncFormFromPartial({
+          ninetyDayGoal: refreshGoal.getValues("ninetyDayGoal"),
+          helpWanted: refreshHelp.getValues("helpWanted") || [],
+          helpWantedContext: refreshHelp.getValues("helpWantedContext") || "",
+          expertiseOffered: refreshExpertise.getValues("expertiseOffered") || [],
+          expertiseContext: refreshExpertise.getValues("expertiseContext") || "",
+          connectionType: values.connectionType,
+        });
+        finishRefreshSession(
+          "You’re all set — your profile is complete and ready for stronger introductions."
+        );
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Could not finish profile");
+      } finally {
+        if (mountedRef.current) setRefreshBusy(false);
+      }
+    },
+    (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+  );
 
   const onSave = form.handleSubmit(
     async (values) => {
@@ -762,21 +1003,42 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     if (p.get("refresh_paid") === "1") {
       void (async () => {
         setRefreshBusy(true);
+        setNeedsRefresh(true);
         scrollDetailsToTop();
         await api(props.apiBase, "/api/onboarding/confirm-checkout", {
           method: "POST",
           token,
           body: JSON.stringify({}),
         }).catch(() => undefined);
+        // Poll briefly for Paid/Active like signup
+        let confirmed = false;
+        for (let i = 0; i < 12; i++) {
+          try {
+            const st = await api(props.apiBase, "/api/onboarding/payment-status", {
+              token,
+            });
+            if (st.paymentConfirmed) {
+              confirmed = true;
+              break;
+            }
+          } catch {
+            /* retry */
+          }
+          await new Promise((r) => setTimeout(r, 1500));
+        }
         const bill = await api(props.apiBase, "/api/member/billing-status", { token });
         setBilling((bill.billing || null) as typeof billing);
-        if (memberId && sessionId) {
-          markProfileRefreshComplete({ memberId, sessionId });
+        if (confirmed) {
+          setPaymentConfirmed(true);
+          setOnboardingIncomplete(true);
+          setRefreshStep("goal");
+          setOk("Payment confirmed — a few matching questions and you’re fully set.");
+        } else {
+          setRefreshStep("payment");
+          setError(
+            "We’re still confirming your payment with Stripe. Stay on this page a moment, then continue."
+          );
         }
-        setNeedsRefresh(false);
-        setOk(
-          "Payment details saved. Your profile is refreshed and ready for stronger introductions."
-        );
         try {
           const url = new URL(window.location.href);
           url.searchParams.delete("refresh_paid");
@@ -787,6 +1049,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         if (mountedRef.current) setRefreshBusy(false);
       })();
     } else if (p.get("refresh_paid") === "0") {
+      setNeedsRefresh(true);
       setRefreshStep("payment");
       try {
         const url = new URL(window.location.href);
@@ -825,35 +1088,53 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     ? "Stripe is completing the final verification. This usually takes only a moment."
     : "Saving your latest profile and matching preferences.";
 
-  // —— Mandatory profile refresh (Location → Business → Matching) ——
+  // —— Progressive flow: Location → Business → [Payment] → Matching (then COMPLETE) ——
   if (needsRefresh && token && refData) {
+    const activePhase = topPhaseForRefreshStep(refreshStep, refreshNeedsPaymentStep);
+    const phaseIndex = Math.max(0, refreshTopPhases.indexOf(activePhase));
+    const matchSub = MATCHING_REFRESH_STEPS.indexOf(refreshStep);
+    const matchSubLabel =
+      matchSub >= 0 ? `Matching · ${matchSub + 1} of ${MATCHING_REFRESH_STEPS.length}` : null;
+
     return (
       <div className="wlth-widget">
         <PageBlockingLoader
           open={blocking}
-          variant={blockVariant}
-          title={blockTitle}
+          variant={
+            refreshStep === "payment" && refreshBusy
+              ? "payment-verification"
+              : blockVariant
+          }
+          title={
+            refreshStep === "payment" && refreshBusy
+              ? "Taking you to secure checkout…"
+              : blockTitle
+          }
           description={blockDesc}
         />
         <div className="wlth-card wlth-step-panel">
-          <h1>Keep your profile aligned with where your business is today</h1>
+          <h1>
+            {onboardingIncomplete
+              ? "Let’s finish your WLTH WLKS profile"
+              : "Keep your profile aligned with where your business is today"}
+          </h1>
           <p>
-            A short refresh helps your introductions reflect your current location, business
-            and goals. This won’t change billing or create a new account.
+            {onboardingIncomplete
+              ? "Your progress is saved as you go — you can leave and pick up from the last step you completed."
+              : "A short refresh helps your introductions reflect your current location, business and goals."}
           </p>
-          <div className="wlth-refresh-steps" aria-label="Refresh progress">
-            {refreshSteps.map((s, idx) => {
-              const currentIdx = refreshSteps.indexOf(refreshStep);
-              const isActive = refreshStep === s;
-              const isDone = currentIdx > idx;
+          <div className="wlth-refresh-steps" aria-label="Progress">
+            {refreshTopPhases.map((s, idx) => {
+              const isActive = activePhase === s;
+              const isDone = idx < phaseIndex;
               const label =
                 s === "location"
                   ? "Location"
                   : s === "business"
                     ? "Business"
-                    : s === "matching"
-                      ? "Matching"
-                      : "Payment";
+                    : s === "payment"
+                      ? "Payment"
+                      : "Matching";
               return (
                 <span
                   key={s}
@@ -866,11 +1147,13 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               );
             })}
           </div>
+          {matchSubLabel ? <p className="wlth-subprogress">{matchSubLabel}</p> : null}
           {error && (
             <div className="wlth-banner-error" role="alert">
               {error}
             </div>
           )}
+          {ok && <div className="wlth-banner-success">{ok}</div>}
 
           {refreshStep === "location" && (
             <form onSubmit={onRefreshLocation} noValidate>
@@ -952,21 +1235,97 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   Back
                 </button>
                 <button type="submit" className="wlth-btn-primary" disabled={refreshBusy}>
+                  {refreshNeedsPaymentStep && !paymentConfirmed
+                    ? "Continue to payment"
+                    : "Continue"}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {refreshStep === "payment" && (
+            <div className="wlth-pay-hero">
+              <h2>Activate your membership</h2>
+              <p>
+                {billing?.hasPaymentMethod
+                  ? "Confirm membership with the card already on file, then we’ll finish your matching preferences."
+                  : "Complete a secure Stripe checkout, then a few matching questions so introductions stay relevant."}
+              </p>
+              <div className="wlth-benefits">
+                <p className="wlth-benefit">
+                  <strong>Secure payment</strong>
+                  Powered by Stripe. We never store your full card details on WLTH WLKS.
+                </p>
+                <p className="wlth-benefit">
+                  <strong>Then matching</strong>
+                  After payment you’ll shape the introductions that can move you forward.
+                </p>
+              </div>
+              <div className="wlth-actions">
+                <button
+                  type="button"
+                  className="wlth-btn-secondary"
+                  onClick={() => setRefreshStep("business")}
+                >
+                  Back
+                </button>
+                {billing?.hasPaymentMethod ? (
+                  <button
+                    type="button"
+                    className="wlth-btn-primary"
+                    disabled={refreshBusy}
+                    onClick={() => void reactivateFromRefreshPayment()}
+                  >
+                    Activate with card on file
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="wlth-btn-primary"
+                    disabled={refreshBusy}
+                    onClick={() => void startRefreshCheckout()}
+                  >
+                    Continue to secure checkout
+                  </button>
+                )}
+              </div>
+              <p className="wlth-trust">
+                You can manage or cancel anytime from membership settings.
+              </p>
+            </div>
+          )}
+
+          {refreshStep === "goal" && (
+            <form onSubmit={onRefreshGoal} noValidate>
+              <h2>Let’s shape the introductions that can move you forward</h2>
+              <MatchingGoalField
+                register={refreshGoal.register("ninetyDayGoal") as never}
+                error={refreshGoal.formState.errors.ninetyDayGoal?.message as string}
+              />
+              <div className="wlth-actions">
+                <button
+                  type="button"
+                  className="wlth-btn-secondary"
+                  onClick={() =>
+                    setRefreshStep(
+                      refreshNeedsPaymentStep && !paymentConfirmed ? "payment" : "business"
+                    )
+                  }
+                >
+                  Back
+                </button>
+                <button type="submit" className="wlth-btn-primary" disabled={refreshBusy}>
                   Continue
                 </button>
               </div>
             </form>
           )}
 
-          {refreshStep === "matching" && (
-            <div>
-              <h2>Let’s shape the introductions that can move you forward</h2>
-              <MatchingGoalField
-                register={refreshGoal.register("ninetyDayGoal") as never}
-                error={refreshGoal.formState.errors.ninetyDayGoal?.message as string}
-              />
+          {refreshStep === "help" && (
+            <form onSubmit={onRefreshHelp} noValidate>
+              <h2>Where would support help most?</h2>
               <MultiSelectDropdown
-                label="Where would support make the biggest difference?"
+                label="Help wanted"
                 helperText="Choose up to three areas."
                 options={refData.helpWantedOptions}
                 value={rHelp}
@@ -979,8 +1338,26 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 <label htmlFor="rhc">Optional context</label>
                 <textarea id="rhc" rows={2} {...refreshHelp.register("helpWantedContext")} />
               </div>
+              <div className="wlth-actions">
+                <button
+                  type="button"
+                  className="wlth-btn-secondary"
+                  onClick={() => setRefreshStep("goal")}
+                >
+                  Back
+                </button>
+                <button type="submit" className="wlth-btn-primary" disabled={refreshBusy}>
+                  Continue
+                </button>
+              </div>
+            </form>
+          )}
+
+          {refreshStep === "expertise" && (
+            <form onSubmit={onRefreshExpertise} noValidate>
+              <h2>What can you offer others?</h2>
               <MultiSelectDropdown
-                label="What expertise can you offer others?"
+                label="Expertise offered"
                 helperText="Choose up to five strengths."
                 options={refData.expertiseOptions}
                 value={rExpertise}
@@ -999,6 +1376,24 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   {...refreshExpertise.register("expertiseContext")}
                 />
               </div>
+              <div className="wlth-actions">
+                <button
+                  type="button"
+                  className="wlth-btn-secondary"
+                  onClick={() => setRefreshStep("help")}
+                >
+                  Back
+                </button>
+                <button type="submit" className="wlth-btn-primary" disabled={refreshBusy}>
+                  Continue
+                </button>
+              </div>
+            </form>
+          )}
+
+          {refreshStep === "connection" && (
+            <form onSubmit={onRefreshConnection} noValidate>
+              <h2>Connection preference</h2>
               <ConnectionTypeField
                 options={refData.connectionTypes}
                 register={refreshConnection.register("connectionType") as never}
@@ -1010,60 +1405,15 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 <button
                   type="button"
                   className="wlth-btn-secondary"
-                  onClick={() => setRefreshStep("business")}
+                  onClick={() => setRefreshStep("expertise")}
                 >
                   Back
                 </button>
-                <button
-                  type="button"
-                  className="wlth-btn-primary"
-                  disabled={refreshBusy}
-                  onClick={() => void onRefreshMatching()}
-                >
-                  {refreshNeedsPaymentStep ? "Continue" : "Save and continue"}
+                <button type="submit" className="wlth-btn-primary" disabled={refreshBusy}>
+                  Finish
                 </button>
               </div>
-            </div>
-          )}
-
-          {refreshStep === "payment" && refreshNeedsPaymentStep && (
-            <div className="wlth-pay-hero">
-              <h2>Activate your membership</h2>
-              <p>
-                We don’t have a card on file yet. Complete a secure Stripe checkout once so
-                your membership can stay active — and so future renewals are simple.
-              </p>
-              <div className="wlth-benefits">
-                <p className="wlth-benefit">
-                  <strong>One secure checkout</strong>
-                  Powered by Stripe. We never store your full card details on WLTH WLKS.
-                </p>
-                <p className="wlth-benefit">
-                  <strong>Then you’re set</strong>
-                  After this, reactivation can use your saved card when needed.
-                </p>
-              </div>
-              <div className="wlth-actions">
-                <button
-                  type="button"
-                  className="wlth-btn-secondary"
-                  onClick={() => setRefreshStep("matching")}
-                >
-                  Back
-                </button>
-                <button
-                  type="button"
-                  className="wlth-btn-primary"
-                  disabled={refreshBusy}
-                  onClick={() => void startRefreshCheckout()}
-                >
-                  Continue to secure checkout
-                </button>
-              </div>
-              <p className="wlth-trust">
-                You can manage or cancel anytime from membership settings.
-              </p>
-            </div>
+            </form>
           )}
         </div>
       </div>
