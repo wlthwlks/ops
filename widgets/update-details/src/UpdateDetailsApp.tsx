@@ -36,6 +36,7 @@ import {
   markProfileRefreshComplete,
   decodeJwtPayload,
 } from "../../shared/session-refresh-gate";
+import { onInvalidScrollToError, scrollWidgetToTop } from "../../shared/form-scroll";
 
 const passwordSchema = z
   .object({
@@ -67,7 +68,7 @@ type RefData = {
   connectionTypes: Array<{ code: string; label: string }>;
 };
 
-type RefreshStep = "location" | "business" | "matching";
+type RefreshStep = "location" | "business" | "matching" | "payment";
 
 async function api(base: string, path: string, opts: RequestInit & { token?: string } = {}) {
   return widgetApi(base, path, opts) as Promise<Record<string, unknown>>;
@@ -98,6 +99,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     serviceAccessUntil: string;
     cancelAtPeriodEnd: boolean;
     cancellationEffectiveAt: string;
+    stripeCustomerId?: string | null;
+    hasPaymentMethod?: boolean;
   } | null>(null);
   const [needsRefresh, setNeedsRefresh] = useState(false);
   const [refreshStep, setRefreshStep] = useState<RefreshStep>("location");
@@ -303,6 +306,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
             serviceAccessUntil: string;
             cancelAtPeriodEnd: boolean;
             cancellationEffectiveAt: string;
+            stripeCustomerId?: string | null;
+            hasPaymentMethod?: boolean;
           } | null
         );
       } catch (e) {
@@ -335,28 +340,20 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     return false;
   }, [billing]);
 
+  /** Payment step in refresh only when membership needs activation and no card on file. */
+  const refreshNeedsPaymentStep = useMemo(() => {
+    if (!needsReactivation) return false;
+    return !billing?.hasPaymentMethod;
+  }, [needsReactivation, billing?.hasPaymentMethod]);
+
+  const refreshSteps = useMemo((): RefreshStep[] => {
+    const base: RefreshStep[] = ["location", "business", "matching"];
+    if (refreshNeedsPaymentStep) base.push("payment");
+    return base;
+  }, [refreshNeedsPaymentStep]);
+
   const scrollDetailsToTop = () => {
-    try {
-      const root =
-        document.getElementById("wlth-update-details-root") ||
-        document.querySelector(".wlth-widget");
-      if (root) {
-        root.scrollIntoView({ behavior: "smooth", block: "start" });
-        const rect = root.getBoundingClientRect();
-        window.scrollTo({
-          top: Math.max(0, window.scrollY + rect.top - 12),
-          behavior: "smooth",
-        });
-      } else {
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      }
-    } catch {
-      try {
-        window.scrollTo(0, 0);
-      } catch {
-        /* ignore */
-      }
-    }
+    scrollWidgetToTop("wlth-update-details-root");
   };
 
   const patchProfile = async (body: Record<string, unknown>) => {
@@ -368,14 +365,25 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     });
   };
 
+  const finishRefreshSession = (message?: string) => {
+    if (memberId && sessionId) {
+      markProfileRefreshComplete({ memberId, sessionId });
+    }
+    setNeedsRefresh(false);
+    setOk(
+      message ||
+        "Your profile is refreshed — your future introductions can now reflect where you are and what you need today."
+    );
+    setSaveStatus("saved");
+    scrollDetailsToTop();
+  };
+
   const completeRefresh = async (payload: Record<string, unknown>) => {
     setRefreshBusy(true);
     setError(null);
+    scrollDetailsToTop();
     try {
       await patchProfile(payload);
-      if (memberId && sessionId) {
-        markProfileRefreshComplete({ memberId, sessionId });
-      }
       // Sync main form from refresh answers
       form.reset({
         ...form.getValues(),
@@ -406,12 +414,13 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           payload.connectionType ?? form.getValues("connectionType") ?? ""
         ),
       });
-      setNeedsRefresh(false);
-      setOk(
-        "Your profile is refreshed — your future introductions can now reflect where you are and what you need today."
-      );
-      setSaveStatus("saved");
-      scrollDetailsToTop();
+
+      if (refreshNeedsPaymentStep) {
+        setRefreshStep("payment");
+        scrollDetailsToTop();
+      } else {
+        finishRefreshSession();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not refresh profile");
     } finally {
@@ -419,9 +428,58 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     }
   };
 
-  const onRefreshLocation = refreshLocation.handleSubmit(async (values) => {
+  const startRefreshCheckout = async () => {
+    if (!token || refreshBusy) return;
     setError(null);
     setRefreshBusy(true);
+    scrollDetailsToTop();
+    try {
+      const w = window as unknown as {
+        $memberstackDom?: {
+          purchasePlansWithCheckout?: (p: {
+            priceId: string;
+            successUrl: string;
+            cancelUrl: string;
+          }) => Promise<unknown>;
+        };
+      };
+      if (!membershipPriceId || !w.$memberstackDom?.purchasePlansWithCheckout) {
+        setError("Secure checkout is not available on this page right now.");
+        return;
+      }
+      const base = window.location.origin + window.location.pathname;
+      await w.$memberstackDom.purchasePlansWithCheckout({
+        priceId: membershipPriceId,
+        successUrl: `${base}?refresh_paid=1`,
+        cancelUrl: `${base}?refresh_paid=0`,
+      });
+      // If still on page (popup closed), stay on payment step
+      await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+        method: "POST",
+        token,
+        body: JSON.stringify({}),
+      }).catch(() => undefined);
+      const bill = await api(props.apiBase, "/api/member/billing-status", { token });
+      setBilling((bill.billing || null) as typeof billing);
+      const b = bill.billing as { hasPaymentMethod?: boolean; payment?: string } | undefined;
+      if (b?.hasPaymentMethod || (b?.payment || "").toLowerCase() === "paid") {
+        finishRefreshSession(
+          "Payment details saved. Your profile is refreshed and ready for stronger introductions."
+        );
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "";
+      if (msg && !/cancel|closed|abort/i.test(msg)) setError(msg);
+    } finally {
+      if (mountedRef.current) setRefreshBusy(false);
+    }
+  };
+
+  const onRefreshLocation = refreshLocation.handleSubmit(
+    async (values) => {
+    setError(null);
+    setRefreshBusy(true);
+    scrollDetailsToTop();
     try {
       // Save location now via profile (not onboarding/step)
       await patchProfile({
@@ -444,11 +502,15 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     } finally {
       if (mountedRef.current) setRefreshBusy(false);
     }
-  });
+    },
+    (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+  );
 
-  const onRefreshBusiness = refreshBusiness.handleSubmit(async (values) => {
+  const onRefreshBusiness = refreshBusiness.handleSubmit(
+    async (values) => {
     setError(null);
     setRefreshBusy(true);
+    scrollDetailsToTop();
     try {
       await patchProfile({
         primaryIndustry: values.primaryIndustry,
@@ -469,14 +531,24 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     } finally {
       if (mountedRef.current) setRefreshBusy(false);
     }
-  });
+    },
+    (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+  );
 
   const onRefreshMatching = async () => {
     const goalOk = await refreshGoal.trigger();
     const helpOk = await refreshHelp.trigger();
     const expOk = await refreshExpertise.trigger();
     const connOk = await refreshConnection.trigger();
-    if (!goalOk || !helpOk || !expOk || !connOk) return;
+    if (!goalOk || !helpOk || !expOk || !connOk) {
+      onInvalidScrollToError({
+        ...(goalOk ? {} : { ninetyDayGoal: true }),
+        ...(helpOk ? {} : { helpWanted: true }),
+        ...(expOk ? {} : { expertiseOffered: true }),
+        ...(connOk ? {} : { connectionType: true }),
+      });
+      return;
+    }
 
     const goal = refreshGoal.getValues();
     const help = refreshHelp.getValues();
@@ -493,7 +565,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     });
   };
 
-  const onSave = form.handleSubmit(async (values) => {
+  const onSave = form.handleSubmit(
+    async (values) => {
     if (!token || saving) return;
     setSaving(true);
     scrollDetailsToTop();
@@ -570,7 +643,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     } finally {
       if (mountedRef.current) setSaving(false);
     }
-  });
+    },
+    (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+  );
 
   const onPassword = pwForm.handleSubmit(async (values) => {
     setPwSaving(true);
@@ -662,7 +737,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
-    if (p.get("reactivated") === "1" && token) {
+    if (!token) return;
+
+    if (p.get("reactivated") === "1") {
       void (async () => {
         setOk("Welcome back — confirming your membership…");
         await api(props.apiBase, "/api/onboarding/confirm-checkout", {
@@ -681,7 +758,45 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         }
       })();
     }
-  }, [token, props.apiBase]);
+
+    if (p.get("refresh_paid") === "1") {
+      void (async () => {
+        setRefreshBusy(true);
+        scrollDetailsToTop();
+        await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+          method: "POST",
+          token,
+          body: JSON.stringify({}),
+        }).catch(() => undefined);
+        const bill = await api(props.apiBase, "/api/member/billing-status", { token });
+        setBilling((bill.billing || null) as typeof billing);
+        if (memberId && sessionId) {
+          markProfileRefreshComplete({ memberId, sessionId });
+        }
+        setNeedsRefresh(false);
+        setOk(
+          "Payment details saved. Your profile is refreshed and ready for stronger introductions."
+        );
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.delete("refresh_paid");
+          window.history.replaceState({}, "", url.pathname + url.search);
+        } catch {
+          /* ignore */
+        }
+        if (mountedRef.current) setRefreshBusy(false);
+      })();
+    } else if (p.get("refresh_paid") === "0") {
+      setRefreshStep("payment");
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("refresh_paid");
+        window.history.replaceState({}, "", url.pathname + url.search);
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [token, props.apiBase, memberId, sessionId]);
 
   if (loading) {
     return (
@@ -727,21 +842,29 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
             and goals. This won’t change billing or create a new account.
           </p>
           <div className="wlth-refresh-steps" aria-label="Refresh progress">
-            {(["location", "business", "matching"] as const).map((s) => (
-              <span
-                key={s}
-                className={`wlth-step-dot ${
-                  refreshStep === s
-                    ? "is-active"
-                    : (s === "location" && refreshStep !== "location") ||
-                        (s === "business" && refreshStep === "matching")
-                      ? "is-done"
-                      : ""
-                }`}
-              >
-                {s === "location" ? "Location" : s === "business" ? "Business" : "Matching"}
-              </span>
-            ))}
+            {refreshSteps.map((s, idx) => {
+              const currentIdx = refreshSteps.indexOf(refreshStep);
+              const isActive = refreshStep === s;
+              const isDone = currentIdx > idx;
+              const label =
+                s === "location"
+                  ? "Location"
+                  : s === "business"
+                    ? "Business"
+                    : s === "matching"
+                      ? "Matching"
+                      : "Payment";
+              return (
+                <span
+                  key={s}
+                  className={`wlth-step-dot ${
+                    isActive ? "is-active" : isDone ? "is-done" : ""
+                  }`}
+                >
+                  {label}
+                </span>
+              );
+            })}
           </div>
           {error && (
             <div className="wlth-banner-error" role="alert">
@@ -897,9 +1020,49 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   disabled={refreshBusy}
                   onClick={() => void onRefreshMatching()}
                 >
-                  Save and continue
+                  {refreshNeedsPaymentStep ? "Continue" : "Save and continue"}
                 </button>
               </div>
+            </div>
+          )}
+
+          {refreshStep === "payment" && refreshNeedsPaymentStep && (
+            <div className="wlth-pay-hero">
+              <h2>Activate your membership</h2>
+              <p>
+                We don’t have a card on file yet. Complete a secure Stripe checkout once so
+                your membership can stay active — and so future renewals are simple.
+              </p>
+              <div className="wlth-benefits">
+                <p className="wlth-benefit">
+                  <strong>One secure checkout</strong>
+                  Powered by Stripe. We never store your full card details on WLTH WLKS.
+                </p>
+                <p className="wlth-benefit">
+                  <strong>Then you’re set</strong>
+                  After this, reactivation can use your saved card when needed.
+                </p>
+              </div>
+              <div className="wlth-actions">
+                <button
+                  type="button"
+                  className="wlth-btn-secondary"
+                  onClick={() => setRefreshStep("matching")}
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  className="wlth-btn-primary"
+                  disabled={refreshBusy}
+                  onClick={() => void startRefreshCheckout()}
+                >
+                  Continue to secure checkout
+                </button>
+              </div>
+              <p className="wlth-trust">
+                You can manage or cancel anytime from membership settings.
+              </p>
             </div>
           )}
         </div>

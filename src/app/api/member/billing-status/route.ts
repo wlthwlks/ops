@@ -9,6 +9,7 @@ import {
   recordToProfileDto,
 } from "@/lib/forms/airtable/members-sync";
 import { FormsError } from "@/lib/forms/errors";
+import { customerHasPaymentMethod } from "@/lib/forms/billing/reactivate-membership";
 
 export const runtime = "nodejs";
 
@@ -33,6 +34,11 @@ export async function GET(request: Request) {
       );
     }
     const profile = recordToProfileDto(rows[0]);
+    const stripeCustomerId = profile.stripeCustomerId || "";
+    const hasPaymentMethod = stripeCustomerId.startsWith("cus_")
+      ? await customerHasPaymentMethod(stripeCustomerId)
+      : false;
+
     return withCors(
       NextResponse.json({
         success: true,
@@ -42,7 +48,8 @@ export async function GET(request: Request) {
           serviceAccessUntil: profile.serviceAccessUntil,
           cancelAtPeriodEnd: profile.cancelAtPeriodEnd === "true",
           cancellationEffectiveAt: profile.cancellationEffectiveAt,
-          stripeCustomerId: profile.stripeCustomerId || null,
+          stripeCustomerId: stripeCustomerId || null,
+          hasPaymentMethod,
         },
         profile,
       }),

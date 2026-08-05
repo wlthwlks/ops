@@ -17,16 +17,16 @@ export const BUSINESS_STAGES = [
 
 export const REVENUE_BRACKETS = [
   { code: "PRE_REVENUE", label: "Pre-revenue" },
-  { code: "0_10K", label: "£0–£10k" },
-  { code: "10K_50K", label: "£10k–£50k" },
-  { code: "50K_100K", label: "£50k–£100k" },
-  { code: "100K_500K", label: "£100k–£500k" },
-  { code: "500K_1M", label: "£500k–£1m" },
-  { code: "1M_2M", label: "£1m–£2m" },
-  { code: "2M_5M", label: "£2m–£5m" },
-  { code: "5M_10M", label: "£5m–£10m" },
-  { code: "10M_20M", label: "£10m–£20m" },
-  { code: "20M_PLUS", label: "£20m+" },
+  { code: "0_10K", label: "$0–$10k" },
+  { code: "10K_50K", label: "$10k–$50k" },
+  { code: "50K_100K", label: "$50k–$100k" },
+  { code: "100K_500K", label: "$100k–$500k" },
+  { code: "500K_1M", label: "$500k–$1m" },
+  { code: "1M_2M", label: "$1m–$2m" },
+  { code: "2M_5M", label: "$2m–$5m" },
+  { code: "5M_10M", label: "$5m–$10m" },
+  { code: "10M_20M", label: "$10m–$20m" },
+  { code: "20M_PLUS", label: "$20m+" },
   { code: "PREFER_NOT_TO_SAY", label: "Prefer not to say" },
 ] as const;
 

@@ -64,6 +64,21 @@ async function resolveStripePriceId(
   return preferred?.id?.startsWith("price_") ? preferred.id : "";
 }
 
+/** True when Stripe customer has a usable default or listed card. */
+export async function customerHasPaymentMethod(
+  stripeCustomerId: string
+): Promise<boolean> {
+  const id = stripeCustomerId.trim();
+  if (!id.startsWith("cus_")) return false;
+  try {
+    const stripe = getStripeClient();
+    const pm = await resolveDefaultPaymentMethodId(stripe, id);
+    return Boolean(pm);
+  } catch {
+    return false;
+  }
+}
+
 async function resolveDefaultPaymentMethodId(
   stripe: Stripe,
   customerId: string

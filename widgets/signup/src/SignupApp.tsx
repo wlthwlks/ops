@@ -38,6 +38,7 @@ import {
 import { MultiSelectDropdown } from "../../shared/MultiSelectDropdown";
 import { markSignupSessionRefreshComplete } from "../../shared/session-refresh-gate";
 import { runOutboundCheckout } from "../../shared/checkout-outbound";
+import { onInvalidScrollToError, scrollWidgetToTop } from "../../shared/form-scroll";
 
 export { runOutboundCheckout } from "../../shared/checkout-outbound";
 
@@ -102,25 +103,7 @@ const BUSY = {
 };
 
 function scrollSignupToTop() {
-  try {
-    const root =
-      document.getElementById("wlth-signup-root") ||
-      document.querySelector(".wlth-widget");
-    if (root) {
-      root.scrollIntoView({ behavior: "smooth", block: "start" });
-      const rect = root.getBoundingClientRect();
-      const y = window.scrollY + rect.top - 12;
-      window.scrollTo({ top: Math.max(0, y), behavior: "smooth" });
-    } else {
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    }
-  } catch {
-    try {
-      window.scrollTo(0, 0);
-    } catch {
-      /* ignore */
-    }
-  }
+  scrollWidgetToTop("wlth-signup-root");
 }
 
 const { useStepper } = defineStepper([
@@ -561,10 +544,12 @@ export function SignupApp(props: { apiBase: string }) {
     });
   };
 
-  const onAccount = accountForm.handleSubmit(async (values) => {
+  const onAccount = accountForm.handleSubmit(
+    async (values) => {
     if (busy) return;
     setError(null);
     setAsyncState(BUSY.account);
+    scrollSignupToTop();
     try {
       logMemberstackDiagnostics("account_submit_start");
       const auth = await authenticateEmailPassword({
@@ -636,12 +621,16 @@ export function SignupApp(props: { apiBase: string }) {
         scrollSignupToTop();
       }
     }
-  });
+    },
+    (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+  );
 
-  const onLocation = locationForm.handleSubmit(async (values) => {
+  const onLocation = locationForm.handleSubmit(
+    async (values) => {
     if (busy) return;
     setError(null);
     setAsyncState(BUSY.saving);
+    scrollSignupToTop();
     try {
       await saveStep("LOCATION", values);
       // Keep phone prefix in sync after location if not manually overridden
@@ -660,12 +649,16 @@ export function SignupApp(props: { apiBase: string }) {
         scrollSignupToTop();
       }
     }
-  });
+    },
+    (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+  );
 
-  const onBusiness = businessForm.handleSubmit(async (values) => {
+  const onBusiness = businessForm.handleSubmit(
+    async (values) => {
     if (busy) return;
     setError(null);
     setAsyncState(BUSY.saving);
+    scrollSignupToTop();
     try {
       await saveStep("BUSINESS", values);
       await saveStep("PAYMENT_PENDING", {});
@@ -680,7 +673,9 @@ export function SignupApp(props: { apiBase: string }) {
         scrollSignupToTop();
       }
     }
-  });
+    },
+    (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+  );
 
   const startCheckout = async () => {
     if (busy) return;
@@ -689,6 +684,12 @@ export function SignupApp(props: { apiBase: string }) {
       setCommunityError(
         "Please confirm you’re joining to connect and grow — not to cold-sell"
       );
+      requestAnimationFrame(() => {
+        const el = document.querySelector(".wlth-intention");
+        if (el && el instanceof HTMLElement) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
       return;
     }
     setCommunityError(undefined);
@@ -937,17 +938,6 @@ export function SignupApp(props: { apiBase: string }) {
                 <FieldError message={accountForm.formState.errors.lastName?.message} />
               </div>
             </div>
-            <div className="wlth-field">
-              <label htmlFor="em">Email</label>
-              <input
-                id="em"
-                type="email"
-                autoComplete="email"
-                aria-invalid={!!accountForm.formState.errors.email}
-                {...accountForm.register("email")}
-              />
-              <FieldError message={accountForm.formState.errors.email?.message} />
-            </div>
             <PhoneField
               countries={refData.countries}
               phonePrefix={phonePrefix || ""}
@@ -964,6 +954,17 @@ export function SignupApp(props: { apiBase: string }) {
               idPrefix="signup-ph"
             />
             <input type="hidden" {...accountForm.register("phonePrefix")} />
+            <div className="wlth-field">
+              <label htmlFor="em">Email</label>
+              <input
+                id="em"
+                type="email"
+                autoComplete="email"
+                aria-invalid={!!accountForm.formState.errors.email}
+                {...accountForm.register("email")}
+              />
+              <FieldError message={accountForm.formState.errors.email?.message} />
+            </div>
             <div className="wlth-field">
               <label htmlFor="pw">Password</label>
               <input
@@ -1146,10 +1147,12 @@ export function SignupApp(props: { apiBase: string }) {
           <form
             className="wlth-step-panel"
             key="goal"
-            onSubmit={goalForm.handleSubmit(async (v) => {
+            onSubmit={goalForm.handleSubmit(
+              async (v) => {
               if (busy) return;
               setError(null);
               setAsyncState(BUSY.saving);
+              scrollSignupToTop();
               try {
                 await saveStep("GOAL", v);
                 setAsyncState(BUSY.next);
@@ -1162,7 +1165,9 @@ export function SignupApp(props: { apiBase: string }) {
                   scrollSignupToTop();
                 }
               }
-            })}
+              },
+              (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+            )}
             noValidate
           >
             <h2>Let’s shape the introductions that can move you forward</h2>
@@ -1186,10 +1191,12 @@ export function SignupApp(props: { apiBase: string }) {
           <form
             className="wlth-step-panel"
             key="help"
-            onSubmit={helpForm.handleSubmit(async (v) => {
+            onSubmit={helpForm.handleSubmit(
+              async (v) => {
               if (busy) return;
               setError(null);
               setAsyncState(BUSY.saving);
+              scrollSignupToTop();
               try {
                 await saveStep("HELP_WANTED", v);
                 setAsyncState(BUSY.next);
@@ -1202,7 +1209,9 @@ export function SignupApp(props: { apiBase: string }) {
                   scrollSignupToTop();
                 }
               }
-            })}
+              },
+              (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+            )}
           >
             <h2>Where would support help most?</h2>
             <MultiSelectDropdown
@@ -1230,10 +1239,12 @@ export function SignupApp(props: { apiBase: string }) {
           <form
             className="wlth-step-panel"
             key="expertise"
-            onSubmit={expertiseForm.handleSubmit(async (v) => {
+            onSubmit={expertiseForm.handleSubmit(
+              async (v) => {
               if (busy) return;
               setError(null);
               setAsyncState(BUSY.saving);
+              scrollSignupToTop();
               try {
                 await saveStep("EXPERTISE", v);
                 setAsyncState(BUSY.next);
@@ -1246,7 +1257,9 @@ export function SignupApp(props: { apiBase: string }) {
                   scrollSignupToTop();
                 }
               }
-            })}
+              },
+              (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+            )}
           >
             <h2>What can you offer others?</h2>
             <MultiSelectDropdown
@@ -1276,10 +1289,12 @@ export function SignupApp(props: { apiBase: string }) {
           <form
             className="wlth-step-panel"
             key="connection"
-            onSubmit={connectionForm.handleSubmit(async (v) => {
+            onSubmit={connectionForm.handleSubmit(
+              async (v) => {
               if (busy) return;
               setError(null);
               setAsyncState(BUSY.saving);
+              scrollSignupToTop();
               try {
                 await saveStep("CONNECTION", v);
                 await finish();
@@ -1288,7 +1303,9 @@ export function SignupApp(props: { apiBase: string }) {
                 setAsyncState({ kind: "idle" });
                 scrollSignupToTop();
               }
-            })}
+              },
+              (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
+            )}
             noValidate
           >
             <h2>Connection preference</h2>
