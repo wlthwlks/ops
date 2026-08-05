@@ -10,6 +10,24 @@
 
 Also load Memberstack DOM script with your public key on the page.
 
+### Existing-member redirect gate (required)
+
+**Do not** redirect every logged-in member away from `/apply`. New members returning from Stripe are already logged in and must stay on `/apply` to finish matching.
+
+Use the shared helper exposed by the signup bundle as `window.WlthSignupFlow` (see “Webflow page code” below).
+
+| Visitor | Behaviour |
+|---|---|
+| Logged out | Stay on `/apply` |
+| Logged in + active signup-flow marker for **this** member id | Stay on `/apply` (includes Stripe return) |
+| Logged in + no marker / expired / different member | `location.replace("/update-details")` |
+
+- Marker key: `localStorage.wlth_signup_flow_v1` → `{ v, memberId, startedAt }` only  
+- TTL: 8 hours  
+- Set when the signup widget creates/binds the Memberstack account  
+- Cleared only after payment is verified **and** the final Matching step is saved (`onboarding/complete`)  
+- Never cleared when opening Stripe or immediately after payment  
+
 ## Update details
 
 ```html

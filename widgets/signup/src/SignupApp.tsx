@@ -39,8 +39,22 @@ import { MultiSelectDropdown } from "../../shared/MultiSelectDropdown";
 import { markSignupSessionRefreshComplete } from "../../shared/session-refresh-gate";
 import { runOutboundCheckout } from "../../shared/checkout-outbound";
 import { onInvalidScrollToError, scrollWidgetToTop } from "../../shared/form-scroll";
+import {
+  clearSignupFlowMarker,
+  hasActiveSignupFlowForMember,
+  setSignupFlowMarker,
+} from "../../shared/signup-flow-marker";
+import { decodeJwtPayload } from "../../shared/session-refresh-gate";
 
 export { runOutboundCheckout } from "../../shared/checkout-outbound";
+
+function memberIdFromAccessToken(token: string | null | undefined): string {
+  if (!token) return "";
+  const p = decodeJwtPayload(token);
+  if (p && typeof p.sub === "string") return p.sub.trim();
+  if (p && typeof p.id === "string") return p.id.trim();
+  return "";
+}
 
 type SignupAsyncState =
   | { kind: "idle" }
@@ -448,7 +462,20 @@ export function SignupApp(props: { apiBase: string }) {
           tokenFound: Boolean(t),
           tokenType: t ? typeof t : "none",
         });
-        if (t) setToken(t);
+        if (t) {
+          setToken(t);
+          // Recover marker only if Stripe checkout is pending and marker was lost — never clear here
+          try {
+            const mid = memberIdFromAccessToken(t);
+            const checkoutPending =
+              sessionStorage.getItem("wlth_checkout_pending") === "1";
+            if (mid && checkoutPending && !hasActiveSignupFlowForMember(mid)) {
+              setSignupFlowMarker(mid);
+            }
+          } catch {
+            /* ignore */
+          }
+        }
 
         const params = new URLSearchParams(window.location.search);
         const hashParams = new URLSearchParams(
@@ -566,6 +593,10 @@ export function SignupApp(props: { apiBase: string }) {
       });
 
       setToken(auth.accessToken);
+      // Bind /apply stay-marker to this member — survives Stripe redirect
+      const mid =
+        (auth.memberId || "").trim() || memberIdFromAccessToken(auth.accessToken);
+      if (mid) setSignupFlowMarker(mid);
       setAsyncState(BUSY.saving);
 
       await api(props.apiBase, "/api/onboarding/bootstrap", {
@@ -780,6 +811,8 @@ export function SignupApp(props: { apiBase: string }) {
           method: "POST",
           token,
         });
+        // Clear apply-flow marker only after payment verified path + final matching saved
+        clearSignupFlowMarker();
         markSignupSessionRefreshComplete({ accessToken: token });
       }
       setAsyncState(BUSY.redirect);
