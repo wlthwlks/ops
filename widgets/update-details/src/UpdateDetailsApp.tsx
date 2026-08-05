@@ -36,6 +36,11 @@ import {
   decodeJwtPayload,
 } from "../../shared/session-refresh-gate";
 import { onInvalidScrollToError, scrollWidgetToTop } from "../../shared/form-scroll";
+import {
+  clearAwaitingPostPaymentMatching,
+  isAwaitingPostPaymentMatching,
+  markAwaitingPostPaymentMatching,
+} from "../../shared/signup-flow-marker";
 
 const passwordSchema = z
   .object({
@@ -556,6 +561,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         return;
       }
       const base = window.location.origin + window.location.pathname;
+      if (memberId) markAwaitingPostPaymentMatching(memberId);
       await w.$memberstackDom.purchasePlansWithCheckout({
         priceId: membershipPriceId,
         successUrl: `${base}?refresh_paid=1`,
@@ -1002,10 +1008,14 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       })();
     }
 
-    if (p.get("refresh_paid") === "1") {
+    const refreshPaid = p.get("refresh_paid");
+    const awaiting = memberId ? isAwaitingPostPaymentMatching(memberId) : false;
+
+    if (refreshPaid === "1" || (awaiting && refreshPaid !== "0")) {
       void (async () => {
         setRefreshBusy(true);
         setNeedsRefresh(true);
+        setOnboardingIncomplete(true);
         scrollDetailsToTop();
         await api(props.apiBase, "/api/onboarding/confirm-checkout", {
           method: "POST",
@@ -1014,8 +1024,15 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         }).catch(() => undefined);
         // Poll briefly for Paid/Active like signup
         let confirmed = false;
-        for (let i = 0; i < 12; i++) {
+        for (let i = 0; i < 15; i++) {
           try {
+            if (i > 0 && i % 3 === 0) {
+              await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+                method: "POST",
+                token,
+                body: JSON.stringify({}),
+              }).catch(() => undefined);
+            }
             const st = await api(props.apiBase, "/api/onboarding/payment-status", {
               token,
             });
@@ -1026,13 +1043,15 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           } catch {
             /* retry */
           }
-          await new Promise((r) => setTimeout(r, 1500));
+          await new Promise((r) => setTimeout(r, 2000));
         }
         const bill = await api(props.apiBase, "/api/member/billing-status", { token });
         setBilling((bill.billing || null) as typeof billing);
         if (confirmed) {
+          clearAwaitingPostPaymentMatching();
           setPaymentConfirmed(true);
           setOnboardingIncomplete(true);
+          setNeedsRefresh(true);
           setRefreshStep("goal");
           setOk("Payment confirmed — a few matching questions and you’re fully set.");
         } else {
@@ -1050,8 +1069,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         }
         if (mountedRef.current) setRefreshBusy(false);
       })();
-    } else if (p.get("refresh_paid") === "0") {
+    } else if (refreshPaid === "0") {
       setNeedsRefresh(true);
+      setOnboardingIncomplete(true);
       setRefreshStep("payment");
       try {
         const url = new URL(window.location.href);

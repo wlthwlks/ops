@@ -40,8 +40,11 @@ import { markSignupSessionRefreshComplete } from "../../shared/session-refresh-g
 import { runOutboundCheckout } from "../../shared/checkout-outbound";
 import { onInvalidScrollToError, scrollWidgetToTop } from "../../shared/form-scroll";
 import {
+  clearAwaitingPostPaymentMatching,
   clearSignupFlowMarker,
   hasActiveSignupFlowForMember,
+  isAwaitingPostPaymentMatching,
+  markAwaitingPostPaymentMatching,
   setSignupFlowMarker,
 } from "../../shared/signup-flow-marker";
 import { decodeJwtPayload } from "../../shared/session-refresh-gate";
@@ -327,12 +330,14 @@ export function SignupApp(props: { apiBase: string }) {
     if (!mountedRef.current) return;
 
     if (confirmed) {
+      clearAwaitingPostPaymentMatching();
       await new Promise((r) => setTimeout(r, 700));
       markPreGoalComplete(stepper);
       await stepper.goTo("goal");
       setAsyncState({ kind: "idle" });
       scrollSignupToTop();
     } else {
+      // Keep post-checkout flag so a refresh can still open Matching once Paid lands
       setAsyncState({ kind: "idle" });
       setError(
         "We’re still confirming your payment with Stripe. Your progress is saved — refresh this page in a moment, or continue when you’re ready."
@@ -346,10 +351,33 @@ export function SignupApp(props: { apiBase: string }) {
     const status = await api(props.apiBase, "/api/onboarding/status", {
       token: accessToken,
     });
-    const resume = resumeStageToStep(
-      String(status.resumeStage || ""),
-      Boolean(status.paymentConfirmed)
-    );
+    const paid = Boolean(status.paymentConfirmed);
+    let resume = resumeStageToStep(String(status.resumeStage || ""), paid);
+
+    // Paid + still in signup flow → Matching even if status lag says Payment
+    const mid = memberIdFromAccessToken(accessToken);
+    if (
+      paid &&
+      resume &&
+      (resume === "payment" || resume === "business" || resume === "location")
+    ) {
+      const onboarding = String(status.onboardingStatus || "").toUpperCase();
+      if (
+        onboarding === "BUSINESS" ||
+        onboarding === "PAYMENT_PENDING" ||
+        onboarding === "PAYMENT_CONFIRMED" ||
+        isAwaitingPostPaymentMatching(mid)
+      ) {
+        resume = "goal";
+      }
+    }
+    if (paid && isAwaitingPostPaymentMatching(mid)) {
+      resume = resume && MATCHING_STEPS.includes(resume as (typeof MATCHING_STEPS)[number])
+        ? resume
+        : "goal";
+      clearAwaitingPostPaymentMatching();
+    }
+
     if (!resume || resume === "account") return;
     if (
       resume === "goal" ||
@@ -505,13 +533,23 @@ export function SignupApp(props: { apiBase: string }) {
           /* ignore */
         }
 
+        const hasSessionId = Boolean(
+          params.get("session_id") ||
+            params.get("checkout_session_id") ||
+            params.get("cs_id")
+        );
+        // Explicit Stripe return — do NOT require sessionStorage (often lost on redirect)
         const explicitPaySuccess =
-          paymentReturn === "success" ||
-          (Boolean(params.get("session_id")) && checkoutFresh);
+          paymentReturn === "success" || (hasSessionId && paymentReturn !== "cancel");
+
+        const mid = t ? memberIdFromAccessToken(t) : "";
+        const awaitingMatching =
+          Boolean(mid) && isAwaitingPostPaymentMatching(mid);
 
         if (paymentReturn === "cancel") {
           clearCheckoutFlags();
           clearPaymentQueryParam();
+          // Keep awaiting flag so they can retry checkout; resume to payment
           if (t) {
             try {
               await resumeFromStatus(t);
@@ -521,36 +559,46 @@ export function SignupApp(props: { apiBase: string }) {
           } else {
             await stepper.goTo("payment");
           }
-        } else if (explicitPaySuccess && checkoutFresh && t) {
-          // Explicit Stripe success return only
+        } else if (explicitPaySuccess && t) {
+          // Always confirm + go Matching on ?payment=success (even if session flags gone)
           await confirmPaymentFromServer(t);
-        } else if (checkoutFresh && t && !paymentReturn) {
+        } else if ((checkoutFresh || awaitingMatching) && t && !paymentReturn) {
           /**
-           * Checkout flags alone must NOT force Payment on hard refresh mid-flow
-           * (e.g. refresh on Location). Only treat as Stripe return when server
-           * resume is already at payment or later.
+           * Stripe sometimes strips query params. Only auto-confirm when we have
+           * checkout intent AND server says payment stage or later (or paid).
+           * Never jump Location → Payment on a plain hard refresh.
            */
           let resumeStage = "";
+          let paid = false;
           try {
             const st = await api(props.apiBase, "/api/onboarding/status", {
               token: t,
             });
             resumeStage = String(st.resumeStage || "");
+            paid = Boolean(st.paymentConfirmed);
           } catch {
             /* ignore */
           }
           const atOrPastPayment =
+            paid ||
             resumeStage === "PAYMENT_PENDING" ||
             resumeStage === "PAYMENT_CONFIRMED" ||
             resumeStage === "GOAL" ||
             resumeStage === "HELP_WANTED" ||
             resumeStage === "EXPERTISE" ||
             resumeStage === "CONNECTION" ||
-            resumeStage === "COMPLETE";
+            resumeStage === "COMPLETE" ||
+            awaitingMatching;
           if (atOrPastPayment) {
-            await confirmPaymentFromServer(t);
+            if (paid) {
+              clearCheckoutFlags();
+              clearAwaitingPostPaymentMatching();
+              markPreGoalComplete(stepper);
+              await stepper.goTo("goal");
+            } else {
+              await confirmPaymentFromServer(t);
+            }
           } else {
-            // Stale checkout flags from an abandoned attempt — drop and resume normally
             clearCheckoutFlags();
             try {
               await resumeFromStatus(t);
@@ -788,6 +836,13 @@ export function SignupApp(props: { apiBase: string }) {
     } catch {
       /* ignore */
     }
+    {
+      const mid = memberIdFromAccessToken(token);
+      if (mid) {
+        setSignupFlowMarker(mid);
+        markAwaitingPostPaymentMatching(mid);
+      }
+    }
     await api(props.apiBase, "/api/onboarding/analytics", {
       method: "POST",
       body: JSON.stringify({ eventType: "CHECKOUT_STARTED" }),
@@ -843,8 +898,9 @@ export function SignupApp(props: { apiBase: string }) {
           method: "POST",
           token,
         });
-        // Clear apply-flow marker only after payment verified path + final matching saved
+        // Clear apply-flow markers only after payment verified path + final matching saved
         clearSignupFlowMarker();
+        clearAwaitingPostPaymentMatching();
         markSignupSessionRefreshComplete({ accessToken: token });
       }
       setAsyncState(BUSY.redirect);

@@ -9,6 +9,10 @@ import {
   shouldStayOnApplyPage,
   redirectExistingMemberOffApply,
   runApplyPageMemberGate,
+  markAwaitingPostPaymentMatching,
+  clearAwaitingPostPaymentMatching,
+  isAwaitingPostPaymentMatching,
+  POST_CHECKOUT_MATCHING_KEY,
 } from "../../../widgets/shared/signup-flow-marker";
 
 const store = new Map<string, string>();
@@ -157,5 +161,14 @@ describe("signup flow marker (/apply gate)", () => {
     });
     expect(result).toBe("redirect");
     expect(replace).toHaveBeenCalledWith("/update-details");
+  });
+
+  it("post-checkout matching flag survives for Stripe return", () => {
+    markAwaitingPostPaymentMatching("mem_pay");
+    expect(isAwaitingPostPaymentMatching("mem_pay")).toBe(true);
+    expect(isAwaitingPostPaymentMatching("mem_other")).toBe(false);
+    expect(store.get(POST_CHECKOUT_MATCHING_KEY)).toBeTruthy();
+    clearAwaitingPostPaymentMatching();
+    expect(isAwaitingPostPaymentMatching("mem_pay")).toBe(false);
   });
 });

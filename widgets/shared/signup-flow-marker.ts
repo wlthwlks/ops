@@ -7,7 +7,10 @@
  */
 
 export const SIGNUP_FLOW_STORAGE_KEY = "wlth_signup_flow_v1";
+/** Set when leaving for Stripe; survives sessionStorage loss so return can open Matching. */
+export const POST_CHECKOUT_MATCHING_KEY = "wlth_post_checkout_matching_v1";
 export const SIGNUP_FLOW_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
+export const POST_CHECKOUT_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 export const SIGNUP_FLOW_VERSION = 1 as const;
 
 export type SignupFlowMarker = {
@@ -158,6 +161,76 @@ export function redirectExistingMemberOffApply(input: {
     });
   replace(path);
   return true;
+}
+
+/** Call when starting Stripe checkout — durable signal to open Matching after return. */
+export function markAwaitingPostPaymentMatching(memberId: string, now = Date.now()): void {
+  const id = normalizeMemberId(memberId);
+  if (!id) return;
+  const store = getStorage();
+  if (!store) return;
+  try {
+    store.setItem(
+      POST_CHECKOUT_MATCHING_KEY,
+      JSON.stringify({ v: 1, memberId: id, startedAt: now })
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+export function clearAwaitingPostPaymentMatching(): void {
+  const store = getStorage();
+  if (!store) return;
+  try {
+    store.removeItem(POST_CHECKOUT_MATCHING_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function readAwaitingPostPaymentMatching(now = Date.now()): {
+  memberId: string;
+  startedAt: number;
+} | null {
+  const store = getStorage();
+  if (!store) return null;
+  try {
+    const raw = store.getItem(POST_CHECKOUT_MATCHING_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as unknown;
+    if (!isRecord(data)) {
+      clearAwaitingPostPaymentMatching();
+      return null;
+    }
+    const memberId = normalizeMemberId(
+      typeof data.memberId === "string" ? data.memberId : ""
+    );
+    const startedAt =
+      typeof data.startedAt === "number" ? data.startedAt : Number(data.startedAt);
+    if (!memberId || !Number.isFinite(startedAt)) {
+      clearAwaitingPostPaymentMatching();
+      return null;
+    }
+    if (now - startedAt > POST_CHECKOUT_TTL_MS) {
+      clearAwaitingPostPaymentMatching();
+      return null;
+    }
+    return { memberId, startedAt };
+  } catch {
+    clearAwaitingPostPaymentMatching();
+    return null;
+  }
+}
+
+export function isAwaitingPostPaymentMatching(
+  memberId: string | null | undefined,
+  now = Date.now()
+): boolean {
+  const id = normalizeMemberId(memberId);
+  if (!id) return false;
+  const m = readAwaitingPostPaymentMatching(now);
+  return Boolean(m && m.memberId === id);
 }
 
 /** Browser helper: resolve Memberstack member id from DOM when available. */
