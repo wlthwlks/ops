@@ -83,31 +83,40 @@ export async function GET(request: Request) {
   }
 }
 
-function mapResumeStage(status: string, paymentConfirmed: boolean): string {
-  const order = [
-    "ACCOUNT_CREATED",
-    "LOCATION",
-    "BUSINESS",
-    "PAYMENT_PENDING",
-    "PAYMENT_CONFIRMED",
-    "GOAL",
-    "HELP_WANTED",
-    "EXPERTISE",
-    "CONNECTION",
-    "COMPLETE",
-  ];
-  if (status === "ACCOUNT_CREATED") return "LOCATION";
-  if (status === "COMPLETE") return "COMPLETE";
-  // Paid (or checkout return) → continue profile at GOAL, not Payment / success interstitial
+/**
+ * Map last completed onboarding status → next widget stage to show.
+ * Status columns store the step just finished; resume is the following step.
+ */
+export function mapResumeStage(status: string, paymentConfirmed: boolean): string {
+  const s = (status || "").trim().toUpperCase();
+  if (s === "COMPLETE") return "COMPLETE";
+
+  // Paid members never land back on Payment
   if (
     paymentConfirmed &&
-    (status === "PAYMENT_PENDING" || status === "PAYMENT_CONFIRMED" || status === "BUSINESS")
+    (s === "BUSINESS" ||
+      s === "PAYMENT_PENDING" ||
+      s === "PAYMENT_CONFIRMED" ||
+      s === "ACCOUNT_CREATED" ||
+      s === "ACCOUNT" ||
+      s === "LOCATION")
   ) {
+    // Still need location/business data if never saved — only skip payment
+    if (s === "ACCOUNT_CREATED" || s === "ACCOUNT") return "LOCATION";
+    if (s === "LOCATION") return "BUSINESS";
     return "GOAL";
   }
-  if (status === "PAYMENT_CONFIRMED") return "GOAL";
-  if (order.includes(status)) return status;
-  return "ACCOUNT";
+
+  if (s === "ACCOUNT_CREATED" || s === "ACCOUNT" || s === "") return "LOCATION";
+  if (s === "LOCATION") return "BUSINESS";
+  if (s === "BUSINESS") return "PAYMENT_PENDING";
+  if (s === "PAYMENT_PENDING") return "PAYMENT_PENDING";
+  if (s === "PAYMENT_CONFIRMED") return "GOAL";
+  if (s === "GOAL") return "HELP_WANTED";
+  if (s === "HELP_WANTED") return "EXPERTISE";
+  if (s === "EXPERTISE") return "CONNECTION";
+  if (s === "CONNECTION") return "COMPLETE";
+  return "LOCATION";
 }
 
 void MEMBER_FIELDS;

@@ -80,17 +80,14 @@ type RefreshStep =
 
 const MATCHING_REFRESH_STEPS: RefreshStep[] = ["goal", "help", "expertise", "connection"];
 
+/** resumeStage from API is already the *next* step to show. */
 function resumeStageToRefreshStep(
   resumeStage: string,
   paymentConfirmed: boolean
 ): RefreshStep | "done" {
-  if (resumeStage === "COMPLETE") return "done";
-  if (
-    paymentConfirmed &&
-    (resumeStage === "PAYMENT_PENDING" ||
-      resumeStage === "PAYMENT_CONFIRMED" ||
-      resumeStage === "BUSINESS")
-  ) {
+  const s = (resumeStage || "").toUpperCase();
+  if (s === "COMPLETE") return "done";
+  if (paymentConfirmed && (s === "PAYMENT_PENDING" || s === "PAYMENT_CONFIRMED")) {
     return "goal";
   }
   const map: Record<string, RefreshStep> = {
@@ -105,7 +102,7 @@ function resumeStageToRefreshStep(
     ACCOUNT: "location",
     ACCOUNT_CREATED: "location",
   };
-  return map[resumeStage] || "location";
+  return map[s] || "location";
 }
 
 function topPhaseForRefreshStep(

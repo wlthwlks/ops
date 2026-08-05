@@ -509,9 +509,7 @@ export function SignupApp(props: { apiBase: string }) {
           paymentReturn === "success" ||
           (Boolean(params.get("session_id")) && checkoutFresh);
 
-        if (explicitPaySuccess && checkoutFresh) {
-          await confirmPaymentFromServer(t);
-        } else if (paymentReturn === "cancel") {
+        if (paymentReturn === "cancel") {
           clearCheckoutFlags();
           clearPaymentQueryParam();
           if (t) {
@@ -523,9 +521,43 @@ export function SignupApp(props: { apiBase: string }) {
           } else {
             await stepper.goTo("payment");
           }
-        } else if (checkoutFresh && t) {
-          // Returned from Stripe without query param
+        } else if (explicitPaySuccess && checkoutFresh && t) {
+          // Explicit Stripe success return only
           await confirmPaymentFromServer(t);
+        } else if (checkoutFresh && t && !paymentReturn) {
+          /**
+           * Checkout flags alone must NOT force Payment on hard refresh mid-flow
+           * (e.g. refresh on Location). Only treat as Stripe return when server
+           * resume is already at payment or later.
+           */
+          let resumeStage = "";
+          try {
+            const st = await api(props.apiBase, "/api/onboarding/status", {
+              token: t,
+            });
+            resumeStage = String(st.resumeStage || "");
+          } catch {
+            /* ignore */
+          }
+          const atOrPastPayment =
+            resumeStage === "PAYMENT_PENDING" ||
+            resumeStage === "PAYMENT_CONFIRMED" ||
+            resumeStage === "GOAL" ||
+            resumeStage === "HELP_WANTED" ||
+            resumeStage === "EXPERTISE" ||
+            resumeStage === "CONNECTION" ||
+            resumeStage === "COMPLETE";
+          if (atOrPastPayment) {
+            await confirmPaymentFromServer(t);
+          } else {
+            // Stale checkout flags from an abandoned attempt — drop and resume normally
+            clearCheckoutFlags();
+            try {
+              await resumeFromStatus(t);
+            } catch {
+              /* stay on account */
+            }
+          }
         } else {
           if (checkoutPending && !checkoutFresh) clearCheckoutFlags();
           if (t) {
