@@ -68,6 +68,8 @@ export async function POST(request: Request) {
       email: parsed.data.email,
       firstName: parsed.data.firstName,
       lastName: parsed.data.lastName,
+      phone: parsed.data.phone,
+      phonePrefix: parsed.data.phonePrefix,
       attribution: parsed.data.attribution as Record<string, string | undefined>,
       source: "signup_widget",
     });

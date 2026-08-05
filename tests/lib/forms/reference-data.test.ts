@@ -76,11 +76,15 @@ describe("reference data", () => {
 
   it("exports versioned catalogue from live location cache", async () => {
     const d = await getOnboardingReferenceData();
-    expect(d.version).toBe(2);
+    expect(d.version).toBe(3);
     expect(d.countries.some((c) => c.label === "United Kingdom")).toBe(true);
     expect(d.cities.some((c) => c.label === "London")).toBe(true);
     expect(d.businessStages.some((s) => s.code === "EARLY_TRACTION")).toBe(true);
+    expect(d.industries.some((i) => i.code === "COACHING")).toBe(true);
     expect(d.locationSource).toBe("airtable");
+    // countries include dial metadata when mappable
+    const uk = d.countries.find((c) => c.label === "United Kingdom");
+    expect(uk && "dialCode" in uk).toBe(true);
   });
 
   it("treats Airtable checkboxes as boolean true only", () => {

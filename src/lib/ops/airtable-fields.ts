@@ -46,6 +46,7 @@ export const MEMBER_FIELDS = {
   firstName: "First Name",
   lastName: "Last Name",
   phone: "phone number",
+  phonePrefix: "Phone prefix",
   industry: "Industry",
   revenue: "Revenue",
   /** @deprecated use industry — kept for gradual migration of call sites */
@@ -69,7 +70,11 @@ export const MEMBER_FIELDS = {
   businessDescription: "Business description",
   ninetyDayGoal: "Current 90-day goal",
   goalUpdatedAt: "Goal updated at",
+  /** Linked multi → MATCHING OPTIONS (record ids) */
+  helpWanted: "Help wanted",
   helpWantedContext: "Help wanted context",
+  /** Linked multi → MATCHING OPTIONS (record ids). Exact name is Expertise. */
+  expertise: "Expertise",
   expertiseContext: "Expertise context",
   topicsToDiscuss: "Topics to Discuss",
   stripeSubscriptionId: "Stripe Subscription ID",

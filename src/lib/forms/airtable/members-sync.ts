@@ -18,7 +18,10 @@ import { normalizeEmailStrict } from "@/lib/billing/reconcile-stripe-customers";
 import {
   availabilityCodesToLegacyString,
   findCatalogCityByCode,
+  linkIdsFromField,
   resolveMemberLocationDto,
+  splitIndustryForUi,
+  splitStoredPhone,
 } from "@/lib/forms/reference-data";
 import { FormsError } from "@/lib/forms/errors";
 import { canWriteAirtableFromForms } from "@/lib/forms/feature-flags";
@@ -118,6 +121,8 @@ export type MinimalSignupInput = {
   email: string;
   firstName: string;
   lastName: string;
+  phone?: string;
+  phonePrefix?: string;
   attribution?: Record<string, string | undefined>;
   source?: string;
 };
@@ -220,6 +225,35 @@ function applyAvailabilityPatch(
   }
 }
 
+/**
+ * Map app matching selections → linked-record arrays on MEMBERS.
+ * Accepts either Airtable field keys or app keys (helpWanted / expertiseOffered).
+ * Empty arrays clear the linked field.
+ */
+function applyMatchingLinkedPatch(
+  fields: Record<string, unknown>,
+  patch: Record<string, unknown>
+): void {
+  const help =
+    patch[MEMBER_FIELDS.helpWanted] ?? patch.helpWanted;
+  if (Array.isArray(help)) {
+    fields[MEMBER_FIELDS.helpWanted] = (help as unknown[])
+      .map((c) => String(c).trim())
+      .filter(Boolean);
+    delete fields.helpWanted;
+  }
+
+  const expertise =
+    patch[MEMBER_FIELDS.expertise] ?? patch.expertiseOffered ?? patch.expertise;
+  if (Array.isArray(expertise)) {
+    fields[MEMBER_FIELDS.expertise] = (expertise as unknown[])
+      .map((c) => String(c).trim())
+      .filter(Boolean);
+    delete fields.expertiseOffered;
+    delete fields.expertise;
+  }
+}
+
 export async function upsertMinimalSignupMember(
   input: MinimalSignupInput,
   airtable: AirtableClient = getFormsAirtableClient()
@@ -246,6 +280,13 @@ export async function upsertMinimalSignupMember(
       : "ACCOUNT_CREATED",
     [MEMBER_FIELDS.lastCompletedSignupStep]: "ACCOUNT",
   };
+
+  if (input.phone != null && String(input.phone).trim()) {
+    fields[MEMBER_FIELDS.phone] = String(input.phone).trim();
+  }
+  if (input.phonePrefix != null && String(input.phonePrefix).trim()) {
+    fields[MEMBER_FIELDS.phonePrefix] = String(input.phonePrefix).trim();
+  }
 
   // New accounts only — never promote to Active/Paid from signup alone.
   // Airtable default Membership is Active when blank; always set Pending Payment on create.
@@ -336,18 +377,19 @@ export async function updateOnboardingStep(
 
   await applyLocationPatch(fields, input.patch, airtable);
   applyAvailabilityPatch(fields, input.patch);
+  applyMatchingLinkedPatch(fields, input.patch);
 
   // Drop app-only keys that are not Airtable MEMBERS columns
   delete fields.countryCode;
   delete fields.cityCode;
   delete fields._appCityCode;
   delete fields._appCountryCode;
-  delete fields.helpWanted;
   delete fields.expertiseOffered;
   delete fields.businessName;
   delete fields.businessWebsite;
   delete fields.primaryIndustry;
   delete fields.annualRevenue;
+  delete fields.otherIndustry;
 
   const writeFields = stripComputedMemberWriteFields(fields);
 
@@ -409,8 +451,12 @@ export async function updateMemberProfile(
 
   const fields: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(input.patch)) {
-    if (v === undefined || v === null) continue;
-    if (typeof v === "string" && v.trim() === "") continue;
+    if (v === undefined) continue;
+    // Explicit null clears to empty string; empty arrays clear linked multi-selects.
+    if (v === null) {
+      fields[k] = "";
+      continue;
+    }
     fields[k] = v;
   }
   fields[MEMBER_FIELDS.profileLastUpdatedAt] = new Date().toISOString();
@@ -422,17 +468,18 @@ export async function updateMemberProfile(
       fields[MEMBER_FIELDS.availabilityV2] ?? input.patch[MEMBER_FIELDS.availabilityV2],
     availability: fields.availability ?? input.patch.availability,
   });
+  applyMatchingLinkedPatch(fields, input.patch);
 
   delete fields._appCityCode;
   delete fields._appCountryCode;
   delete fields.cityCode;
   delete fields.countryCode;
-  delete fields.helpWanted;
   delete fields.expertiseOffered;
   delete fields.businessName;
   delete fields.businessWebsite;
   delete fields.primaryIndustry;
   delete fields.annualRevenue;
+  delete fields.otherIndustry;
   delete fields.availability;
 
   const writeFields = stripComputedMemberWriteFields(fields);
@@ -578,6 +625,49 @@ export async function applyTrustedPaymentByMemberstackId(
   return { record: updated, status: "updated", shadowed: false };
 }
 
+/** Legacy: codes embedded in context text — only extract known static codes. */
+function parseLegacyCodesFromContext(
+  context: string,
+  knownCodes: Set<string>
+): { codes: string[]; prose: string } {
+  const parts = context
+    .split(/[,;|]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const codes: string[] = [];
+  const proseParts: string[] = [];
+  for (const p of parts) {
+    if (knownCodes.has(p)) codes.push(p);
+    else proseParts.push(p);
+  }
+  return { codes, prose: proseParts.join(", ") };
+}
+
+const LEGACY_HELP_CODES = new Set([
+  "GROWTH_MARKETING",
+  "SALES",
+  "PRODUCT",
+  "FUNDRAISING",
+  "OPERATIONS",
+  "HIRING",
+  "FINANCE",
+  "TECHNOLOGY",
+  "MINDSET",
+  "NETWORKING",
+]);
+const LEGACY_EXPERTISE_CODES = new Set([
+  "GROWTH_MARKETING",
+  "SALES",
+  "PRODUCT",
+  "FUNDRAISING",
+  "OPERATIONS",
+  "HIRING",
+  "FINANCE",
+  "TECHNOLOGY",
+  "LEADERSHIP",
+  "INDUSTRY_KNOWLEDGE",
+]);
+
 export function recordToProfileDto(record: AirtableRecord) {
   const f = record.fields;
   const availRaw = f[MEMBER_FIELDS.availabilityV2];
@@ -592,16 +682,50 @@ export function recordToProfileDto(record: AirtableRecord) {
   const relId =
     Array.isArray(rel) && typeof rel[0] === "string" ? (rel[0] as string) : "";
 
+  const rawPhone = fieldStr(f, MEMBER_FIELDS.phone);
+  const rawPrefix = fieldStr(f, MEMBER_FIELDS.phonePrefix);
+  const phoneParts = splitStoredPhone(rawPhone, rawPrefix);
+
+  const industrySplit = splitIndustryForUi(fieldStr(f, MEMBER_FIELDS.industry));
+
+  let helpWanted = linkIdsFromField(f[MEMBER_FIELDS.helpWanted]);
+  let helpWantedContext = fieldStr(f, MEMBER_FIELDS.helpWantedContext);
+  if (helpWanted.length === 0 && helpWantedContext) {
+    const legacy = parseLegacyCodesFromContext(helpWantedContext, LEGACY_HELP_CODES);
+    if (legacy.codes.length) {
+      helpWanted = legacy.codes;
+      helpWantedContext = legacy.prose;
+    }
+  }
+
+  let expertiseOffered = linkIdsFromField(f[MEMBER_FIELDS.expertise]);
+  let expertiseContext = fieldStr(f, MEMBER_FIELDS.expertiseContext);
+  if (expertiseOffered.length === 0 && expertiseContext) {
+    const legacy = parseLegacyCodesFromContext(
+      expertiseContext,
+      LEGACY_EXPERTISE_CODES
+    );
+    if (legacy.codes.length) {
+      expertiseOffered = legacy.codes;
+      expertiseContext = legacy.prose;
+    }
+  }
+
   return {
     airtableRecordId: record.id,
     name: fieldStr(f, MEMBER_FIELDS.name),
     firstName: fieldStr(f, MEMBER_FIELDS.firstName),
     lastName: fieldStr(f, MEMBER_FIELDS.lastName),
     email: fieldStr(f, MEMBER_FIELDS.email),
-    phone: fieldStr(f, MEMBER_FIELDS.phone),
+    phone: phoneParts.phone,
+    phonePrefix: phoneParts.phonePrefix,
+    phoneLegacyUnparsed: phoneParts.legacyUnparsed,
     city: fieldStr(f, MEMBER_FIELDS.city),
     cityCode: relId,
     countryCode: "",
+    /** True when stored city relation is not in the current form-enabled catalogue. */
+    previousCityUnavailable: false,
+    previousCityLabel: fieldStr(f, MEMBER_FIELDS.city),
     membership: fieldStr(f, MEMBER_FIELDS.membership),
     payment: fieldStr(f, MEMBER_FIELDS.payment),
     serviceAccessUntil: fieldStr(f, MEMBER_FIELDS.serviceAccessUntil),
@@ -613,15 +737,16 @@ export function recordToProfileDto(record: AirtableRecord) {
     onboardingStatus: fieldStr(f, MEMBER_FIELDS.onboardingStatus),
     businessName: "",
     businessWebsite: "",
-    primaryIndustry: fieldStr(f, MEMBER_FIELDS.industry),
+    primaryIndustry: industrySplit.primaryIndustry,
+    otherIndustry: industrySplit.otherIndustry,
     businessStage: fieldStr(f, MEMBER_FIELDS.businessStage),
     annualRevenue: fieldStr(f, MEMBER_FIELDS.revenue),
     businessDescription: fieldStr(f, MEMBER_FIELDS.businessDescription),
     ninetyDayGoal: fieldStr(f, MEMBER_FIELDS.ninetyDayGoal),
-    helpWanted: [] as string[],
-    helpWantedContext: fieldStr(f, MEMBER_FIELDS.helpWantedContext),
-    expertiseOffered: [] as string[],
-    expertiseContext: fieldStr(f, MEMBER_FIELDS.expertiseContext),
+    helpWanted,
+    helpWantedContext,
+    expertiseOffered,
+    expertiseContext,
     connectionType: fieldStr(f, MEMBER_FIELDS.connectionType),
     topicsToDiscuss: fieldStr(f, MEMBER_FIELDS.topicsToDiscuss),
     availability,
@@ -635,11 +760,30 @@ export async function recordToProfileDtoResolved(
 ) {
   const base = recordToProfileDto(record);
   const loc = await resolveMemberLocationDto(record.fields, airtable);
+  const { findCatalogCityByCode } = await import("@/lib/forms/reference-data");
+
+  let cityCode = loc.cityCode || base.cityCode;
+  let countryCode = loc.countryCode || base.countryCode;
+  let previousCityUnavailable = false;
+
+  if (cityCode) {
+    const eligible = await findCatalogCityByCode(cityCode, airtable);
+    if (!eligible) {
+      // Do not inject disabled cities into the catalogue — clear selection for the form.
+      previousCityUnavailable = true;
+      cityCode = "";
+      // Keep country if still resolvable from stored text / relation country
+      if (!countryCode && loc.countryCode) countryCode = loc.countryCode;
+    }
+  }
+
   return {
     ...base,
     city: loc.city || base.city,
-    cityCode: loc.cityCode || base.cityCode,
-    countryCode: loc.countryCode || base.countryCode,
+    cityCode,
+    countryCode,
+    previousCityUnavailable,
+    previousCityLabel: base.previousCityLabel || loc.city || base.city,
   };
 }
 

@@ -2,6 +2,7 @@ import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 
 /**
  * Airtable `Name` is a computed formula field — never include it in create/update payloads.
+ * Also strips known obsolete / app-only keys that must never hit Airtable.
  */
 export function stripComputedMemberWriteFields(
   fields: Record<string, unknown>
@@ -27,7 +28,14 @@ export function stripComputedMemberWriteFields(
   delete out.utm_term;
   delete out["Business name"];
   delete out["Business website"];
-  delete out["Help wanted"];
+  // Obsolete name — correct field is "Expertise"
   delete out["Expertise offered"];
+  // App-only keys (never Airtable columns)
+  delete out.otherIndustry;
+  delete out.expertiseOffered;
+  delete out.primaryIndustry;
+  delete out.annualRevenue;
+  delete out.helpWanted; // app key — Airtable uses "Help wanted" via MEMBER_FIELDS
+  delete out.phonePrefix; // app key — Airtable uses "Phone prefix"
   return out;
 }

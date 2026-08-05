@@ -19,6 +19,17 @@ describe("onboarding schemas", () => {
     expect(r.email).toBe("ada@ex.com");
   });
 
+  it("accepts coaching industry", () => {
+    const ok = businessSchema.safeParse({
+      primaryIndustry: "COACHING",
+      businessStage: "EARLY_TRACTION",
+      annualRevenue: "10K_50K",
+      businessDescription:
+        "We help independent founders grow through peer community and introductions in major cities worldwide.",
+    });
+    expect(ok.success).toBe(true);
+  });
+
   it("rejects non-Airtable city/country ids", () => {
     const r = locationSchema.safeParse({
       countryCode: "GB",

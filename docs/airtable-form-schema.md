@@ -9,7 +9,8 @@ Verified against the live preview base via Airtable REST (Metadata API token lac
 | `Name` | formula | **Never write** |
 | `email` | text | |
 | `First Name` / `Last Name` | text | |
-| `phone number` | text | |
+| `phone number` | text | National / local number only |
+| `Phone prefix` | text | International calling code only (`+64`, `+61`, …) |
 | `Membership` | single select | Options include `Active`, **`Pending Payment`** (required for signup) |
 | `Payment` | single select | `Unpaid`, `Paid` |
 | `City` | text | City label |
@@ -17,11 +18,14 @@ Verified against the live preview base via Airtable REST (Metadata API token lac
 | `Timezone` | text | |
 | `Availability` | text | Legacy string |
 | `Availability v2` | multi-select | Codes `mon_morning` … `sun_evening` as **string[]** |
-| `Industry` / `Revenue` | single select | App codes; forms use `typecast: true` |
+| `Industry` / `Revenue` | single select | App codes or custom industry text; forms use `typecast: true` |
 | `Business stage` / `Connection type` | single select | App codes |
 | `Business description` | text | |
 | `Current 90-day goal` / `Goal updated at` | text / date | |
-| `Help wanted context` / `Expertise context` | text | No code-list columns |
+| `Help wanted` | linked multi → MATCHING OPTIONS | Record ids only |
+| `Help wanted context` | text | Optional prose only — never selected codes |
+| `Expertise` | linked multi → MATCHING OPTIONS | Record ids only (exact name is **Expertise**, not “Expertise offered”) |
+| `Expertise context` | text | Optional prose only |
 | `Topics to Discuss` | text | |
 | `Onboarding status` / `Last completed signup step` | text | Progress only — not billing |
 | `Stripe Customer ID` | text | |
@@ -39,7 +43,8 @@ Verified against the live preview base via Airtable REST (Metadata API token lac
 - `Last form source`
 - `Country code` / `City code` on MEMBERS
 - `Business name` / `Business website`
-- `Help wanted` / `Expertise offered` code columns
+- `Expertise offered` (use `Expertise`)
+- Computed `Name`
 
 ## COUNTRIES
 
@@ -60,6 +65,17 @@ Verified against the live preview base via Airtable REST (Metadata API token lac
 | `Slack channels` | linked |
 | `City Tier` | text |
 
+## MATCHING OPTIONS
+
+Used as the linked-record source for MEMBERS `Help wanted` and `Expertise`.
+
+| Field | Notes |
+|---|---|
+| `Name` | Display label |
+| Optional `Type` / `Category` / `Kind` | Used only when present to split help vs expertise |
+
+If the table is empty or unavailable, forms fall back to static option codes (not ideal for linked fields).
+
 ## Membership state machine
 
 | Event | Membership | Payment |
@@ -78,3 +94,13 @@ Verified against the live preview base via Airtable REST (Metadata API token lac
 3. City must link to an eligible country via `Country`
 4. Countries with zero eligible cities are omitted
 5. Form codes = Airtable record ids
+
+## Industry
+
+Controlled codes include `COACHING` and `OTHER`. When the member selects **Other**, the custom free-text value is stored in `Industry` (not a separate column). Known codes are stored as codes.
+
+## Phone
+
+- `phone number` = national number
+- `Phone prefix` = `+` country calling code only
+- Never concatenate before write

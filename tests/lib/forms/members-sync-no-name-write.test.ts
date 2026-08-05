@@ -169,14 +169,15 @@ describe("Airtable member writes never include computed Name", () => {
     expect(dto.firstName).toBe("First");
   });
 
-  it("stripComputedMemberWriteFields removes nonexistent Last form source and aliases", async () => {
+  it("stripComputedMemberWriteFields removes nonexistent aliases but keeps Help wanted / Expertise", async () => {
     const { stripComputedMemberWriteFields } = await loadMembersSync();
     const stripped = stripComputedMemberWriteFields({
       "Last form source": "signup",
       lastFormSource: "signup",
       "Country code": "GB",
       "City code": "LON",
-      "Help wanted": "x",
+      "Help wanted": ["recHelp1"],
+      Expertise: ["recExp1"],
       "Expertise offered": "y",
       "Business name": "Acme",
       "90-day goal": "grow",
@@ -184,12 +185,15 @@ describe("Airtable member writes never include computed Name", () => {
       utm_source: "google",
       [MEMBER_FIELDS.utmSource]: "google",
       [MEMBER_FIELDS.ninetyDayGoal]: "grow",
+      [MEMBER_FIELDS.phonePrefix]: "+64",
+      [MEMBER_FIELDS.phone]: "211234567",
     });
     expect(stripped["Last form source"]).toBeUndefined();
     expect(stripped.lastFormSource).toBeUndefined();
     expect(stripped["Country code"]).toBeUndefined();
     expect(stripped["City code"]).toBeUndefined();
-    expect(stripped["Help wanted"]).toBeUndefined();
+    expect(stripped["Help wanted"]).toEqual(["recHelp1"]);
+    expect(stripped.Expertise).toEqual(["recExp1"]);
     expect(stripped["Expertise offered"]).toBeUndefined();
     expect(stripped["Business name"]).toBeUndefined();
     expect(stripped["90-day goal"]).toBeUndefined();
@@ -197,6 +201,8 @@ describe("Airtable member writes never include computed Name", () => {
     expect(stripped.utm_source).toBeUndefined();
     expect(stripped[MEMBER_FIELDS.utmSource]).toBe("google");
     expect(stripped[MEMBER_FIELDS.ninetyDayGoal]).toBe("grow");
+    expect(stripped[MEMBER_FIELDS.phonePrefix]).toBe("+64");
+    expect(stripped[MEMBER_FIELDS.phone]).toBe("211234567");
   });
 
   it("updateOnboardingStep writes canonical fields only (no Last form source / city code)", async () => {

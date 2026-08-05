@@ -14,6 +14,7 @@ import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 import { FormsError } from "@/lib/forms/errors";
 import { getFormFeatureFlags } from "@/lib/forms/feature-flags";
 import { enforcePublicWriteRateLimit } from "@/lib/forms/http";
+import { resolveIndustryForWrite } from "@/lib/forms/reference-data";
 
 export const runtime = "nodejs";
 
@@ -118,10 +119,16 @@ export async function PATCH(request: Request) {
     if (d.firstName != null) patch[MEMBER_FIELDS.firstName] = d.firstName;
     if (d.lastName != null) patch[MEMBER_FIELDS.lastName] = d.lastName;
     if (d.phone != null) patch[MEMBER_FIELDS.phone] = d.phone;
+    if (d.phonePrefix != null) patch[MEMBER_FIELDS.phonePrefix] = d.phonePrefix;
     if (d.cityCode != null) patch._appCityCode = d.cityCode;
     if (d.countryCode != null) patch._appCountryCode = d.countryCode;
     if (d.availability != null) patch[MEMBER_FIELDS.availabilityV2] = d.availability;
-    if (d.primaryIndustry != null) patch[MEMBER_FIELDS.industry] = d.primaryIndustry;
+
+    if (d.primaryIndustry != null) {
+      const industry = resolveIndustryForWrite(d.primaryIndustry, d.otherIndustry);
+      if (industry != null) patch[MEMBER_FIELDS.industry] = industry;
+    }
+
     if (d.businessStage != null) patch[MEMBER_FIELDS.businessStage] = d.businessStage;
     if (d.annualRevenue != null) patch[MEMBER_FIELDS.revenue] = d.annualRevenue;
     if (d.businessDescription != null)
@@ -130,14 +137,16 @@ export async function PATCH(request: Request) {
       patch[MEMBER_FIELDS.ninetyDayGoal] = d.ninetyDayGoal;
       patch[MEMBER_FIELDS.goalUpdatedAt] = new Date().toISOString();
     }
-    if (d.helpWantedContext != null)
+
+    // Explicit arrays (including []) clear linked selections; omit = leave unchanged.
+    if (d.helpWanted !== undefined) patch[MEMBER_FIELDS.helpWanted] = d.helpWanted;
+    if (d.helpWantedContext !== undefined)
       patch[MEMBER_FIELDS.helpWantedContext] = d.helpWantedContext;
-    else if (d.helpWanted != null)
-      patch[MEMBER_FIELDS.helpWantedContext] = d.helpWanted.join(", ");
-    if (d.expertiseContext != null)
+    if (d.expertiseOffered !== undefined)
+      patch[MEMBER_FIELDS.expertise] = d.expertiseOffered;
+    if (d.expertiseContext !== undefined)
       patch[MEMBER_FIELDS.expertiseContext] = d.expertiseContext;
-    else if (d.expertiseOffered != null)
-      patch[MEMBER_FIELDS.expertiseContext] = d.expertiseOffered.join(", ");
+
     if (d.connectionType != null) patch[MEMBER_FIELDS.connectionType] = d.connectionType;
     if (d.topicsToDiscuss != null) patch[MEMBER_FIELDS.topicsToDiscuss] = d.topicsToDiscuss;
 

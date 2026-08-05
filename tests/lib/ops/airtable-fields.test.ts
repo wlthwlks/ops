@@ -43,11 +43,14 @@ describe("airtable field maps", () => {
     expect(MEMBER_FIELDS.availabilityV2).toBe("Availability v2");
     expect(MEMBER_FIELDS.helpWantedContext).toBe("Help wanted context");
     expect(MEMBER_FIELDS.expertiseContext).toBe("Expertise context");
+    expect(MEMBER_FIELDS.helpWanted).toBe("Help wanted");
+    expect(MEMBER_FIELDS.expertise).toBe("Expertise");
+    expect(MEMBER_FIELDS.phonePrefix).toBe("Phone prefix");
+    expect(MEMBER_FIELDS.phone).toBe("phone number");
     // Must not expose nonexistent columns
     expect(MEMBER_FIELDS).not.toHaveProperty("lastFormSource");
     expect(MEMBER_FIELDS).not.toHaveProperty("countryCode");
     expect(MEMBER_FIELDS).not.toHaveProperty("cityCode");
-    expect(MEMBER_FIELDS).not.toHaveProperty("helpWanted");
     expect(MEMBER_FIELDS).not.toHaveProperty("expertiseOffered");
     expect(MEMBER_FIELDS).not.toHaveProperty("businessName");
   });

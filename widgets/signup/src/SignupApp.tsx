@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { defineStepper } from "@stepperize/react";
@@ -25,6 +25,21 @@ import {
   AnimatedLoader,
   type AnimationVariant,
 } from "../../shared/AnimatedLoader";
+import { PhoneField, resolveDefaultPhonePrefix, dialCodeForCountryCode } from "../../shared/PhoneField";
+import {
+  AvailabilityFields,
+  BusinessFields,
+  CommunityIntentionCard,
+  ConnectionTypeField,
+  FieldError,
+  LocationFields,
+  MatchingGoalField,
+} from "../../shared/form-fields";
+import { MultiSelectDropdown } from "../../shared/MultiSelectDropdown";
+import { markSignupSessionRefreshComplete } from "../../shared/session-refresh-gate";
+import { runOutboundCheckout } from "../../shared/checkout-outbound";
+
+export { runOutboundCheckout } from "../../shared/checkout-outbound";
 
 type SignupAsyncState =
   | { kind: "idle" }
@@ -47,7 +62,7 @@ const BUSY = {
     kind: "busy" as const,
     variant: "walking" as const,
     title: "Preparing your next step…",
-    description: "You’re making great progress.",
+    description: "You’re making thoughtful progress.",
   },
   account: {
     kind: "busy" as const,
@@ -55,7 +70,7 @@ const BUSY = {
     title: "Creating your account…",
     description: "Setting up your WLTH WLKS profile.",
   },
-  /** Leaving for Stripe — single payment-verification Lottie only */
+  /** Leaving for Stripe — payment-verification only until navigation or cancel */
   checkout: {
     kind: "busy" as const,
     variant: "payment-verification" as const,
@@ -63,8 +78,7 @@ const BUSY = {
     description: "Stripe is opening so you can complete your membership payment.",
   },
   /**
-   * Back from Stripe — single payment-confirmed Lottie for the whole wait
-   * (shown even while server is still confirming).
+   * Back from Stripe only — never used on the outbound checkout path.
    */
   paymentReturn: {
     kind: "busy" as const,
@@ -87,7 +101,6 @@ const BUSY = {
   },
 };
 
-/** Scroll the embed (and window) so the form top is in view after step changes. */
 function scrollSignupToTop() {
   try {
     const root =
@@ -123,22 +136,8 @@ const { useStepper } = defineStepper([
   { id: "done" },
 ] as const);
 
-const STEP_LABELS: Record<string, string> = {
-  account: "Account",
-  location: "Location",
-  business: "Business",
-  payment: "Payment",
-  success: "You’re in",
-  goal: "Matching",
-  help: "Matching",
-  expertise: "Matching",
-  connection: "Matching",
-  done: "Done",
-};
-
 const MATCHING_STEPS = ["goal", "help", "expertise", "connection"] as const;
 
-/** Map Airtable / status resume stages → widget step ids */
 function resumeStageToStep(resumeStage: string, paymentConfirmed?: boolean): string | null {
   const map: Record<string, string> = {
     LOCATION: "location",
@@ -172,14 +171,21 @@ function clearPaymentQueryParam() {
   }
 }
 
-/** Top-level progress phases (Matching covers goal→connection). */
 const FLOW_DOTS = ["account", "location", "business", "payment", "matching"] as const;
 
 function topPhaseForStep(stepId: string): (typeof FLOW_DOTS)[number] | null {
-  if (stepId === "account" || stepId === "location" || stepId === "business" || stepId === "payment") {
+  if (
+    stepId === "account" ||
+    stepId === "location" ||
+    stepId === "business" ||
+    stepId === "payment"
+  ) {
     return stepId;
   }
-  if (MATCHING_STEPS.includes(stepId as (typeof MATCHING_STEPS)[number]) || stepId === "success") {
+  if (
+    MATCHING_STEPS.includes(stepId as (typeof MATCHING_STEPS)[number]) ||
+    stepId === "success"
+  ) {
     return "matching";
   }
   return null;
@@ -191,7 +197,12 @@ function matchingSubIndex(stepId: string): number {
 }
 
 type RefData = {
-  countries: Array<{ code: string; label: string }>;
+  countries: Array<{
+    code: string;
+    label: string;
+    iso2?: string | null;
+    dialCode?: string | null;
+  }>;
   cities: Array<{ code: string; label: string; countryCode: string }>;
   industries: Array<{ code: string; label: string }>;
   businessStages: Array<{ code: string; label: string }>;
@@ -210,12 +221,7 @@ async function api(
   return widgetApi(base, path, opts) as Promise<Record<string, unknown>>;
 }
 
-function FieldError({ message }: { message?: string }) {
-  return <div className="wlth-error">{message || "\u00a0"}</div>;
-}
-
 export function SignupApp(props: { apiBase: string }) {
-  // linear:false — resume / Stripe return must jump to goal (linear only allows +1 step)
   const stepper = useStepper({ linear: false, defaultStep: "account" });
   const [error, setError] = useState<string | null>(null);
   const [asyncState, setAsyncState] = useState<SignupAsyncState>({
@@ -227,26 +233,35 @@ export function SignupApp(props: { apiBase: string }) {
     homeUrl: string;
   } | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [communityOk, setCommunityOk] = useState(false);
+  const [communityError, setCommunityError] = useState<string | undefined>();
+  const phonePrefixManual = useRef(false);
+  const mountedRef = useRef(true);
   const attribution = useMemo(() => captureAttribution(), []);
   const busy = asyncState.kind === "busy" || asyncState.kind === "loading-form";
-  const loading = busy; // alias for disabled buttons
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const clearCheckoutFlags = () => {
     try {
       sessionStorage.removeItem("wlth_checkout_pending");
       sessionStorage.removeItem("wlth_checkout_started_at");
-      sessionStorage.removeItem("wlth_payment_ok"); // legacy — never treat as payment proof
+      sessionStorage.removeItem("wlth_payment_ok");
     } catch {
       /* ignore */
     }
   };
 
   /**
-   * After Stripe return: server verifies checkout + links Stripe Customer ID by Memberstack ID,
-   * then polls until Airtable shows Paid/Active. Client never asserts Paid itself.
+   * Stripe-return path only: show payment-confirmed and verify server-side.
+   * Never call from outbound startCheckout.
    */
   const confirmPaymentFromServer = async (accessToken: string | null) => {
-    // One Lottie only for the whole return path (payment-confirmed)
     setAsyncState(BUSY.paymentReturn);
     setError(null);
     scrollSignupToTop();
@@ -287,8 +302,8 @@ export function SignupApp(props: { apiBase: string }) {
     const maxAttempts = 15;
     const delayMs = 2000;
     let confirmed = false;
-    let cancelled = false;
     for (let i = 0; i < maxAttempts; i++) {
+      if (!mountedRef.current) return;
       try {
         if (i > 0 && i % 3 === 0) {
           await api(props.apiBase, "/api/onboarding/confirm-checkout", {
@@ -312,15 +327,15 @@ export function SignupApp(props: { apiBase: string }) {
 
     clearPaymentQueryParam();
     clearCheckoutFlags();
+    if (!mountedRef.current) return;
 
     if (confirmed) {
-      // Brief hold on the same payment-confirmed state, then matching form
       await new Promise((r) => setTimeout(r, 700));
       markPreGoalComplete(stepper);
       await stepper.goTo("goal");
       setAsyncState({ kind: "idle" });
       scrollSignupToTop();
-    } else if (!cancelled) {
+    } else {
       setAsyncState({ kind: "idle" });
       setError(
         "We’re still confirming your payment with Stripe. Your progress is saved — refresh this page in a moment, or continue when you’re ready."
@@ -330,7 +345,6 @@ export function SignupApp(props: { apiBase: string }) {
     }
   };
 
-  /** Resume from Airtable onboarding status only (no stale checkout flags). */
   const resumeFromStatus = async (accessToken: string) => {
     const status = await api(props.apiBase, "/api/onboarding/status", {
       token: accessToken,
@@ -363,7 +377,14 @@ export function SignupApp(props: { apiBase: string }) {
 
   const accountForm = useForm<AccountForm>({
     resolver: zodResolver(accountFormSchema),
-    defaultValues: { firstName: "", lastName: "", email: "", password: "" },
+    defaultValues: {
+      firstName: "",
+      lastName: "",
+      email: "",
+      password: "",
+      phone: "",
+      phonePrefix: "",
+    },
     mode: "onBlur",
   });
   const locationForm = useForm<LocationForm>({
@@ -375,6 +396,7 @@ export function SignupApp(props: { apiBase: string }) {
     resolver: zodResolver(businessFormSchema),
     defaultValues: {
       primaryIndustry: "",
+      otherIndustry: "",
       businessStage: "",
       annualRevenue: "",
       businessDescription: "",
@@ -399,10 +421,26 @@ export function SignupApp(props: { apiBase: string }) {
   });
 
   const countryCode = locationForm.watch("countryCode");
+  const phonePrefix = accountForm.watch("phonePrefix");
+  const primaryIndustry = businessForm.watch("primaryIndustry");
+  const helpWanted = helpForm.watch("helpWanted") || [];
+  const expertiseOffered = expertiseForm.watch("expertiseOffered") || [];
+  const availability = locationForm.watch("availability") || [];
+
   const cities = useMemo(
     () => (refData?.cities || []).filter((c) => c.countryCode === countryCode),
     [refData, countryCode]
   );
+
+  // Sync phone prefix from location country unless member chose a different one.
+  useEffect(() => {
+    if (!countryCode || !refData || phonePrefixManual.current) return;
+    const dial = dialCodeForCountryCode(refData.countries, countryCode);
+    if (dial && dial !== phonePrefix) {
+      accountForm.setValue("phonePrefix", dial, { shouldValidate: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [countryCode, refData]);
 
   useEffect(() => {
     void (async () => {
@@ -415,12 +453,13 @@ export function SignupApp(props: { apiBase: string }) {
         setConfig(cfg as { membershipPriceId: string; homeUrl: string });
         const rd = ref as unknown as RefData;
         setRefData(rd);
-        // leave loading-form until mount path finishes
-        if (!locationForm.getValues("countryCode") && rd.countries?.[0]?.code) {
-          locationForm.setValue("countryCode", rd.countries[0].code);
+
+        // Safe default prefix from browser locale — never first alphabetical country.
+        const defaultPrefix = resolveDefaultPhonePrefix(rd.countries || []);
+        if (defaultPrefix && !accountForm.getValues("phonePrefix")) {
+          accountForm.setValue("phonePrefix", defaultPrefix);
         }
 
-        // Session resume only via documented cookie/session API when available
         const t = await tryResolveSessionAccessToken();
         logMemberstackDiagnostics("session_resume", {
           tokenFound: Boolean(t),
@@ -440,17 +479,16 @@ export function SignupApp(props: { apiBase: string }) {
           hashParams.get("payment") ||
           ""
         ).toLowerCase();
-        // Only treat Stripe return when we also started checkout recently (avoids random session_id)
         let checkoutPending = false;
         let checkoutFresh = false;
         try {
           checkoutPending = sessionStorage.getItem("wlth_checkout_pending") === "1";
           const startedAt = Number(sessionStorage.getItem("wlth_checkout_started_at") || "0");
-          checkoutFresh = checkoutPending && startedAt > 0 && Date.now() - startedAt < 2 * 60 * 60 * 1000;
+          checkoutFresh =
+            checkoutPending && startedAt > 0 && Date.now() - startedAt < 2 * 60 * 60 * 1000;
         } catch {
           /* ignore */
         }
-        // Drop legacy flag that previously forced every reload onto Payment
         try {
           sessionStorage.removeItem("wlth_payment_ok");
         } catch {
@@ -476,16 +514,15 @@ export function SignupApp(props: { apiBase: string }) {
             await stepper.goTo("payment");
           }
         } else if (checkoutFresh && t) {
-          // Returned from Stripe without our query param (some MS/Stripe configs strip it)
+          // Returned from Stripe without query param
           await confirmPaymentFromServer(t);
         } else {
-          // Normal visit / resume — never jump to Payment from stale flags
           if (checkoutPending && !checkoutFresh) clearCheckoutFlags();
           if (t) {
             try {
               await resumeFromStatus(t);
             } catch {
-              // stay on account
+              /* stay on account */
             }
           }
         }
@@ -500,11 +537,9 @@ export function SignupApp(props: { apiBase: string }) {
           }),
         }).catch(() => undefined);
 
-        // Payment checkout/return owns busy until it finishes
         setAsyncState((s) =>
           s.kind === "busy" &&
-          (s.variant === "payment-verification" ||
-            s.variant === "payment-confirmed")
+          (s.variant === "payment-verification" || s.variant === "payment-confirmed")
             ? s
             : { kind: "idle" }
         );
@@ -555,6 +590,8 @@ export function SignupApp(props: { apiBase: string }) {
           firstName: values.firstName,
           lastName: values.lastName,
           email: values.email,
+          phone: values.phone,
+          phonePrefix: values.phonePrefix,
           attribution,
         }),
       });
@@ -594,28 +631,39 @@ export function SignupApp(props: { apiBase: string }) {
       });
       setError(e instanceof Error ? e.message : "Account step failed");
     } finally {
-      setAsyncState({ kind: "idle" });
-      scrollSignupToTop();
+      if (mountedRef.current) {
+        setAsyncState({ kind: "idle" });
+        scrollSignupToTop();
+      }
     }
   });
 
   const onLocation = locationForm.handleSubmit(async (values) => {
+    if (busy) return;
     setError(null);
     setAsyncState(BUSY.saving);
     try {
       await saveStep("LOCATION", values);
+      // Keep phone prefix in sync after location if not manually overridden
+      if (!phonePrefixManual.current && refData) {
+        const dial = dialCodeForCountryCode(refData.countries, values.countryCode);
+        if (dial) accountForm.setValue("phonePrefix", dial);
+      }
       setAsyncState(BUSY.next);
       stepper.setComplete("location");
       await stepper.next();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Location save failed");
     } finally {
-      setAsyncState({ kind: "idle" });
-      scrollSignupToTop();
+      if (mountedRef.current) {
+        setAsyncState({ kind: "idle" });
+        scrollSignupToTop();
+      }
     }
   });
 
   const onBusiness = businessForm.handleSubmit(async (values) => {
+    if (busy) return;
     setError(null);
     setAsyncState(BUSY.saving);
     try {
@@ -627,16 +675,27 @@ export function SignupApp(props: { apiBase: string }) {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Business save failed");
     } finally {
-      setAsyncState({ kind: "idle" });
-      scrollSignupToTop();
+      if (mountedRef.current) {
+        setAsyncState({ kind: "idle" });
+        scrollSignupToTop();
+      }
     }
   });
 
   const startCheckout = async () => {
+    if (busy) return;
     setError(null);
-    // Single Lottie outbound — payment-verification only (no walking first)
+    if (!communityOk) {
+      setCommunityError(
+        "Please confirm you’re joining to connect and grow — not to cold-sell"
+      );
+      return;
+    }
+    setCommunityError(undefined);
+    // Outbound path: payment-verification only — never payment-confirmed
     setAsyncState(BUSY.checkout);
     scrollSignupToTop();
+
     const w = window as unknown as {
       $memberstackDom?: {
         purchasePlansWithCheckout?: (p: {
@@ -669,33 +728,49 @@ export function SignupApp(props: { apiBase: string }) {
       method: "POST",
       body: JSON.stringify({ eventType: "CHECKOUT_STARTED" }),
     }).catch(() => undefined);
+
+    void api(props.apiBase, "/api/onboarding/analytics", {
+      method: "POST",
+      body: JSON.stringify({ eventType: "CHECKOUT_ELIGIBLE" }),
+    }).catch(() => undefined);
+
     try {
-      await w.$memberstackDom.purchasePlansWithCheckout({
-        priceId,
-        successUrl: `${base}?payment=success`,
-        cancelUrl: `${base}?payment=cancel`,
+      const outcome = await runOutboundCheckout({
+        purchase: () =>
+          w.$memberstackDom!.purchasePlansWithCheckout!({
+            priceId,
+            successUrl: `${base}?payment=success`,
+            cancelUrl: `${base}?payment=cancel`,
+          }),
+        confirmPaymentFromServer,
       });
-      let t = token;
-      if (!t) t = await tryResolveSessionAccessToken();
-      if (t) setToken(t);
-      await confirmPaymentFromServer(t);
-    } catch (e) {
-      try {
-        sessionStorage.removeItem("wlth_checkout_pending");
-      } catch {
-        /* ignore */
+
+      // If the promise resolved without navigation (popup closed), restore Payment.
+      // Do not show payment-confirmed; do not call confirmPaymentFromServer.
+      if (outcome === "navigating_or_closed" && mountedRef.current) {
+        // Keep verification loader briefly in case a full-page redirect is mid-flight.
+        await new Promise((r) => setTimeout(r, 400));
+        if (!mountedRef.current) return;
+        // Still here → checkout closed without leaving
+        clearCheckoutFlags();
+        setAsyncState({ kind: "idle" });
+        await stepper.goTo("payment");
+        scrollSignupToTop();
       }
+    } catch (e) {
+      clearCheckoutFlags();
       const msg = e instanceof Error ? e.message : "";
       if (msg && !/cancel|closed|abort/i.test(msg)) {
         setError(msg);
       }
-      setAsyncState({ kind: "idle" });
+      if (mountedRef.current) {
+        setAsyncState({ kind: "idle" });
+      }
     }
   };
 
   const finish = async () => {
     setError(null);
-    // End of flow: walking woman only
     setAsyncState(BUSY.finish);
     scrollSignupToTop();
     try {
@@ -704,9 +779,9 @@ export function SignupApp(props: { apiBase: string }) {
           method: "POST",
           token,
         });
+        markSignupSessionRefreshComplete({ accessToken: token });
       }
       setAsyncState(BUSY.redirect);
-      // Keep loader visible until navigation unloads the page — do not clear loading
       window.location.assign(config?.homeUrl || "https://wlthwlks.com");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not complete");
@@ -714,14 +789,17 @@ export function SignupApp(props: { apiBase: string }) {
     }
   };
 
-  const toggleMulti = (
-    list: string[],
-    code: string,
-    max: number,
-    onChange: (next: string[]) => void
-  ) => {
-    if (list.includes(code)) onChange(list.filter((c) => c !== code));
-    else if (list.length < max) onChange([...list, code]);
+  const toggleAvail = (code: string) => {
+    const cur = locationForm.getValues("availability") || [];
+    if (cur.includes(code)) {
+      locationForm.setValue(
+        "availability",
+        cur.filter((c) => c !== code),
+        { shouldValidate: true }
+      );
+    } else if (cur.length < 21) {
+      locationForm.setValue("availability", [...cur, code], { shouldValidate: true });
+    }
   };
 
   if (asyncState.kind === "loading-form") {
@@ -788,7 +866,9 @@ export function SignupApp(props: { apiBase: string }) {
   const activePhase = topPhaseForStep(currentStepId) || "account";
   const matchSub = matchingSubIndex(currentStepId);
   const phaseIndex = Math.max(0, FLOW_DOTS.indexOf(activePhase));
-  const progressPct = Math.round(((phaseIndex + (matchSub ? matchSub / 4 : 0.5)) / FLOW_DOTS.length) * 100);
+  const progressPct = Math.round(
+    ((phaseIndex + (matchSub ? matchSub / 4 : 0.5)) / FLOW_DOTS.length) * 100
+  );
 
   return (
     <div className="wlth-widget">
@@ -809,7 +889,8 @@ export function SignupApp(props: { apiBase: string }) {
                       ? "Business"
                       : "Payment";
             const isActive = activePhase === id;
-            const isDone = idx < phaseIndex || (id === "matching" && matchSub > 0 && !isActive);
+            const isDone =
+              idx < phaseIndex || (id === "matching" && matchSub > 0 && !isActive);
             return (
               <span
                 key={id}
@@ -821,9 +902,7 @@ export function SignupApp(props: { apiBase: string }) {
           })}
         </div>
         {matchSub > 0 && (
-          <p className="wlth-subprogress">
-            Matching · {matchSub} of 4
-          </p>
+          <p className="wlth-subprogress">Matching · {matchSub} of 4</p>
         )}
 
         {error && (
@@ -834,8 +913,8 @@ export function SignupApp(props: { apiBase: string }) {
 
         {stepper.is("account") && (
           <form className="wlth-step-panel" key="account" onSubmit={onAccount} noValidate>
-            <h1>Join WLTH WLKS</h1>
-            <p>Create your account to continue.</p>
+            <h1>Let’s build your WLTH WLKS profile</h1>
+            <p>A few details so we can welcome you properly.</p>
             <div className="wlth-grid-2">
               <div className="wlth-field">
                 <label htmlFor="fn">First name</label>
@@ -869,6 +948,22 @@ export function SignupApp(props: { apiBase: string }) {
               />
               <FieldError message={accountForm.formState.errors.email?.message} />
             </div>
+            <PhoneField
+              countries={refData.countries}
+              phonePrefix={phonePrefix || ""}
+              phoneRegister={accountForm.register("phone")}
+              onPrefixChange={(dial) => {
+                phonePrefixManual.current = true;
+                accountForm.setValue("phonePrefix", dial, {
+                  shouldValidate: true,
+                  shouldDirty: true,
+                });
+              }}
+              prefixError={accountForm.formState.errors.phonePrefix}
+              phoneError={accountForm.formState.errors.phone}
+              idPrefix="signup-ph"
+            />
+            <input type="hidden" {...accountForm.register("phonePrefix")} />
             <div className="wlth-field">
               <label htmlFor="pw">Password</label>
               <input
@@ -890,66 +985,40 @@ export function SignupApp(props: { apiBase: string }) {
 
         {stepper.is("location") && (
           <form className="wlth-step-panel" key="location" onSubmit={onLocation} noValidate>
-            <h2>Where are you based?</h2>
-            <div className="wlth-grid-2">
-            <div className="wlth-field">
-              <label htmlFor="country">Country</label>
-              <select
-                id="country"
-                aria-invalid={!!locationForm.formState.errors.countryCode}
-                {...locationForm.register("countryCode", {
-                  onChange: () => locationForm.setValue("cityCode", ""),
-                })}
-              >
-                <option value="">Select country</option>
-                {refData.countries.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-              <FieldError message={locationForm.formState.errors.countryCode?.message} />
-            </div>
-            <div className="wlth-field">
-              <label htmlFor="city">City</label>
-              <select
-                id="city"
-                aria-invalid={!!locationForm.formState.errors.cityCode}
-                {...locationForm.register("cityCode")}
-              >
-                <option value="">Select city</option>
-                {cities.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-              <FieldError message={locationForm.formState.errors.cityCode?.message} />
-            </div>
-            </div>
-            <p className="wlth-muted">General availability (select all that apply)</p>
-            <div className="wlth-check-grid">
-              {refData.availabilityOptions.map((o) => {
-                const selected = locationForm.watch("availability") || [];
-                return (
-                  <label key={o.code} className="wlth-check">
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(o.code)}
-                      onChange={() =>
-                        toggleMulti(selected, o.code, 21, (next) =>
-                          locationForm.setValue("availability", next, {
-                            shouldValidate: true,
-                          })
-                        )
-                      }
-                    />
-                    <span>{o.label}</span>
-                  </label>
-                );
-              })}
-            </div>
-            <FieldError message={locationForm.formState.errors.availability?.message} />
+            <h2>Where would you like your community to begin?</h2>
+            <p className="wlth-muted">
+              We’ll prioritise introductions near you — only cities currently open for
+              matching are listed.
+            </p>
+            <LocationFields
+              countries={refData.countries}
+              cities={cities}
+              countryRegister={
+                locationForm.register("countryCode", {
+                  onChange: () => {
+                    locationForm.setValue("cityCode", "");
+                    if (!phonePrefixManual.current && refData) {
+                      const next = locationForm.getValues("countryCode");
+                      // onChange fires with event — read after tick
+                      queueMicrotask(() => {
+                        const cc = locationForm.getValues("countryCode");
+                        const dial = dialCodeForCountryCode(refData.countries, cc || next);
+                        if (dial) accountForm.setValue("phonePrefix", dial);
+                      });
+                    }
+                  },
+                }) as never
+              }
+              cityRegister={locationForm.register("cityCode") as never}
+              countryError={locationForm.formState.errors.countryCode?.message}
+              cityError={locationForm.formState.errors.cityCode?.message}
+            />
+            <AvailabilityFields
+              options={refData.availabilityOptions}
+              selected={availability}
+              onToggle={toggleAvail}
+              error={locationForm.formState.errors.availability?.message}
+            />
             <div className="wlth-actions">
               <button
                 type="button"
@@ -967,50 +1036,26 @@ export function SignupApp(props: { apiBase: string }) {
 
         {stepper.is("business") && (
           <form className="wlth-step-panel" key="business" onSubmit={onBusiness} noValidate>
-            <h2>About your business</h2>
-            <div className="wlth-field">
-              <label htmlFor="ind">Primary industry</label>
-              <select id="ind" {...businessForm.register("primaryIndustry")}>
-                <option value="">Select</option>
-                {refData.industries.map((i) => (
-                  <option key={i.code} value={i.code}>
-                    {i.label}
-                  </option>
-                ))}
-              </select>
-              <FieldError message={businessForm.formState.errors.primaryIndustry?.message} />
-            </div>
-            <div className="wlth-field">
-              <label htmlFor="bstage">Business stage</label>
-              <select id="bstage" {...businessForm.register("businessStage")}>
-                <option value="">Select</option>
-                {refData.businessStages.map((i) => (
-                  <option key={i.code} value={i.code}>
-                    {i.label}
-                  </option>
-                ))}
-              </select>
-              <FieldError message={businessForm.formState.errors.businessStage?.message} />
-            </div>
-            <div className="wlth-field">
-              <label htmlFor="rev">Approximate annual revenue</label>
-              <select id="rev" {...businessForm.register("annualRevenue")}>
-                <option value="">Select</option>
-                {refData.revenueBrackets.map((i) => (
-                  <option key={i.code} value={i.code}>
-                    {i.label}
-                  </option>
-                ))}
-              </select>
-              <FieldError message={businessForm.formState.errors.annualRevenue?.message} />
-            </div>
-            <div className="wlth-field">
-              <label htmlFor="desc">What does your business do, and who does it help?</label>
-              <textarea id="desc" rows={4} {...businessForm.register("businessDescription")} />
-              <FieldError
-                message={businessForm.formState.errors.businessDescription?.message}
-              />
-            </div>
+            <h2>Tell us what you’re building</h2>
+            <p className="wlth-muted">
+              A clear picture of your business helps us introduce you to the right peers.
+            </p>
+            <BusinessFields
+              industries={refData.industries}
+              stages={refData.businessStages}
+              revenues={refData.revenueBrackets}
+              primaryIndustry={primaryIndustry || ""}
+              industryRegister={businessForm.register("primaryIndustry") as never}
+              otherIndustryRegister={businessForm.register("otherIndustry") as never}
+              stageRegister={businessForm.register("businessStage") as never}
+              revenueRegister={businessForm.register("annualRevenue") as never}
+              descriptionRegister={businessForm.register("businessDescription") as never}
+              industryError={businessForm.formState.errors.primaryIndustry?.message}
+              otherIndustryError={businessForm.formState.errors.otherIndustry?.message}
+              stageError={businessForm.formState.errors.businessStage?.message}
+              revenueError={businessForm.formState.errors.annualRevenue?.message}
+              descriptionError={businessForm.formState.errors.businessDescription?.message}
+            />
             <div className="wlth-actions">
               <button
                 type="button"
@@ -1030,8 +1075,8 @@ export function SignupApp(props: { apiBase: string }) {
           <div className="wlth-pay-hero wlth-step-panel" key="payment">
             <h1>Your WLTH WLKS membership starts here</h1>
             <p>
-              Complete your secure payment through Stripe and unlock a more intentional way to
-              build valuable founder connections.
+              Complete your secure payment through Stripe and unlock a more intentional way
+              to build valuable founder connections.
             </p>
             <div className="wlth-benefits">
               <p className="wlth-benefit">
@@ -1051,11 +1096,21 @@ export function SignupApp(props: { apiBase: string }) {
                 Matching improves as your priorities evolve.
               </p>
             </div>
+
+            <CommunityIntentionCard
+              checked={communityOk}
+              onChange={(v) => {
+                setCommunityOk(v);
+                if (v) setCommunityError(undefined);
+              }}
+              error={communityError}
+            />
+
             <div className="wlth-actions">
               <button
                 type="button"
                 className="wlth-btn-primary"
-                disabled={busy}
+                disabled={busy || !communityOk}
                 onClick={() => void startCheckout()}
               >
                 Continue to secure checkout
@@ -1070,7 +1125,7 @@ export function SignupApp(props: { apiBase: string }) {
 
         {stepper.is("success") && (
           <div className="wlth-step-panel" key="success">
-            <h1>You’re in!</h1>
+            <h1>You’re in</h1>
             <p>Next: a few questions so we can improve your matching results.</p>
             <div className="wlth-actions">
               <button
@@ -1080,11 +1135,7 @@ export function SignupApp(props: { apiBase: string }) {
               >
                 Continue to matching
               </button>
-              <button
-                type="button"
-                className="wlth-btn-secondary"
-                onClick={() => void finish()}
-              >
+              <button type="button" className="wlth-btn-secondary" onClick={() => void finish()}>
                 Go to home
               </button>
             </div>
@@ -1096,6 +1147,7 @@ export function SignupApp(props: { apiBase: string }) {
             className="wlth-step-panel"
             key="goal"
             onSubmit={goalForm.handleSubmit(async (v) => {
+              if (busy) return;
               setError(null);
               setAsyncState(BUSY.saving);
               try {
@@ -1105,24 +1157,23 @@ export function SignupApp(props: { apiBase: string }) {
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
               } finally {
-                setAsyncState({ kind: "idle" });
-                scrollSignupToTop();
+                if (mountedRef.current) {
+                  setAsyncState({ kind: "idle" });
+                  scrollSignupToTop();
+                }
               }
             })}
             noValidate
           >
-            <h2>Improve your matching results</h2>
+            <h2>Let’s shape the introductions that can move you forward</h2>
             <p className="wlth-muted">
-              Your answers help us introduce you to the right people — they never change how
+              Your answers help us introduce you to the right people. They never change how
               matching algorithms run outside this profile.
             </p>
-            <div className="wlth-field">
-              <label htmlFor="goal">
-                What is your most important goal for the next 90 days?
-              </label>
-              <textarea id="goal" rows={4} {...goalForm.register("ninetyDayGoal")} />
-              <FieldError message={goalForm.formState.errors.ninetyDayGoal?.message as string} />
-            </div>
+            <MatchingGoalField
+              register={goalForm.register("ninetyDayGoal") as never}
+              error={goalForm.formState.errors.ninetyDayGoal?.message as string}
+            />
             <div className="wlth-actions">
               <button type="submit" className="wlth-btn-primary" disabled={busy}>
                 Continue
@@ -1136,6 +1187,7 @@ export function SignupApp(props: { apiBase: string }) {
             className="wlth-step-panel"
             key="help"
             onSubmit={helpForm.handleSubmit(async (v) => {
+              if (busy) return;
               setError(null);
               setAsyncState(BUSY.saving);
               try {
@@ -1145,32 +1197,23 @@ export function SignupApp(props: { apiBase: string }) {
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
               } finally {
-                setAsyncState({ kind: "idle" });
-                scrollSignupToTop();
+                if (mountedRef.current) {
+                  setAsyncState({ kind: "idle" });
+                  scrollSignupToTop();
+                }
               }
             })}
           >
-            <h2>Help wanted</h2>
-            <p className="wlth-muted">Select up to three</p>
-            <div className="wlth-check-grid">
-              {refData.helpWantedOptions.map((o) => {
-                const selected = helpForm.watch("helpWanted") || [];
-                return (
-                  <label key={o.code} className="wlth-check">
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(o.code)}
-                      onChange={() =>
-                        toggleMulti(selected, o.code, 3, (next) =>
-                          helpForm.setValue("helpWanted", next)
-                        )
-                      }
-                    />
-                    <span>{o.label}</span>
-                  </label>
-                );
-              })}
-            </div>
+            <h2>Where would support help most?</h2>
+            <MultiSelectDropdown
+              label="Help wanted"
+              helperText="Choose up to three areas."
+              options={refData.helpWantedOptions}
+              value={helpWanted}
+              onChange={(next) => helpForm.setValue("helpWanted", next, { shouldValidate: true })}
+              max={3}
+              placeholder="Add an area of help"
+            />
             <div className="wlth-field">
               <label htmlFor="hc">Optional context</label>
               <textarea id="hc" rows={2} {...helpForm.register("helpWantedContext")} />
@@ -1188,6 +1231,7 @@ export function SignupApp(props: { apiBase: string }) {
             className="wlth-step-panel"
             key="expertise"
             onSubmit={expertiseForm.handleSubmit(async (v) => {
+              if (busy) return;
               setError(null);
               setAsyncState(BUSY.saving);
               try {
@@ -1197,32 +1241,25 @@ export function SignupApp(props: { apiBase: string }) {
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
               } finally {
-                setAsyncState({ kind: "idle" });
-                scrollSignupToTop();
+                if (mountedRef.current) {
+                  setAsyncState({ kind: "idle" });
+                  scrollSignupToTop();
+                }
               }
             })}
           >
-            <h2>Expertise offered</h2>
-            <p className="wlth-muted">Select up to five</p>
-            <div className="wlth-check-grid">
-              {refData.expertiseOptions.map((o) => {
-                const selected = expertiseForm.watch("expertiseOffered") || [];
-                return (
-                  <label key={o.code} className="wlth-check">
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(o.code)}
-                      onChange={() =>
-                        toggleMulti(selected, o.code, 5, (next) =>
-                          expertiseForm.setValue("expertiseOffered", next)
-                        )
-                      }
-                    />
-                    <span>{o.label}</span>
-                  </label>
-                );
-              })}
-            </div>
+            <h2>What can you offer others?</h2>
+            <MultiSelectDropdown
+              label="Expertise offered"
+              helperText="Choose up to five strengths."
+              options={refData.expertiseOptions}
+              value={expertiseOffered}
+              onChange={(next) =>
+                expertiseForm.setValue("expertiseOffered", next, { shouldValidate: true })
+              }
+              max={5}
+              placeholder="Add an area of expertise"
+            />
             <div className="wlth-field">
               <label htmlFor="ec">Optional context</label>
               <textarea id="ec" rows={2} {...expertiseForm.register("expertiseContext")} />
@@ -1240,11 +1277,11 @@ export function SignupApp(props: { apiBase: string }) {
             className="wlth-step-panel"
             key="connection"
             onSubmit={connectionForm.handleSubmit(async (v) => {
+              if (busy) return;
               setError(null);
               setAsyncState(BUSY.saving);
               try {
                 await saveStep("CONNECTION", v);
-                // finish() keeps walking loader until redirect — never re-show this step
                 await finish();
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
@@ -1255,20 +1292,11 @@ export function SignupApp(props: { apiBase: string }) {
             noValidate
           >
             <h2>Connection preference</h2>
-            <div className="wlth-field">
-              <label htmlFor="ct">Which kind of connection would help you most?</label>
-              <select id="ct" {...connectionForm.register("connectionType")}>
-                <option value="">Select</option>
-                {refData.connectionTypes.map((c) => (
-                  <option key={c.code} value={c.code}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-              <FieldError
-                message={connectionForm.formState.errors.connectionType?.message as string}
-              />
-            </div>
+            <ConnectionTypeField
+              options={refData.connectionTypes}
+              register={connectionForm.register("connectionType") as never}
+              error={connectionForm.formState.errors.connectionType?.message as string}
+            />
             <div className="wlth-actions">
               <button type="submit" className="wlth-btn-primary" disabled={busy}>
                 Finish
@@ -1287,3 +1315,4 @@ export function SignupApp(props: { apiBase: string }) {
     </div>
   );
 }
+

@@ -557,3 +557,342 @@
   font-size: 1rem;
   font-weight: 600;
 }
+
+/* —— Phone compound field —— */
+.wlth-widget .wlth-phone {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 38%) 1fr;
+  gap: 8px;
+  align-items: start;
+}
+
+.wlth-widget .wlth-phone__prefix select,
+.wlth-widget .wlth-phone__number input {
+  margin-bottom: 0;
+}
+
+.wlth-widget .wlth-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* —— Multi-select dropdown —— */
+.wlth-widget .wlth-ms__count {
+  font-size: 12.5px;
+  color: var(--wlth-text-muted);
+  margin: -4px 0 8px;
+}
+
+.wlth-widget .wlth-ms__control {
+  position: relative;
+}
+
+.wlth-widget .wlth-ms__trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  background: #fff;
+  border: 1px solid var(--wlth-border);
+  border-radius: var(--wlth-radius-sm);
+  padding: 11px 12px;
+  font: inherit;
+  font-weight: 400;
+  color: var(--wlth-text);
+  min-height: 44px;
+}
+
+.wlth-widget .wlth-ms__trigger:focus {
+  outline: none;
+  border-color: var(--wlth-border-strong);
+  box-shadow: 0 0 0 3px rgba(10, 10, 10, 0.08);
+}
+
+.wlth-widget .wlth-ms__chevron {
+  opacity: 0.55;
+  font-size: 12px;
+}
+
+.wlth-widget .wlth-ms__list {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: #fff;
+  border: 1px solid var(--wlth-border);
+  border-radius: var(--wlth-radius-sm);
+  box-shadow: var(--wlth-shadow);
+}
+
+.wlth-widget .wlth-ms__option {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font: inherit;
+  font-weight: 400;
+  color: var(--wlth-text);
+  min-height: 44px;
+}
+
+.wlth-widget .wlth-ms__option:hover,
+.wlth-widget .wlth-ms__option:focus {
+  background: var(--wlth-surface);
+}
+
+.wlth-widget .wlth-ms__empty {
+  padding: 12px;
+  font-size: 13px;
+  color: var(--wlth-text-muted);
+}
+
+.wlth-widget .wlth-ms__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.wlth-widget .wlth-ms__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--wlth-surface);
+  border: 1px solid var(--wlth-border);
+  border-radius: 999px;
+  padding: 6px 8px 6px 12px;
+  font-size: 13px;
+}
+
+.wlth-widget .wlth-ms__chip-remove {
+  border: 0;
+  background: transparent;
+  color: var(--wlth-text-muted);
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 6px;
+  min-width: 32px;
+  min-height: 32px;
+  border-radius: 999px;
+}
+
+.wlth-widget .wlth-ms__chip-remove:hover {
+  background: rgba(10, 10, 10, 0.06);
+  color: var(--wlth-text);
+}
+
+/* —— Community intention card —— */
+.wlth-widget .wlth-intention {
+  border: 1px solid var(--wlth-border);
+  border-radius: var(--wlth-radius);
+  background: var(--wlth-surface);
+  padding: 16px 18px;
+  margin: 8px 0 18px;
+}
+
+.wlth-widget .wlth-intention.is-invalid {
+  border-color: var(--wlth-error);
+}
+
+.wlth-widget .wlth-intention__lead {
+  font-size: 14px;
+  color: var(--wlth-text-muted);
+  margin: 0 0 14px;
+}
+
+.wlth-widget .wlth-intention__check {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--wlth-text);
+  line-height: 1.45;
+  margin: 0;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.wlth-widget .wlth-intention__check input {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  margin: 2px 0 0;
+  padding: 0;
+  accent-color: var(--wlth-button);
+}
+
+/* —— Sticky save bar —— */
+.wlth-widget .wlth-form-pad-bottom {
+  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+}
+
+.wlth-widget .wlth-sticky-save {
+  position: sticky;
+  bottom: 0;
+  z-index: 15;
+  margin: 20px -4px -4px;
+  padding: 12px 8px calc(12px + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.92) 28%,
+    #fff 55%
+  );
+  border-top: 1px solid transparent;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.wlth-widget .wlth-sticky-save__status {
+  font-size: 13px;
+  color: var(--wlth-text-muted);
+}
+
+.wlth-widget .wlth-sticky-save__status.is-dirty {
+  color: var(--wlth-text);
+  font-weight: 600;
+}
+
+.wlth-widget .wlth-sticky-save__status.is-saved {
+  color: var(--wlth-success);
+}
+
+/* —— Full-page portal loader (outside .wlth-widget) —— */
+.wlth-page-loader {
+  --wlth-background: #ffffff;
+  --wlth-surface: #f6f5f2;
+  --wlth-text: #0a0a0a;
+  --wlth-text-muted: #5a5a56;
+  --wlth-border: #e2e0d9;
+  --wlth-radius-sm: 8px;
+  --wlth-font: "Helvetica Neue", Helvetica, Arial, ui-sans-serif, system-ui, sans-serif;
+
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  font-family: var(--wlth-font);
+  color: var(--wlth-text);
+  pointer-events: auto;
+}
+
+.wlth-page-loader__panel {
+  width: min(100%, 420px);
+  background: var(--wlth-background);
+  border: 1px solid var(--wlth-border);
+  border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.14);
+  padding: 8px 12px 20px;
+}
+
+.wlth-page-loader .wlth-animated-loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 28px 16px;
+  text-align: center;
+  min-height: 240px;
+}
+
+.wlth-page-loader .wlth-animated-loader__animation {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  max-width: min(72vw, 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wlth-page-loader .wlth-animated-loader__player {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wlth-page-loader .wlth-animated-loader__player > div,
+.wlth-page-loader .wlth-animated-loader__player canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block !important;
+}
+
+.wlth-page-loader .wlth-animated-loader__spinner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.wlth-page-loader .wlth-animated-loader__spinner-ring {
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 3px solid rgba(15, 23, 42, 0.12);
+  border-top-color: rgba(15, 23, 42, 0.55);
+  animation: wlth-loader-spin 0.75s linear infinite;
+}
+
+.wlth-page-loader .wlth-animated-loader__title {
+  margin: 4px 0 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  max-width: 28rem;
+}
+
+.wlth-page-loader .wlth-animated-loader__description {
+  margin: 0;
+  font-size: 14px;
+  color: var(--wlth-text-muted);
+  max-width: 26rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wlth-page-loader .wlth-animated-loader__spinner-ring {
+    animation: none;
+  }
+}
+
+/* Refresh flow progress */
+.wlth-widget .wlth-refresh-steps {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}

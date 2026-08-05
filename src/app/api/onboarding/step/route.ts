@@ -12,6 +12,7 @@ import {
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 import { FormsError } from "@/lib/forms/errors";
 import { enforcePublicWriteRateLimit } from "@/lib/forms/http";
+import { resolveIndustryForWrite } from "@/lib/forms/reference-data";
 
 export const runtime = "nodejs";
 
@@ -102,6 +103,10 @@ function stepDataToAirtablePatch(
         [MEMBER_FIELDS.firstName]: data.firstName,
         [MEMBER_FIELDS.lastName]: data.lastName,
         [MEMBER_FIELDS.email]: data.email,
+        ...(data.phone != null ? { [MEMBER_FIELDS.phone]: data.phone } : {}),
+        ...(data.phonePrefix != null
+          ? { [MEMBER_FIELDS.phonePrefix]: data.phonePrefix }
+          : {}),
       };
     case "LOCATION":
       return {
@@ -110,18 +115,22 @@ function stepDataToAirtablePatch(
         _appCountryCode: data.countryCode,
         [MEMBER_FIELDS.availabilityV2]: data.availability,
       };
-    case "BUSINESS":
+    case "BUSINESS": {
+      const industry = resolveIndustryForWrite(
+        data.primaryIndustry as string | undefined,
+        data.otherIndustry as string | undefined
+      );
       return {
-        [MEMBER_FIELDS.industry]: data.primaryIndustry,
+        ...(industry != null ? { [MEMBER_FIELDS.industry]: industry } : {}),
         [MEMBER_FIELDS.businessStage]: data.businessStage,
         [MEMBER_FIELDS.revenue]: data.annualRevenue,
         [MEMBER_FIELDS.businessDescription]: data.businessDescription,
       };
+    }
     case "PAYMENT_PENDING":
       return {};
     case "PAYMENT_CONFIRMED":
       // Navigation checkpoint only — never accept client-supplied Paid/Active/Stripe IDs.
-      // Authoritative Payment/Membership come from signed Stripe invoice.paid (or MS plan webhook).
       return {};
     case "GOAL":
       return {
@@ -130,18 +139,21 @@ function stepDataToAirtablePatch(
       };
     case "HELP_WANTED":
       return {
-        // Codes not stored — only context column exists on MEMBERS
+        [MEMBER_FIELDS.helpWanted]: Array.isArray(data.helpWanted)
+          ? data.helpWanted
+          : [],
         [MEMBER_FIELDS.helpWantedContext]:
-          data.helpWantedContext ||
-          (Array.isArray(data.helpWanted) ? (data.helpWanted as string[]).join(", ") : ""),
+          typeof data.helpWantedContext === "string" ? data.helpWantedContext : "",
       };
     case "EXPERTISE":
       return {
+        [MEMBER_FIELDS.expertise]: Array.isArray(data.expertiseOffered)
+          ? data.expertiseOffered
+          : Array.isArray(data.expertise)
+            ? data.expertise
+            : [],
         [MEMBER_FIELDS.expertiseContext]:
-          data.expertiseContext ||
-          (Array.isArray(data.expertiseOffered)
-            ? (data.expertiseOffered as string[]).join(", ")
-            : ""),
+          typeof data.expertiseContext === "string" ? data.expertiseContext : "",
       };
     case "CONNECTION":
       return {
