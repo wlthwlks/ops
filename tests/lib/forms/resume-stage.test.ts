@@ -1,5 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { mapResumeStage } from "@/app/api/onboarding/status/route";
+import {
+  mapResumeStage,
+  isExplicitInProgressOnboarding,
+} from "@/app/api/onboarding/status/route";
+
+describe("isExplicitInProgressOnboarding", () => {
+  it("blank and COMPLETE are not mid-signup (legacy / established)", () => {
+    expect(isExplicitInProgressOnboarding("")).toBe(false);
+    expect(isExplicitInProgressOnboarding(null)).toBe(false);
+    expect(isExplicitInProgressOnboarding("COMPLETE")).toBe(false);
+  });
+
+  it("cancelled billing must not matter — only status does", () => {
+    expect(isExplicitInProgressOnboarding("PAYMENT_PENDING")).toBe(true);
+    expect(isExplicitInProgressOnboarding("GOAL")).toBe(true);
+    expect(isExplicitInProgressOnboarding("COMPLETE")).toBe(false);
+  });
+});
 
 describe("mapResumeStage — next step after last completed", () => {
   it("ACCOUNT_CREATED → Location (not Payment)", () => {

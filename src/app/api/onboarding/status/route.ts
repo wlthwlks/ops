@@ -40,21 +40,27 @@ export async function GET(request: Request) {
       throw new FormsError("AIRTABLE_DUPLICATE_MEMBER", "Duplicate Memberstack ID");
     }
     const profile = await recordToProfileDtoResolved(rows[0]);
-    const status = profile.onboardingStatus || "ACCOUNT_CREATED";
+    // Blank status = legacy / pre-widget member — not mid-signup.
+    const status = (profile.onboardingStatus || "").trim();
     // Billing truth: Airtable Payment + Membership only (not onboarding stage alone).
     const paymentConfirmed =
       profile.payment.trim().toLowerCase() === "paid" &&
       profile.membership.trim().toLowerCase() === "active";
-    const resumeStage = mapResumeStage(status, paymentConfirmed);
+    const resumeStage = status
+      ? mapResumeStage(status, paymentConfirmed)
+      : "COMPLETE";
+    const onboardingIncomplete = isExplicitInProgressOnboarding(status);
     return withCors(
       NextResponse.json({
         success: true,
         exists: true,
         memberstackId: member.id,
         airtableRecordId: profile.airtableRecordId,
-        onboardingStatus: status,
+        onboardingStatus: status || null,
         resumeStage,
         paymentConfirmed,
+        /** True only for mid new-widget signup — never for cancelled legacy members. */
+        onboardingIncomplete,
         profile,
       }),
       request
@@ -81,6 +87,29 @@ export async function GET(request: Request) {
       request
     );
   }
+}
+
+const IN_PROGRESS_ONBOARDING = new Set([
+  "ACCOUNT_CREATED",
+  "ACCOUNT",
+  "LOCATION",
+  "BUSINESS",
+  "PAYMENT_PENDING",
+  "PAYMENT_CONFIRMED",
+  "GOAL",
+  "HELP_WANTED",
+  "EXPERTISE",
+  "CONNECTION",
+]);
+
+/**
+ * New signup widget only. Blank / COMPLETE / unknown = not mid-signup.
+ * Cancelled billing must never force this true for established members.
+ */
+export function isExplicitInProgressOnboarding(status: string | null | undefined): boolean {
+  const s = (status || "").trim().toUpperCase();
+  if (!s || s === "COMPLETE") return false;
+  return IN_PROGRESS_ONBOARDING.has(s);
 }
 
 /**

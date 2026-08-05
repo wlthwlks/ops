@@ -32,7 +32,6 @@ import {
 } from "../../shared/widget-schemas";
 import {
   deriveLoginSessionId,
-  isProfileRefreshComplete,
   markProfileRefreshComplete,
   decodeJwtPayload,
 } from "../../shared/session-refresh-gate";
@@ -79,6 +78,26 @@ type RefreshStep =
   | "connection";
 
 const MATCHING_REFRESH_STEPS: RefreshStep[] = ["goal", "help", "expertise", "connection"];
+
+const CLIENT_IN_PROGRESS = new Set([
+  "ACCOUNT_CREATED",
+  "ACCOUNT",
+  "LOCATION",
+  "BUSINESS",
+  "PAYMENT_PENDING",
+  "PAYMENT_CONFIRMED",
+  "GOAL",
+  "HELP_WANTED",
+  "EXPERTISE",
+  "CONNECTION",
+]);
+
+/** Mirror server: blank/COMPLETE = established member (not mid-signup). */
+function isClientInProgressOnboarding(status: string): boolean {
+  const s = (status || "").trim().toUpperCase();
+  if (!s || s === "COMPLETE") return false;
+  return CLIENT_IN_PROGRESS.has(s);
+}
 
 /** resumeStage from API is already the *next* step to show. */
 function resumeStageToRefreshStep(
@@ -293,30 +312,22 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           onboardingStatus?: string | null;
           resumeStage?: string;
           paymentConfirmed?: boolean;
+          onboardingIncomplete?: boolean;
         };
-        const onboardingStatus = String(status.onboardingStatus || "");
+        const onboardingStatus = String(status.onboardingStatus || "").trim();
         const paidOk = Boolean(status.paymentConfirmed);
         setPaymentConfirmed(paidOk);
-        const memberExists = status.exists !== false;
-        const incomplete =
-          memberExists &&
-          onboardingStatus !== "COMPLETE" &&
-          onboardingStatus !== "";
-        // Also treat missing/blank status with unpaid membership as incomplete
-        const billSnap = (bill.billing || {}) as {
-          membership?: string;
-          payment?: string;
-          hasPaymentMethod?: boolean;
-        };
-        const mem = (billSnap.membership || "").toLowerCase();
-        const pay = (billSnap.payment || "").toLowerCase();
-        const looksIncomplete =
-          incomplete ||
-          mem === "pending payment" ||
-          pay === "unpaid" ||
-          pay === "failed" ||
-          (onboardingStatus !== "COMPLETE" && !paidOk);
-        setOnboardingIncomplete(looksIncomplete);
+
+        /**
+         * Progressive signup flow ONLY for mid new-widget onboarding.
+         * Never use billing (cancelled / unpaid) to force matching for
+         * legacy or already-complete members — they get the normal form
+         * + Reactivate membership.
+         */
+        const midSignup =
+          status.onboardingIncomplete === true ||
+          isClientInProgressOnboarding(onboardingStatus);
+        setOnboardingIncomplete(midSignup);
 
         const cityUnavailable = Boolean(p.previousCityUnavailable);
         setPreviousCityUnavailable(cityUnavailable);
@@ -373,12 +384,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         });
         refreshConnection.reset({ connectionType: defaults.connectionType || "" });
 
-        const sessionDone =
-          mid && sid ? isProfileRefreshComplete({ memberId: mid, sessionId: sid }) : false;
-
-        // Incomplete onboarding always continues until COMPLETE (resumable).
-        // Complete members get a once-per-login soft refresh only.
-        if (looksIncomplete) {
+        // Mid new-widget signup only — cancelled legacy members skip straight to full form.
+        if (midSignup) {
           setNeedsRefresh(true);
           const resume = resumeStageToRefreshStep(
             String(status.resumeStage || "LOCATION"),
@@ -386,8 +393,12 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           );
           setRefreshStep(resume === "done" ? "location" : resume);
         } else {
-          setNeedsRefresh(!sessionDone);
+          setNeedsRefresh(false);
           setRefreshStep("location");
+          // Established members: remember session so we don't re-prompt soft refresh
+          if (mid && sid) {
+            markProfileRefreshComplete({ memberId: mid, sessionId: sid });
+          }
         }
 
         setBilling(
@@ -431,21 +442,12 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     return false;
   }, [billing]);
 
-  /**
-   * Payment step when membership is not Paid+Active.
-   * Soft session refresh for already-complete members skips payment.
-   */
+  /** Payment inside progressive flow only for mid-signup who are not yet Paid+Active. */
   const refreshNeedsPaymentStep = useMemo(() => {
+    if (!onboardingIncomplete) return false;
     if (paymentConfirmed) return false;
-    if (onboardingIncomplete) return true;
-    if (!needsReactivation) return false;
-    return !billing?.hasPaymentMethod;
-  }, [
-    paymentConfirmed,
-    onboardingIncomplete,
-    needsReactivation,
-    billing?.hasPaymentMethod,
-  ]);
+    return true;
+  }, [onboardingIncomplete, paymentConfirmed]);
 
   /** Top-level dots: Location → Business → [Payment] → Matching */
   const refreshTopPhases = useMemo(() => {
