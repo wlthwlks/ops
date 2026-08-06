@@ -63,6 +63,8 @@ export async function POST(request: Request) {
         stripeCustomerLinked: Boolean(result.stripeCustomerId),
         reason: result.reason,
         shadowed: result.shadowed || false,
+        qualificationMode: result.qualificationMode || null,
+        ownershipMethod: result.ownershipMethod || null,
       }),
       request
     );

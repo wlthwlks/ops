@@ -72,7 +72,14 @@ export async function POST(request: NextRequest) {
   // —— Existing production path: invoice.paid (always on) ——
   if (event.type === "invoice.paid") {
     try {
-      if (!hasNativeStripeMembershipPrices()) {
+      // Production (VERCEL_ENV=production): require native price_ allowlist.
+      // Preview may use Memberstack prc_-only — still process if we can match
+      // via commerce preview rules in paidThroughFromInvoiceLines / qualifying helpers.
+      const vercelEnv = (process.env.VERCEL_ENV || "").trim();
+      const isVercelProduction = vercelEnv === "production";
+      const hasNative = hasNativeStripeMembershipPrices();
+
+      if (isVercelProduction && !hasNative) {
         await recordIntegrationError({
           code: "STRIPE_MEMBERSHIP_PRICE_IDS_MISSING",
           source: "stripe_webhook",
@@ -93,10 +100,31 @@ export async function POST(request: NextRequest) {
           reason: "STRIPE_MEMBERSHIP_PRICE_IDS must include at least one price_… id",
         });
       }
-      const membershipPriceIds = getStripeNativeMembershipPriceIds({
-        requireConfigured: true,
-        failClosedInProduction: true,
-      });
+
+      // Prefer native allowlist; empty on preview → use empty set and rely on
+      // preview recovery only in confirm-checkout (webhook stays strict on prices).
+      let membershipPriceIds: Set<string>;
+      try {
+        membershipPriceIds = getStripeNativeMembershipPriceIds({
+          requireConfigured: isVercelProduction,
+          failClosedInProduction: isVercelProduction,
+        });
+      } catch {
+        membershipPriceIds = new Set();
+      }
+
+      // Preview with prc-only: do not process invoice.paid as membership
+      // (confirm-checkout handles signup return). Avoid marking random invoices Paid.
+      if (!isVercelProduction && membershipPriceIds.size === 0) {
+        return NextResponse.json({
+          received: true,
+          processed: false,
+          status: "ignored",
+          reason:
+            "Preview has no native price_ allowlist; invoice.paid ignored (confirm-checkout handles checkout return)",
+        });
+      }
+
       const stripe = getStripeClient();
 
       const invoiceFromEvent = event.data.object as Stripe.Invoice;

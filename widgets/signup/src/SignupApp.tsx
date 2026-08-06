@@ -289,12 +289,27 @@ export function SignupApp(props: { apiBase: string }) {
       params.get("cs_id") ||
       "";
 
+    let lastConfirmReason = "";
+    let lastConfirmStatus = "";
     try {
-      await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+      const conf = await api(props.apiBase, "/api/onboarding/confirm-checkout", {
         method: "POST",
         token: accessToken,
         body: JSON.stringify(sessionId ? { sessionId } : {}),
       });
+      if (conf.paymentConfirmed) {
+        clearPaymentQueryParam();
+        clearCheckoutFlags();
+        clearAwaitingPostPaymentMatching();
+        await new Promise((r) => setTimeout(r, 700));
+        markPreGoalComplete(stepper);
+        await stepper.goTo("goal");
+        setAsyncState({ kind: "idle" });
+        scrollSignupToTop();
+        return;
+      }
+      lastConfirmReason = String(conf.reason || "");
+      lastConfirmStatus = String(conf.status || "");
     } catch {
       /* continue to poll */
     }
@@ -306,11 +321,17 @@ export function SignupApp(props: { apiBase: string }) {
       if (!mountedRef.current) return;
       try {
         if (i > 0 && i % 3 === 0) {
-          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+          const conf = await api(props.apiBase, "/api/onboarding/confirm-checkout", {
             method: "POST",
             token: accessToken,
             body: JSON.stringify(sessionId ? { sessionId } : {}),
-          }).catch(() => undefined);
+          }).catch(() => null);
+          if (conf?.paymentConfirmed) {
+            confirmed = true;
+            break;
+          }
+          if (conf?.reason) lastConfirmReason = String(conf.reason);
+          if (conf?.status) lastConfirmStatus = String(conf.status);
         }
         const st = await api(props.apiBase, "/api/onboarding/payment-status", {
           token: accessToken,
@@ -337,10 +358,21 @@ export function SignupApp(props: { apiBase: string }) {
       setAsyncState({ kind: "idle" });
       scrollSignupToTop();
     } else {
-      // Keep post-checkout flag so a refresh can still open Matching once Paid lands
       setAsyncState({ kind: "idle" });
+      const configHint =
+        lastConfirmStatus === "membership_price_config_missing"
+          ? " Membership price configuration is incomplete — contact support if this continues."
+          : lastConfirmStatus === "stripe_customer_ambiguous"
+            ? " We found multiple billing profiles for this email — contact support."
+            : lastConfirmStatus === "session_ownership_mismatch" ||
+                lastConfirmStatus === "stripe_customer_conflict"
+              ? " We couldn’t securely match this checkout to your account — contact support."
+              : "";
       setError(
-        "We’re still confirming your payment with Stripe. Your progress is saved — refresh this page in a moment, or continue when you’re ready."
+        (lastConfirmReason && lastConfirmReason.length < 180
+          ? lastConfirmReason
+          : "We’re still confirming your payment with Stripe. Your progress is saved — refresh this page in a moment, or continue when you’re ready.") +
+          configHint
       );
       await stepper.goTo("payment");
       scrollSignupToTop();

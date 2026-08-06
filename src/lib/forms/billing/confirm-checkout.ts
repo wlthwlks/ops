@@ -1,13 +1,15 @@
 /**
  * Trusted post-checkout confirmation.
- * Verifies payment with Stripe, proves session ownership, requires native membership price.
+ *
+ * Production: require native Stripe price_… allowlist + proven ownership.
+ * Preview (Memberstack prc_-only config): owned customer + proven paid membership
+ *   (active subscription or paid checkout) — never trust arbitrary session IDs alone.
  */
 import type Stripe from "stripe";
 import {
   getStripeClient,
   getConfiguredMemberstackPlanId,
-  getStripeNativeMembershipPriceIds,
-  hasNativeStripeMembershipPrices,
+  parseMembershipPriceConfig,
 } from "@/lib/integrations/stripe";
 import {
   applyTrustedPaymentByMemberstackId,
@@ -29,6 +31,25 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/**
+ * Prefer VERCEL_ENV when set (preview builds still have NODE_ENV=production).
+ * Local: fall back to NODE_ENV.
+ */
+export function isProductionBillingEnv(): boolean {
+  const vercel = (process.env.VERCEL_ENV || "").trim();
+  if (vercel) return vercel === "production";
+  return process.env.NODE_ENV === "production";
+}
+
+/** Preview / dev may run with only Memberstack prc_… configured. */
+export function allowsMemberstackCommercePreviewQualification(): boolean {
+  if (isProductionBillingEnv()) return false;
+  const cfg = parseMembershipPriceConfig();
+  return (
+    cfg.nativeStripePriceIds.length === 0 && cfg.memberstackCommerceIds.length > 0
+  );
+}
+
 export function extractStripeCustomerIdFromMemberstackRaw(
   raw: Record<string, unknown>
 ): string {
@@ -40,11 +61,40 @@ export function extractStripeCustomerIdFromMemberstackRaw(
     isRecord(raw.billing) ? raw.billing.stripeCustomerId : null,
     isRecord(raw.billing) ? raw.billing.customerId : null,
     isRecord(raw.data) ? (raw.data as Record<string, unknown>).stripeCustomerId : null,
+    isRecord(raw.data) && isRecord((raw.data as Record<string, unknown>).stripe)
+      ? ((raw.data as Record<string, unknown>).stripe as Record<string, unknown>)
+          .customerId
+      : null,
   ];
+
+  // Nested plan connections (Memberstack shapes vary)
+  const dig = (obj: unknown, depth = 0): string => {
+    if (depth > 4 || obj == null) return "";
+    if (typeof obj === "string" && obj.trim().startsWith("cus_")) return obj.trim();
+    if (!isRecord(obj)) return "";
+    for (const [k, v] of Object.entries(obj)) {
+      if (/stripe.*customer|customer.*id/i.test(k) && typeof v === "string") {
+        const t = v.trim();
+        if (t.startsWith("cus_")) return t;
+      }
+      if (isRecord(v) || Array.isArray(v)) {
+        const found = dig(v, depth + 1);
+        if (found) return found;
+      }
+      if (Array.isArray(v)) {
+        for (const item of v) {
+          const found = dig(item, depth + 1);
+          if (found) return found;
+        }
+      }
+    }
+    return "";
+  };
+
   for (const c of candidates) {
     if (typeof c === "string" && c.trim().startsWith("cus_")) return c.trim();
   }
-  return "";
+  return dig(raw);
 }
 
 export function sessionCustomerId(session: Stripe.Checkout.Session): string {
@@ -76,16 +126,21 @@ export function extractSessionLinePriceIds(session: Stripe.Checkout.Session): st
   return dedupePriceIds(ids);
 }
 
+export type OwnershipResult =
+  | { ok: true; method: string }
+  | { ok: false; hard: boolean; reason: string; status: string };
+
 /**
  * Prove the Checkout Session belongs to this Memberstack member.
- * Order: client_reference_id → metadata.memberstackId → Airtable cus_ → Memberstack Admin cus_.
+ * hard=true → reject (wrong member / customer conflict).
+ * hard=false → soft unproven; caller may fall through to recovery.
  */
 export function verifyCheckoutSessionOwnership(input: {
   memberstackId: string;
   session: Stripe.Checkout.Session;
   existingAirtableStripeCustomerId?: string;
   memberstackAdminStripeCustomerId?: string;
-}): { ok: true; method: string } | { ok: false; reason: string; status: string } {
+}): OwnershipResult {
   const msId = input.memberstackId.trim();
   const session = input.session;
   const sessionCus = sessionCustomerId(session);
@@ -95,6 +150,7 @@ export function verifyCheckoutSessionOwnership(input: {
     if (ref === msId) return { ok: true, method: "client_reference_id" };
     return {
       ok: false,
+      hard: true,
       status: "session_ownership_mismatch",
       reason: "Checkout Session client_reference_id does not match authenticated member",
     };
@@ -106,6 +162,7 @@ export function verifyCheckoutSessionOwnership(input: {
     if (metaMs === msId) return { ok: true, method: "metadata.memberstackId" };
     return {
       ok: false,
+      hard: true,
       status: "session_ownership_mismatch",
       reason: "Checkout Session metadata memberstackId does not match authenticated member",
     };
@@ -116,6 +173,7 @@ export function verifyCheckoutSessionOwnership(input: {
     if (airtableCus === sessionCus) return { ok: true, method: "airtable_stripe_customer_id" };
     return {
       ok: false,
+      hard: true,
       status: "stripe_customer_conflict",
       reason: "Checkout Session customer conflicts with Stripe Customer ID already on this member",
     };
@@ -126,6 +184,7 @@ export function verifyCheckoutSessionOwnership(input: {
     if (adminCus === sessionCus) return { ok: true, method: "memberstack_admin_customer" };
     return {
       ok: false,
+      hard: true,
       status: "session_ownership_mismatch",
       reason: "Checkout Session customer does not match Memberstack-linked Stripe customer",
     };
@@ -133,6 +192,7 @@ export function verifyCheckoutSessionOwnership(input: {
 
   return {
     ok: false,
+    hard: false,
     status: "session_ownership_unproven",
     reason:
       "Cannot prove Checkout Session belongs to this member (missing client_reference_id, metadata, or matching Stripe Customer ID)",
@@ -155,6 +215,57 @@ export function filterNativeQualifyingPrices(
   return dedupePriceIds(priceIds.filter((id) => nativeAllow.has(id)));
 }
 
+/**
+ * Price gate:
+ * - native allowlist non-empty → must match
+ * - preview Memberstack-only → any price_ on a proven-paid object is enough
+ * - production with empty native → fail
+ */
+export function passesPriceGate(input: {
+  priceIds: string[];
+  nativeAllow: Set<string>;
+  previewCommerceMode: boolean;
+}): { ok: boolean; qualifying: string[]; mode: string; reason?: string } {
+  const prices = dedupePriceIds(input.priceIds.filter((id) => id.startsWith("price_")));
+
+  if (input.nativeAllow.size > 0) {
+    const qualifying = filterNativeQualifyingPrices(prices, input.nativeAllow);
+    if (qualifying.length === 0) {
+      return {
+        ok: false,
+        qualifying: [],
+        mode: "native_allowlist",
+        reason: "No approved native Stripe membership Price ID on payment",
+      };
+    }
+    return { ok: true, qualifying, mode: "native_allowlist" };
+  }
+
+  if (input.previewCommerceMode) {
+    if (prices.length === 0) {
+      return {
+        ok: false,
+        qualifying: [],
+        mode: "memberstack_commerce_preview",
+        reason: "Paid membership has no Stripe price_ line items",
+      };
+    }
+    return {
+      ok: true,
+      qualifying: prices,
+      mode: "memberstack_commerce_preview",
+    };
+  }
+
+  return {
+    ok: false,
+    qualifying: [],
+    mode: "fail_closed",
+    reason:
+      "No native Stripe membership Price IDs (price_…) configured. Set STRIPE_MEMBERSHIP_PRICE_IDS.",
+  };
+}
+
 async function loadSubscriptionBilling(
   stripe: Stripe,
   subscriptionId: string
@@ -168,12 +279,65 @@ async function loadSubscriptionBilling(
   return { status: sub.status, priceIds };
 }
 
+async function listSessionPriceIds(
+  stripe: Stripe,
+  sessionId: string,
+  session: Stripe.Checkout.Session
+): Promise<string[]> {
+  let ids = extractSessionLinePriceIds(session);
+  if (ids.length > 0) return ids;
+  try {
+    const lines = await stripe.checkout.sessions.listLineItems(sessionId, {
+      limit: 20,
+      expand: ["data.price"],
+    });
+    for (const li of lines.data) {
+      const p = li.price;
+      if (p && typeof p === "object" && typeof p.id === "string" && p.id.startsWith("price_")) {
+        ids.push(p.id);
+      }
+    }
+  } catch {
+    /* keep empty */
+  }
+  return dedupePriceIds(ids);
+}
+
+/** Resolve exactly one Stripe customer for email, or ambiguity. */
+async function resolveUniqueCustomerByEmail(
+  stripe: Stripe,
+  email: string
+): Promise<
+  | { ok: true; customerId: string }
+  | { ok: false; status: "stripe_customer_ambiguous" | "none"; reason: string }
+> {
+  const list = await stripe.customers.list({
+    email: email.toLowerCase(),
+    limit: 10,
+  });
+  const customers = list.data.filter((c) => c.id.startsWith("cus_"));
+  if (customers.length > 1) {
+    return {
+      ok: false,
+      status: "stripe_customer_ambiguous",
+      reason:
+        "Multiple Stripe customers share this email. Link an exact Stripe Customer ID before confirming.",
+    };
+  }
+  if (customers.length === 1) {
+    return { ok: true, customerId: customers[0].id };
+  }
+  return { ok: false, status: "none", reason: "No Stripe customer for email" };
+}
+
 export type ConfirmCheckoutResult = {
   paymentConfirmed: boolean;
   status: string;
   stripeCustomerId: string;
   reason: string;
   shadowed?: boolean;
+  qualificationMode?: string;
+  ownershipMethod?: string;
 };
 
 export async function confirmCheckoutForMember(input: {
@@ -195,16 +359,17 @@ export async function confirmCheckoutForMember(input: {
     const pay = String(f[MEMBER_FIELDS.payment] || "").toLowerCase();
     const mem = String(f[MEMBER_FIELDS.membership] || "").toLowerCase();
     const cus = String(f[MEMBER_FIELDS.stripeCustomerId] || "").trim();
-    const hasPrice = String(f[MEMBER_FIELDS.stripePriceId] || "").startsWith("price_");
+    const hasPrice =
+      String(f[MEMBER_FIELDS.stripePriceId] || "").startsWith("price_") ||
+      String(f[MEMBER_FIELDS.stripePriceId] || "").startsWith("prc_");
     const hasStatus = Boolean(String(f[MEMBER_FIELDS.stripeSubscriptionStatus] || "").trim());
     const hasMsPlan = Boolean(String(f[MEMBER_FIELDS.memberstackPlanId] || "").trim());
     if (
       pay === "paid" &&
       mem === "active" &&
       cus.startsWith("cus_") &&
-      hasPrice &&
-      hasStatus &&
-      hasMsPlan
+      (hasPrice || hasMsPlan) &&
+      hasStatus
     ) {
       return {
         paymentConfirmed: true,
@@ -224,16 +389,23 @@ export async function confirmCheckoutForMember(input: {
     : "";
 
   const nativeAllow = resolveNativeMembershipAllowlist();
-  if (
-    (process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production") &&
-    nativeAllow.size === 0
-  ) {
+  const previewCommerceMode = allowsMemberstackCommercePreviewQualification();
+
+  if (isProductionBillingEnv() && nativeAllow.size === 0) {
+    console.error(
+      JSON.stringify({
+        event: "confirm_checkout_config",
+        status: "membership_price_config_missing",
+        nativeAllowCount: 0,
+      })
+    );
     return {
       paymentConfirmed: false,
       status: "membership_price_config_missing",
       stripeCustomerId: "",
       reason:
         "No native Stripe membership Price IDs (price_…) configured. Set STRIPE_MEMBERSHIP_PRICE_IDS.",
+      qualificationMode: "fail_closed",
     };
   }
 
@@ -244,14 +416,15 @@ export async function confirmCheckoutForMember(input: {
   let priceIds: string[] = [];
   let paidThrough: Date | null = null;
   let verifiedPaid = false;
-  let usedCheckoutSession = false;
+  let ownershipMethod = "";
+  let qualificationMode = "";
 
-  // 1) Checkout session path — strict ownership + paid + price
   const sessionId = (input.checkoutSessionId || "").trim();
+
+  // —— 1) Optional Checkout Session path ——
   if (sessionId.startsWith("cs_")) {
-    usedCheckoutSession = true;
     const session = await stripe.checkout.sessions.retrieve(sessionId, {
-      expand: ["line_items.data.price", "subscription"],
+      expand: ["line_items.data.price", "subscription", "customer"],
     });
 
     if (!isCheckoutSessionPaid(session)) {
@@ -269,7 +442,16 @@ export async function confirmCheckoutForMember(input: {
       existingAirtableStripeCustomerId: existingAirtableCus,
       memberstackAdminStripeCustomerId: memberstackAdminCus,
     });
-    if (!ownership.ok) {
+
+    if (ownership.ok === false && ownership.hard) {
+      console.error(
+        JSON.stringify({
+          event: "confirm_checkout_ownership",
+          status: ownership.status,
+          hard: true,
+          hasSessionId: true,
+        })
+      );
       return {
         paymentConfirmed: false,
         status: ownership.status,
@@ -278,76 +460,108 @@ export async function confirmCheckoutForMember(input: {
       };
     }
 
-    stripeCustomerId = sessionCustomerId(session);
-    subscriptionId = sessionSubscriptionId(session);
-    priceIds = filterNativeQualifyingPrices(extractSessionLinePriceIds(session), nativeAllow);
+    const sessionCus = sessionCustomerId(session);
+    let sessionOwned = ownership.ok === true;
 
-    if (priceIds.length === 0 && subscriptionId) {
-      try {
-        const live = await loadSubscriptionBilling(stripe, subscriptionId);
-        priceIds = filterNativeQualifyingPrices(live.priceIds, nativeAllow);
-        subscriptionStatus = live.status;
-      } catch {
-        /* keep */
-      }
-    }
-
-    if (priceIds.length === 0) {
-      return {
-        paymentConfirmed: false,
-        status: "session_price_not_membership",
-        stripeCustomerId: "",
-        reason: "Checkout Session has no approved WLTH membership Stripe Price ID",
-      };
-    }
-
-    if (
-      existingAirtableCus.startsWith("cus_") &&
-      stripeCustomerId &&
-      existingAirtableCus !== stripeCustomerId
-    ) {
-      return {
-        paymentConfirmed: false,
-        status: "stripe_customer_conflict",
-        stripeCustomerId: "",
-        reason: "Session Stripe Customer ID conflicts with the member’s stored customer",
-      };
-    }
-
-    verifiedPaid = true;
-  }
-
-  // 2–4) No session id: recover via Memberstack Admin / Airtable / guarded email
-  if (!usedCheckoutSession) {
-    if (!stripeCustomerId && memberstackAdminCus.startsWith("cus_")) {
-      stripeCustomerId = memberstackAdminCus;
-    }
-    if (!stripeCustomerId && existingAirtableCus.startsWith("cus_")) {
-      stripeCustomerId = existingAirtableCus;
-    }
-
-    // Email fallback only when no stronger id — exactly one Stripe customer
-    if (!stripeCustomerId && input.memberEmail) {
-      const list = await stripe.customers.list({
-        email: input.memberEmail.toLowerCase(),
-        limit: 10,
-      });
-      const customers = list.data.filter((c) => c.id.startsWith("cus_"));
-      if (customers.length > 1) {
+    // Soft unproven: prove via unique email customer matching session customer
+    if (!sessionOwned && sessionCus && input.memberEmail) {
+      const byEmail = await resolveUniqueCustomerByEmail(stripe, input.memberEmail);
+      if (byEmail.ok && byEmail.customerId === sessionCus) {
+        sessionOwned = true;
+        ownershipMethod = "session_customer_unique_email";
+      } else if (!byEmail.ok && byEmail.status === "stripe_customer_ambiguous") {
         return {
           paymentConfirmed: false,
           status: "stripe_customer_ambiguous",
           stripeCustomerId: "",
-          reason:
-            "Multiple Stripe customers share this email. Link an exact Stripe Customer ID before confirming.",
+          reason: byEmail.reason,
         };
       }
-      if (customers.length === 1) {
-        stripeCustomerId = customers[0].id;
+    }
+
+    // Soft unproven: MS admin or airtable already set above; if still unproven, fall through
+    if (sessionOwned || ownership.ok) {
+      ownershipMethod =
+        ownershipMethod || (ownership.ok ? ownership.method : ownershipMethod);
+      stripeCustomerId = sessionCus;
+      subscriptionId = sessionSubscriptionId(session);
+      priceIds = await listSessionPriceIds(stripe, sessionId, session);
+
+      if (priceIds.length === 0 && subscriptionId) {
+        try {
+          const live = await loadSubscriptionBilling(stripe, subscriptionId);
+          priceIds = live.priceIds;
+          subscriptionStatus = live.status;
+        } catch {
+          /* keep */
+        }
+      }
+
+      const gate = passesPriceGate({
+        priceIds,
+        nativeAllow,
+        previewCommerceMode,
+      });
+      qualificationMode = gate.mode;
+
+      if (!gate.ok) {
+        // Fall through to owned-customer recovery (webhook may still catch invoice)
+        console.error(
+          JSON.stringify({
+            event: "confirm_checkout_session_price_gate",
+            status: "session_price_not_membership",
+            qualificationMode: gate.mode,
+            priceCount: priceIds.length,
+            nativeAllowCount: nativeAllow.size,
+          })
+        );
+      } else {
+        priceIds = gate.qualifying;
+        verifiedPaid = true;
+      }
+    } else {
+      // Soft unproven — do not trust session customer alone; recover below
+      console.error(
+        JSON.stringify({
+          event: "confirm_checkout_ownership",
+          status: "session_ownership_unproven",
+          hard: false,
+          hasSessionId: true,
+          fallingThrough: true,
+        })
+      );
+    }
+  }
+
+  // —— 2) Owned-customer recovery (no session, or session soft-fail / price gate fail) ——
+  if (!verifiedPaid) {
+    if (!stripeCustomerId && memberstackAdminCus.startsWith("cus_")) {
+      stripeCustomerId = memberstackAdminCus;
+      ownershipMethod = ownershipMethod || "memberstack_admin_customer";
+    }
+    if (!stripeCustomerId && existingAirtableCus.startsWith("cus_")) {
+      stripeCustomerId = existingAirtableCus;
+      ownershipMethod = ownershipMethod || "airtable_stripe_customer_id";
+    }
+
+    if (!stripeCustomerId && input.memberEmail) {
+      const byEmail = await resolveUniqueCustomerByEmail(stripe, input.memberEmail);
+      if (!byEmail.ok && byEmail.status === "stripe_customer_ambiguous") {
+        return {
+          paymentConfirmed: false,
+          status: "stripe_customer_ambiguous",
+          stripeCustomerId: "",
+          reason: byEmail.reason,
+        };
+      }
+      if (byEmail.ok) {
+        stripeCustomerId = byEmail.customerId;
+        ownershipMethod = ownershipMethod || "unique_email_customer";
       }
     }
 
     if (stripeCustomerId) {
+      // Paid invoices with qualifying prices
       const invoices = await stripe.invoices.list({
         customer: stripeCustomerId,
         status: "paid",
@@ -356,38 +570,79 @@ export async function confirmCheckoutForMember(input: {
       for (const inv of invoices.data) {
         if (!inv.id) continue;
         const lines = await listAllInvoiceLines(stripe, inv.id);
-        const through = paidThroughFromInvoiceLines(lines, nativeAllow);
-        if (through) {
+
+        const rawPrices: string[] = [];
+        for (const line of lines) {
+          const pricing = line.pricing as
+            | { price_details?: { price?: string | { id?: string } } }
+            | undefined;
+          const pd = pricing?.price_details?.price;
+          if (typeof pd === "string" && pd.startsWith("price_")) rawPrices.push(pd);
+          else if (pd && typeof pd === "object" && typeof pd.id === "string") {
+            rawPrices.push(pd.id);
+          }
+          const legacy = line as unknown as { price?: { id?: string } };
+          if (legacy.price?.id?.startsWith("price_")) rawPrices.push(legacy.price.id);
+        }
+
+        const gate = passesPriceGate({
+          priceIds: rawPrices,
+          nativeAllow,
+          previewCommerceMode,
+        });
+        if (!gate.ok) continue;
+
+        if (nativeAllow.size > 0) {
+          const through = paidThroughFromInvoiceLines(lines, nativeAllow);
+          const q = getQualifyingMembershipPriceIds(lines, nativeAllow);
+          if (through && q.length > 0) {
+            verifiedPaid = true;
+            paidThrough = through;
+            priceIds = q;
+            qualificationMode = "native_allowlist";
+            break;
+          }
+        } else if (previewCommerceMode) {
+          let maxEnd: number | null = null;
+          for (const line of lines) {
+            const end = line.period?.end;
+            if (typeof end === "number" && (maxEnd == null || end > maxEnd)) {
+              maxEnd = end;
+            }
+          }
+          if (maxEnd != null) paidThrough = new Date(maxEnd * 1000);
           verifiedPaid = true;
-          paidThrough = through;
-          priceIds = getQualifyingMembershipPriceIds(lines, nativeAllow);
+          priceIds = gate.qualifying;
+          qualificationMode = gate.mode;
           break;
         }
       }
-    }
 
-    if (stripeCustomerId && (!subscriptionId || priceIds.length === 0 || !verifiedPaid)) {
-      const subs = await stripe.subscriptions.list({
-        customer: stripeCustomerId,
-        status: "all",
-        limit: 10,
-      });
-      const pick =
-        subs.data.find((s) => ["active", "trialing", "past_due"].includes(s.status)) ||
-        null;
-      if (pick) {
-        subscriptionId = subscriptionId || pick.id;
-        subscriptionStatus = pick.status;
-        const subPrices = filterNativeQualifyingPrices(
-          pick.items.data
+      // Active subscription
+      if (!verifiedPaid || priceIds.length === 0) {
+        const subs = await stripe.subscriptions.list({
+          customer: stripeCustomerId,
+          status: "all",
+          limit: 10,
+        });
+        const pick =
+          subs.data.find((s) => ["active", "trialing", "past_due"].includes(s.status)) ||
+          null;
+        if (pick) {
+          subscriptionId = subscriptionId || pick.id;
+          subscriptionStatus = pick.status;
+          const subPrices = pick.items.data
             .map((it) => it.price?.id)
-            .filter((id): id is string => Boolean(id) && id.startsWith("price_")),
-          nativeAllow
-        );
-        if (subPrices.length > 0) {
-          priceIds = dedupePriceIds([...priceIds, ...subPrices]);
-          if (["active", "trialing", "past_due"].includes(pick.status)) {
+            .filter((id): id is string => Boolean(id) && id.startsWith("price_"));
+          const gate = passesPriceGate({
+            priceIds: subPrices,
+            nativeAllow,
+            previewCommerceMode,
+          });
+          if (gate.ok && ["active", "trialing", "past_due"].includes(pick.status)) {
             verifiedPaid = true;
+            priceIds = dedupePriceIds([...priceIds, ...gate.qualifying]);
+            qualificationMode = gate.mode;
           }
         }
       }
@@ -397,28 +652,58 @@ export async function confirmCheckoutForMember(input: {
   if (subscriptionId) {
     try {
       const live = await loadSubscriptionBilling(stripe, subscriptionId);
-      subscriptionStatus = live.status;
-      const liveQualifying = filterNativeQualifyingPrices(live.priceIds, nativeAllow);
-      if (liveQualifying.length > 0) {
-        priceIds = dedupePriceIds([...priceIds, ...liveQualifying]);
-      }
-      if (["active", "trialing", "past_due"].includes(live.status) && priceIds.length > 0) {
-        verifiedPaid = true;
+      subscriptionStatus = live.status || subscriptionStatus;
+      if (live.priceIds.length > 0) {
+        const gate = passesPriceGate({
+          priceIds: live.priceIds,
+          nativeAllow,
+          previewCommerceMode,
+        });
+        if (gate.ok) {
+          priceIds = dedupePriceIds([...priceIds, ...gate.qualifying]);
+          qualificationMode = qualificationMode || gate.mode;
+          if (["active", "trialing", "past_due"].includes(live.status)) {
+            verifiedPaid = true;
+          }
+        }
       }
     } catch {
       /* keep prior */
     }
   }
 
-  // Final price gate for all paths
-  priceIds = filterNativeQualifyingPrices(priceIds, nativeAllow);
-  if (verifiedPaid && priceIds.length === 0) {
-    return {
-      paymentConfirmed: false,
-      status: "session_price_not_membership",
-      stripeCustomerId: "",
-      reason: "No approved native Stripe membership Price ID on payment",
-    };
+  // Final gate
+  if (verifiedPaid) {
+    const gate = passesPriceGate({
+      priceIds,
+      nativeAllow,
+      previewCommerceMode,
+    });
+    qualificationMode = gate.mode;
+    if (!gate.ok) {
+      console.error(
+        JSON.stringify({
+          event: "confirm_checkout_final_gate",
+          status: gate.mode === "fail_closed" ? "membership_price_config_missing" : "session_price_not_membership",
+          qualificationMode: gate.mode,
+          ownershipMethod: ownershipMethod || null,
+          nativeAllowCount: nativeAllow.size,
+          priceCount: priceIds.length,
+        })
+      );
+      return {
+        paymentConfirmed: false,
+        status:
+          gate.mode === "fail_closed"
+            ? "membership_price_config_missing"
+            : "session_price_not_membership",
+        stripeCustomerId: "",
+        reason: gate.reason || "Price gate failed",
+        qualificationMode: gate.mode,
+        ownershipMethod: ownershipMethod || undefined,
+      };
+    }
+    priceIds = gate.qualifying;
   }
 
   if (!stripeCustomerId) {
@@ -428,22 +713,23 @@ export async function confirmCheckoutForMember(input: {
       stripeCustomerId: "",
       reason:
         "Could not resolve Stripe Customer ID. Ensure checkout completed and Memberstack is linked to Stripe.",
+      ownershipMethod: ownershipMethod || undefined,
+      qualificationMode: qualificationMode || undefined,
     };
   }
 
   if (!verifiedPaid) {
-    // Only link customer when ownership was already established without marking Paid
-    if (!usedCheckoutSession) {
-      await linkStripeCustomerIdByMemberstackId({
-        memberstackId: msId,
-        stripeCustomerId,
-      }).catch(() => undefined);
-    }
+    await linkStripeCustomerIdByMemberstackId({
+      memberstackId: msId,
+      stripeCustomerId,
+    }).catch(() => undefined);
     return {
       paymentConfirmed: false,
       status: "customer_linked_payment_pending",
       stripeCustomerId,
       reason: "Linked Stripe Customer ID; waiting for paid membership. Retry in a moment.",
+      ownershipMethod: ownershipMethod || undefined,
+      qualificationMode: qualificationMode || undefined,
     };
   }
 
@@ -464,9 +750,16 @@ export async function confirmCheckoutForMember(input: {
 
   if (primaryPriceId) {
     patch[MEMBER_FIELDS.stripePriceId] = primaryPriceId;
-    patch["Paid Plans (price ids)"] = formatPaidPlansText(
-      dedupePriceIds([primaryPriceId, ...priceIds])
-    );
+    const paidPlans = dedupePriceIds([
+      ...priceIds,
+      ...(primaryPriceId.startsWith("price_") ? [primaryPriceId] : []),
+    ]);
+    if (paidPlans.length > 0) {
+      patch["Paid Plans (price ids)"] = formatPaidPlansText(paidPlans);
+    } else if (configuredPlan) {
+      // Text field may store commerce id as plain text when no price_ yet
+      patch["Paid Plans (price ids)"] = configuredPlan;
+    }
   }
   if (configuredPlan || primaryPriceId) {
     patch[MEMBER_FIELDS.memberstackPlanId] = configuredPlan || primaryPriceId;
@@ -474,6 +767,17 @@ export async function confirmCheckoutForMember(input: {
   if (paidThrough) {
     patch[MEMBER_FIELDS.serviceAccessUntil] = paidThrough.toISOString().slice(0, 10);
   }
+
+  console.error(
+    JSON.stringify({
+      event: "confirm_checkout_success_path",
+      ownershipMethod: ownershipMethod || null,
+      qualificationMode: qualificationMode || null,
+      hasSubscription: Boolean(subscriptionId),
+      qualifyingPriceCount: priceIds.length,
+      nativeAllowCount: nativeAllow.size,
+    })
+  );
 
   const result = await applyTrustedPaymentByMemberstackId({
     memberstackId: msId,
@@ -492,9 +796,7 @@ export async function confirmCheckoutForMember(input: {
           ? "Shadow mode — would mark Paid"
           : result.status,
     shadowed: result.shadowed,
+    qualificationMode: qualificationMode || undefined,
+    ownershipMethod: ownershipMethod || undefined,
   };
 }
-
-// silence unused import if tree-shaken differently
-void hasNativeStripeMembershipPrices;
-void getStripeNativeMembershipPriceIds;

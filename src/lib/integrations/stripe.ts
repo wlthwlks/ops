@@ -122,10 +122,13 @@ export function getStripeNativeMembershipPriceIds(options?: {
   const cfg = parseMembershipPriceConfig();
   const set = new Set(cfg.nativeStripePriceIds);
 
+  // Prefer VERCEL_ENV — preview deployments still set NODE_ENV=production
+  const vercelEnv = (process.env.VERCEL_ENV || "").trim();
+  const isProdBilling = vercelEnv
+    ? vercelEnv === "production"
+    : process.env.NODE_ENV === "production";
   const failClosed =
-    options?.failClosedInProduction !== false &&
-    (process.env.NODE_ENV === "production" ||
-      process.env.VERCEL_ENV === "production");
+    options?.failClosedInProduction !== false && isProdBilling;
 
   if (options?.requireConfigured || failClosed) {
     if (set.size === 0) {

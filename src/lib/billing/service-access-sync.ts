@@ -168,8 +168,10 @@ export function getMembershipPeriodEnd(
 
 /** True when production has no native price_ membership IDs configured. */
 export function isMembershipPriceConfigInvalidForProduction(): boolean {
-  const isProd =
-    process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production";
+  const vercelEnv = (process.env.VERCEL_ENV || "").trim();
+  const isProd = vercelEnv
+    ? vercelEnv === "production"
+    : process.env.NODE_ENV === "production";
   if (!isProd) return false;
   return !hasNativeStripeMembershipPrices();
 }
