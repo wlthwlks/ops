@@ -47,7 +47,6 @@ export async function POST(request: NextRequest) {
   const {
     startDate,
     endDate,
-    mode = "preview",
     emails,
     editedMessages,
     editedEmails,
@@ -56,13 +55,14 @@ export async function POST(request: NextRequest) {
   } = body as {
     startDate?: string;
     endDate?: string;
-    mode?: string;
     emails?: string[];
     editedMessages?: unknown;
     editedEmails?: unknown;
     requestId?: string;
     excludedMatches?: unknown;
   };
+
+  const mode = modeRaw as "preview" | "send";
 
   if (!emails?.length && (!startDate || !endDate)) {
     return NextResponse.json(
@@ -84,10 +84,10 @@ export async function POST(request: NextRequest) {
     ctx,
     mode,
     emails,
-    editedMessages,
-    editedEmails,
+    editedMessages as Parameters<typeof runDailyMatchMessage>[5],
+    editedEmails as Parameters<typeof runDailyMatchMessage>[6],
     requestId,
-    excludedMatches
+    excludedMatches as Parameters<typeof runDailyMatchMessage>[8]
   );
 
   return NextResponse.json({ ...result, logs });

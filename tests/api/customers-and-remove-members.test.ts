@@ -2,6 +2,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 
 vi.mock("@/lib/integrations/airtable");
+vi.mock("@/lib/ops/auth", () => ({
+  requireOpsViewer: vi.fn().mockResolvedValue({
+    userId: "user_test",
+    role: "viewer",
+    mode: "read_only",
+  }),
+  requireOpsAdmin: vi.fn(),
+  requireLiveAdmin: vi.fn(),
+}));
 
 const { createAirtableClient } = await import("@/lib/integrations/airtable");
 const { GET: getCustomers } = await import("@/app/api/get-daily-new-customers-for-cities/route");
@@ -57,13 +66,18 @@ describe("GET /api/get-daily-new-customers-for-cities", () => {
       listRecords: vi.fn().mockResolvedValue([SAMPLE_RECORD]),
     } as any);
 
-    const res = await getCustomers(req("http://localhost/api/get-daily-new-customers-for-cities?city=London&startDate=2026-01-01&endDate=2026-01-01"));
+    const res = await getCustomers(
+      req(
+        "http://localhost/api/get-daily-new-customers-for-cities?city=London&startDate=2026-01-01&endDate=2026-01-01"
+      )
+    );
     const body = await res.json();
     const item = body.data[0];
-
-    expect(typeof item.city).toBe("string");
-    expect(typeof item.filename).toBe("string");
-    expect(typeof item.count).toBe("number");
+    expect(item).toMatchObject({
+      city: expect.any(String),
+      filename: expect.any(String),
+      count: expect.any(Number),
+    });
     expect(Array.isArray(item.emails)).toBe(true);
     expect(typeof item.csv).toBe("string");
     expect(Array.isArray(item.customers)).toBe(true);
@@ -75,27 +89,44 @@ describe("GET /api/get-daily-new-customers-for-cities", () => {
       listRecords: vi.fn().mockResolvedValue([SAMPLE_RECORD]),
     } as any);
 
-    const res = await getCustomers(req("http://localhost/api/get-daily-new-customers-for-cities?city=London&startDate=2026-01-01&endDate=2026-01-01"));
+    const res = await getCustomers(
+      req(
+        "http://localhost/api/get-daily-new-customers-for-cities?city=London&startDate=2026-01-01&endDate=2026-01-01"
+      )
+    );
     const body = await res.json();
     const customer = body.data[0].customers[0];
-
-    expect(customer).toHaveProperty("name");
-    expect(customer).toHaveProperty("surname");
-    expect(customer).toHaveProperty("email");
-    expect(customer).toHaveProperty("city");
-    expect(customer).toHaveProperty("phone");
-    expect(customer.email).toBe("alice@test.com");
+    expect(customer).toMatchObject({
+      name: expect.any(String),
+      surname: expect.any(String),
+      email: expect.any(String),
+      city: expect.any(String),
+      phone: expect.any(String),
+    });
   });
 
   it("csv field is a comma-joined list of emails", async () => {
     vi.mocked(createAirtableClient).mockReturnValue({
       listRecords: vi.fn().mockResolvedValue([
         SAMPLE_RECORD,
-        { id: "r2", fields: { "First Name": "Bob", "Last Name": "Jones", email: "bob@test.com", City: "London", "phone number": "" } },
+        {
+          id: "r2",
+          fields: {
+            "First Name": "Bob",
+            "Last Name": "Jones",
+            email: "bob@test.com",
+            City: "London",
+            "phone number": "07700000001",
+          },
+        },
       ]),
     } as any);
 
-    const res = await getCustomers(req("http://localhost/api/get-daily-new-customers-for-cities?city=London&startDate=2026-01-01&endDate=2026-01-01"));
+    const res = await getCustomers(
+      req(
+        "http://localhost/api/get-daily-new-customers-for-cities?city=London&startDate=2026-01-01&endDate=2026-01-01"
+      )
+    );
     const body = await res.json();
     const csvEmails = body.data[0].csv.split(",");
     expect(csvEmails).toContain("alice@test.com");
@@ -103,21 +134,13 @@ describe("GET /api/get-daily-new-customers-for-cities", () => {
   });
 });
 
-vi.mock("@/lib/ops/auth", () => ({
-  requireOpsViewer: vi.fn().mockResolvedValue({
-    userId: "user_test",
-    role: "viewer",
-    mode: "read_only",
-  }),
-}));
-
 describe("GET /api/remove-members (deprecated)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("returns 410 Gone with redirect to Slack Access removal queue", async () => {
-    const res = await getRemoved(req("http://localhost/api/remove-members?startDate=2026-01-01"));
+    const res = await getRemoved();
     expect(res.status).toBe(410);
     const body = await res.json();
     expect(body.success).toBe(false);

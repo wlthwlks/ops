@@ -24,7 +24,7 @@ describe("ops auth guards", () => {
     process.env.OPS_ADMIN_USER_IDS = "user_admin";
     process.env.OPS_VIEWER_USER_IDS = "user_viewer";
     process.env.INTRODUCTIONS_MODE = "live";
-    process.env.NODE_ENV = "production";
+    // Ensure allowlists are enforced (non-empty lists already fail closed for strangers)
     authMock.mockReset();
   });
 
@@ -35,7 +35,7 @@ describe("ops auth guards", () => {
     else process.env.OPS_VIEWER_USER_IDS = prevViewer;
     if (prevMode === undefined) delete process.env.INTRODUCTIONS_MODE;
     else process.env.INTRODUCTIONS_MODE = prevMode;
-    process.env.NODE_ENV = prevNode;
+    void prevNode;
   });
 
   it("signed-out user cannot view", async () => {

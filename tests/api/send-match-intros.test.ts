@@ -8,8 +8,23 @@ vi.mock("@/lib/ops/daily-match-message", () => ({
   runDailyMatchMessage: vi.fn(),
 }));
 
+vi.mock("@/lib/ops/auth", () => ({
+  requireOpsViewer: vi.fn().mockResolvedValue({
+    userId: "user_viewer",
+    role: "viewer",
+    mode: "live",
+  }),
+  requireLiveAdmin: vi.fn().mockResolvedValue({
+    userId: "user_admin",
+    role: "admin",
+    mode: "live",
+  }),
+  requireOpsAdmin: vi.fn(),
+}));
+
 const { runDailyMatchMessage } = await import("@/lib/ops/daily-match-message");
 const { POST } = await import("@/app/api/send-match-intros/route");
+const { requireLiveAdmin, requireOpsViewer } = await import("@/lib/ops/auth");
 
 function makeRequest(body: object): Request {
   return new Request("http://localhost/api/send-match-intros", {
@@ -26,6 +41,16 @@ describe("POST /api/send-match-intros", () => {
       success: true,
       summary: "1 processed",
       deliveries: [],
+    });
+    vi.mocked(requireOpsViewer).mockResolvedValue({
+      userId: "user_viewer",
+      role: "viewer",
+      mode: "live",
+    });
+    vi.mocked(requireLiveAdmin).mockResolvedValue({
+      userId: "user_admin",
+      role: "admin",
+      mode: "live",
     });
   });
 
@@ -46,6 +71,7 @@ describe("POST /api/send-match-intros", () => {
     const res = await POST(makeRequest({ emails: ["a@test.com"], mode: "preview" }) as any);
     expect(res.status).toBe(200);
     expect(runDailyMatchMessage).toHaveBeenCalledOnce();
+    expect(requireOpsViewer).toHaveBeenCalled();
   });
 
   it("forwards editedMessages verbatim to runDailyMatchMessage", async () => {
@@ -53,6 +79,7 @@ describe("POST /api/send-match-intros", () => {
     await POST(makeRequest({ emails: ["a@test.com"], mode: "send", editedMessages }) as any);
     const call = vi.mocked(runDailyMatchMessage).mock.calls[0];
     expect(call[5]).toEqual(editedMessages);
+    expect(requireLiveAdmin).toHaveBeenCalled();
   });
 
   it("forwards editedEmails verbatim to runDailyMatchMessage", async () => {

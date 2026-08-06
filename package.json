@@ -2,9 +2,12 @@
   "name": "wlth-wlks-ops",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "rm -rf .next && next dev",
-    "build": "next build",
+    "build": "npm run widgets:build && next build",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
@@ -21,6 +24,7 @@
     "widgets:build:signup": "WIDGET=signup vite build --config widgets/vite.config.ts",
     "widgets:build:update": "WIDGET=update-details vite build --config widgets/vite.config.ts",
     "forms:city-alias-dry-run": "npx tsx scripts/report-city-alias-dry-run.ts",
+    "security:check-files": "tsx scripts/check-sensitive-files.ts",
     "test:e2e": "playwright test"
   },
   "dependencies": {

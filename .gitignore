@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+/test-results/
+/playwright-report/
 
 # next.js
 /.next/
@@ -22,25 +24,25 @@
 
 # misc
 .DS_Store
+**/.DS_Store
 *.pem
+__MACOSX/
 
 # debug
 npm-debug.log*
 yarn-debug.log*
-yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# env files — never commit secrets
+.env
+.env.*
 !.env.example
 
-tmp/
-reports/
-
-# local data
-data/
-tmp/
-reports/
+# local / generated data
+/data/
+/tmp/
+/reports/
+/drizzle-backup-before-ledger-migration/
 
 # vercel
 .vercel
@@ -56,4 +58,3 @@ next-env.d.ts
 .env.sentry-build-plugin
 
 archive*
-reports/

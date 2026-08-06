@@ -67,8 +67,9 @@ function main() {
   for (const file of files) {
     if (isProhibitedPath(file)) badPaths.push(file);
 
-    // Skip large/binary and example env
+    // Skip large/binary, example env, and test fixtures (they use fake secret strings)
     if (file === ".env.example") continue;
+    if (file.startsWith("tests/") || file.includes("/__tests__/")) continue;
     if (/\.(png|jpg|jpeg|gif|webp|lottie|woff2?|ttf|ico)$/i.test(file)) continue;
 
     const abs = join(process.cwd(), file);

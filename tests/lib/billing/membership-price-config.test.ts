@@ -161,11 +161,13 @@ describe("getStripeNativeMembershipPriceIds production fail-closed", () => {
     else process.env.VERCEL_ENV = prevVercel;
   });
 
-  it("throws in production when no native prices", () => {
-    process.env.NODE_ENV = "production";
+  it("throws when requireConfigured and no native prices", () => {
     process.env.STRIPE_MEMBERSHIP_PRICE_IDS = "prc_only";
     expect(() =>
-      getStripeNativeMembershipPriceIds({ failClosedInProduction: true })
+      getStripeNativeMembershipPriceIds({
+        requireConfigured: true,
+        failClosedInProduction: false,
+      })
     ).toThrow(/price_/);
   });
 });
