@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { requireOpsViewer } from "@/lib/ops/auth";
+import { handleOpsApiError } from "@/lib/ops/api-response";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -15,6 +17,12 @@ export const maxDuration = 30;
  * No DB writes, no cache mutations. Safe to spam.
  */
 export async function GET() {
+  try {
+    await requireOpsViewer();
+  } catch (err) {
+    return handleOpsApiError(err);
+  }
+
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
   if (!apiKey) {
     return NextResponse.json(

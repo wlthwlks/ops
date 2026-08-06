@@ -7,10 +7,22 @@ import {
   IntroductionsReadOnlyError,
   IntroductionsConfigError,
 } from "@/lib/introduction/runtime-mode";
+import { requireLiveAdmin, requireOpsViewer } from "@/lib/ops/auth";
+import { handleOpsApiError } from "@/lib/ops/api-response";
 
 export async function POST(request: NextRequest) {
   const body = await request.json();
   const { write, updates, verbose } = body;
+
+  try {
+    if (write) {
+      await requireLiveAdmin("resolve-emails/write");
+    } else {
+      await requireOpsViewer();
+    }
+  } catch (err) {
+    return handleOpsApiError(err);
+  }
 
   const airtableToken = process.env.AIRTABLE_GET_DATA_TOKEN;
   const airtableBase = process.env.AIRTABLE_BASE_ID;

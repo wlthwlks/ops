@@ -3,15 +3,14 @@ import { db } from "@/db";
 import { webhookEvents } from "@/db/schema";
 import { and, eq, lte, or, sql } from "drizzle-orm";
 import { reprocessWebhookEvent } from "@/lib/forms/webhooks/reprocess";
+import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
-  const auth = request.headers.get("authorization");
-  if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = rejectUnauthorizedCron(request);
+  if (denied) return denied;
 
   const batchSize = Math.min(
     50,

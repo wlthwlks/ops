@@ -3,7 +3,8 @@ import type { AirtableClient, AirtableRecord } from "@/lib/integrations/airtable
 import {
   getConfiguredMembershipPriceIds,
   getConfiguredMemberstackPlanId,
-  membershipConfigIsMemberstackStyleOnly,
+  getStripeNativeMembershipPriceIds,
+  hasNativeStripeMembershipPrices,
 } from "@/lib/integrations/stripe";
 import { MEMBERS_TABLE as AIRTABLE_MEMBERS_TABLE } from "@/lib/ops/airtable-fields";
 
@@ -103,70 +104,74 @@ export function getLinePeriodEnd(line: Stripe.InvoiceLineItem): number | null {
 }
 
 /**
- * Price ids found on invoice lines that qualify as membership.
- * - If allowlist has native Stripe `price_…` ids → match those on lines.
- * - If allowlist is empty OR only Memberstack `prc_`/`pln_` ids → accept any line with a price + period
- *   (Memberstack commerce ids never appear on Stripe Invoice line items).
- * Returns Stripe line price ids (usually price_…) plus configured commerce ids for Airtable storage.
+ * Native Stripe price_… ids that qualify invoice/session lines as membership.
+ * Fail closed: empty allowlist → no line qualifies (never allow-all).
+ */
+export function resolveNativeMembershipAllowlist(
+  membershipPriceIds?: Set<string>
+): Set<string> {
+  if (membershipPriceIds && membershipPriceIds.size > 0) {
+    return new Set([...membershipPriceIds].filter((id) => id.startsWith("price_")));
+  }
+  try {
+    return getStripeNativeMembershipPriceIds({
+      requireConfigured: false,
+      failClosedInProduction: false,
+    });
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Price ids on invoice lines that qualify as WLTH membership.
+ * Only native Stripe `price_…` values present in the allowlist qualify.
+ * Never treats empty / Memberstack-only config as allow-all.
  */
 export function getQualifyingMembershipPriceIds(
   lines: Stripe.InvoiceLineItem[],
   membershipPriceIds: Set<string>
 ): string[] {
-  const nativeAllow = new Set(
-    [...membershipPriceIds].filter((id) => id.startsWith("price_"))
-  );
-  const allowAll =
-    membershipPriceIds.size === 0 ||
-    nativeAllow.size === 0 ||
-    membershipConfigIsMemberstackStyleOnly();
+  const nativeAllow = resolveNativeMembershipAllowlist(membershipPriceIds);
+  if (nativeAllow.size === 0) return [];
 
   const found: string[] = [];
   for (const line of lines) {
     const priceId = getLinePriceId(line);
-    if (!priceId) continue;
-    if (allowAll || nativeAllow.has(priceId) || membershipPriceIds.has(priceId)) {
-      found.push(priceId);
-    }
+    if (!priceId || !priceId.startsWith("price_")) continue;
+    if (nativeAllow.has(priceId)) found.push(priceId);
   }
-  // Always include configured commerce id (e.g. prc_wlth-wlks-…) for Airtable "Stripe Price ID"
-  const configured = getConfiguredMemberstackPlanId();
-  if (configured) found.push(configured);
-  for (const id of membershipPriceIds) found.push(id);
   return dedupePriceIds(found);
 }
 
 /**
  * Among invoice lines, find qualifying membership lines and return max period.end (unix seconds).
- * Memberstack-only allowlists (prc_) → any line with period end qualifies.
+ * Fail closed when no native price_ allowlist is configured.
  */
 export function getMembershipPeriodEnd(
   lines: Stripe.InvoiceLineItem[],
   membershipPriceIds: Set<string>
 ): number | null {
-  let maxEnd: number | null = null;
-  const nativeAllow = new Set(
-    [...membershipPriceIds].filter((id) => id.startsWith("price_"))
-  );
-  const allowAll =
-    membershipPriceIds.size === 0 ||
-    nativeAllow.size === 0 ||
-    membershipConfigIsMemberstackStyleOnly();
+  const nativeAllow = resolveNativeMembershipAllowlist(membershipPriceIds);
+  if (nativeAllow.size === 0) return null;
 
+  let maxEnd: number | null = null;
   for (const line of lines) {
     const priceId = getLinePriceId(line);
-    if (!allowAll) {
-      if (!priceId || (!nativeAllow.has(priceId) && !membershipPriceIds.has(priceId))) {
-        continue;
-      }
-    } else if (!priceId && !getLinePeriodEnd(line)) {
-      continue;
-    }
+    if (!priceId || !nativeAllow.has(priceId)) continue;
     const end = getLinePeriodEnd(line);
     if (end == null) continue;
     if (maxEnd == null || end > maxEnd) maxEnd = end;
   }
   return maxEnd;
+}
+
+/** True when production has no native price_ membership IDs configured. */
+export function isMembershipPriceConfigInvalidForProduction(): boolean {
+  const isProd =
+    process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production";
+  if (!isProd) return false;
+  return !hasNativeStripeMembershipPrices();
 }
 
 export type MaxPaidThroughResult = {

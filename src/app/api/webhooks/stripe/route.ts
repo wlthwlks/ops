@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import type Stripe from "stripe";
 import { createAirtableClient } from "@/lib/integrations/airtable";
 import {
-  getConfiguredMembershipPriceIds,
   getStripeClient,
+  getStripeNativeMembershipPriceIds,
   getStripeWebhookSecret,
+  hasNativeStripeMembershipPrices,
 } from "@/lib/integrations/stripe";
 import {
   getQualifyingMembershipPriceIds,
@@ -16,7 +17,11 @@ import {
   getInvoicePaidAtUnix,
   syncInvoicePaidToAirtable,
 } from "@/lib/billing/webhook-invoice-sync";
-import { recordWebhookEvent, updateWebhookEventStatus } from "@/lib/forms/webhooks/store";
+import {
+  recordIntegrationError,
+  recordWebhookEvent,
+  updateWebhookEventStatus,
+} from "@/lib/forms/webhooks/store";
 import { handleExpandedStripeEvent } from "@/lib/forms/webhooks/stripe-lifecycle";
 import { getFormFeatureFlags } from "@/lib/forms/feature-flags";
 
@@ -67,7 +72,31 @@ export async function POST(request: NextRequest) {
   // —— Existing production path: invoice.paid (always on) ——
   if (event.type === "invoice.paid") {
     try {
-      const membershipPriceIds = getConfiguredMembershipPriceIds({ requireConfigured: true });
+      if (!hasNativeStripeMembershipPrices()) {
+        await recordIntegrationError({
+          code: "STRIPE_MEMBERSHIP_PRICE_IDS_MISSING",
+          source: "stripe_webhook",
+          operation: "invoice.paid",
+          title: "Stripe membership price IDs missing",
+          message:
+            "No native Stripe membership Price IDs (price_…) configured. Invoice ignored (fail closed).",
+          details: { stripeEventId: event.id, eventType: event.type },
+          retryable: false,
+        }).catch(() => undefined);
+        if (stored.id) {
+          await updateWebhookEventStatus(stored.id, "FAILED").catch(() => undefined);
+        }
+        return NextResponse.json({
+          received: true,
+          processed: false,
+          status: "configuration_error",
+          reason: "STRIPE_MEMBERSHIP_PRICE_IDS must include at least one price_… id",
+        });
+      }
+      const membershipPriceIds = getStripeNativeMembershipPriceIds({
+        requireConfigured: true,
+        failClosedInProduction: true,
+      });
       const stripe = getStripeClient();
 
       const invoiceFromEvent = event.data.object as Stripe.Invoice;
@@ -117,7 +146,7 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Prefer real Stripe price_ ids from lines; empty allowlist accepts all price_ lines
+      // Only native approved price_ ids qualify
       let qualifyingPriceIds = getQualifyingMembershipPriceIds(lines, membershipPriceIds);
       // Subscription id + live status from Stripe
       const invAny = invoice as unknown as {

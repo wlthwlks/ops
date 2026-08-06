@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runPineconeSync } from "@/lib/ops/sync-to-pinecone";
+import { requireLiveAdmin } from "@/lib/ops/auth";
+import { handleOpsApiError } from "@/lib/ops/api-response";
 
 export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
+  try {
+    await requireLiveAdmin("sync-to-pinecone");
+  } catch (err) {
+    return handleOpsApiError(err);
+  }
+
   const body = await request.json().catch(() => ({}));
   const city = (body as Record<string, unknown>).city;
 

@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { scanIncompleteOnboarding } from "@/lib/forms/onboarding/incomplete-scan";
+import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
 export async function POST(request: NextRequest) {
-  const auth = request.headers.get("authorization");
-  if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = rejectUnauthorizedCron(request);
+  if (denied) return denied;
 
   if (
     process.env.NEW_SIGNUP_WIDGET_ENABLED !== "true" &&

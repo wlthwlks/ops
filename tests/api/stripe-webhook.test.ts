@@ -30,7 +30,13 @@ vi.mock("@/lib/integrations/stripe", () => ({
     new Set(["price_membership", "prc_wlth-wlks-45-quarter-pdpa0cyx"]),
   getConfiguredMemberstackPlanId: () => "prc_wlth-wlks-45-quarter-pdpa0cyx",
   getStripeNativeMembershipPriceIds: () => new Set(["price_membership"]),
+  hasNativeStripeMembershipPrices: () => true,
   membershipConfigIsMemberstackStyleOnly: () => false,
+  parseMembershipPriceConfig: () => ({
+    nativeStripePriceIds: ["price_membership"],
+    memberstackCommerceIds: ["prc_wlth-wlks-45-quarter-pdpa0cyx"],
+    allIds: ["price_membership", "prc_wlth-wlks-45-quarter-pdpa0cyx"],
+  }),
 }));
 
 vi.mock("@/lib/integrations/airtable", () => ({

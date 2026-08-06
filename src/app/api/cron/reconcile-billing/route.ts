@@ -4,6 +4,7 @@ import {
   summarizeBillingReconciliation,
 } from "@/lib/forms/billing/reconcile-batch";
 import { recordIntegrationError } from "@/lib/forms/webhooks/store";
+import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
 
 export const runtime = "nodejs";
 
@@ -12,10 +13,8 @@ export const runtime = "nodejs";
  * Full Stripe list is expensive — this surfaces pending dependencies for OPS.
  */
 export async function POST(request: NextRequest) {
-  const auth = request.headers.get("authorization");
-  if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const denied = rejectUnauthorizedCron(request);
+  if (denied) return denied;
 
   if (
     process.env.RECONCILE_BILLING_CRON_ENABLED !== "true" &&

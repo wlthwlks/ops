@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createAirtableClient } from "@/lib/integrations/airtable";
 import { CITIES } from "@/lib/constants";
+import { requireOpsViewer } from "@/lib/ops/auth";
+import { handleOpsApiError } from "@/lib/ops/api-response";
 
 interface GrowingCity {
   city: string;
@@ -18,6 +20,12 @@ function buildExcludeAllCitiesFilter(): string {
 }
 
 export async function GET() {
+  try {
+    await requireOpsViewer();
+  } catch (err) {
+    return handleOpsApiError(err);
+  }
+
   const token = process.env.AIRTABLE_GET_DATA_TOKEN;
   const baseId = process.env.AIRTABLE_BASE_ID;
 

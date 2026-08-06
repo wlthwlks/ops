@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSlackClient } from "@/lib/integrations/slack";
+import { requireOpsViewer } from "@/lib/ops/auth";
+import { handleOpsApiError } from "@/lib/ops/api-response";
 
 export async function POST(request: NextRequest) {
+  try {
+    await requireOpsViewer();
+  } catch (err) {
+    return handleOpsApiError(err);
+  }
+
   const body = await request.json();
   const { checkScopes } = body;
 

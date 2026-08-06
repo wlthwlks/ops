@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAirtableClient } from "@/lib/integrations/airtable";
 import { createPineconeClient } from "@/lib/integrations/pinecone";
 import { CITIES } from "@/lib/constants";
+import { requireOpsViewer } from "@/lib/ops/auth";
+import { handleOpsApiError } from "@/lib/ops/api-response";
 
 export const maxDuration = 300;
 
@@ -13,6 +15,12 @@ export const maxDuration = 300;
  * Results are grouped by city.
  */
 export async function GET(request: NextRequest) {
+  try {
+    await requireOpsViewer();
+  } catch (err) {
+    return handleOpsApiError(err);
+  }
+
   const token = process.env.AIRTABLE_GET_DATA_TOKEN;
   const baseId = process.env.AIRTABLE_BASE_ID;
   const pineconeKey = process.env.PINECONE_API_KEY;

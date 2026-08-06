@@ -6,8 +6,16 @@ import {
   getIntroductionsMode,
   IntroductionsConfigError,
 } from "@/lib/introduction/runtime-mode";
+import { requireOpsViewer } from "@/lib/ops/auth";
+import { handleOpsApiError } from "@/lib/ops/api-response";
 
 export async function POST(request: NextRequest) {
+  try {
+    await requireOpsViewer();
+  } catch (err) {
+    return handleOpsApiError(err);
+  }
+
   let mode;
   try {
     mode = getIntroductionsMode();

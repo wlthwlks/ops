@@ -7,13 +7,11 @@ import {
   IntroductionsConfigError,
 } from "@/lib/introduction/runtime-mode";
 
-export async function GET(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  const cronSecret = process.env.CRON_SECRET;
+import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
 
-  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+export async function GET(request: NextRequest) {
+  const denied = rejectUnauthorizedCron(request);
+  if (denied) return denied;
 
   let introsMode;
   try {

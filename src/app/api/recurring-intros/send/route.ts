@@ -8,8 +8,16 @@ import {
   IntroductionsReadOnlyError,
   assertIntroductionsLive,
 } from "@/lib/introduction/runtime-mode";
+import { requireLiveAdmin } from "@/lib/ops/auth";
+import { handleOpsApiError } from "@/lib/ops/api-response";
 
 export async function POST(request: NextRequest) {
+  try {
+    await requireLiveAdmin("recurring-intros/send");
+  } catch (err) {
+    return handleOpsApiError(err);
+  }
+
   try {
     assertIntroductionsLive("recurring-intros/send");
   } catch (e) {

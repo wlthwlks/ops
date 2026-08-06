@@ -5,8 +5,16 @@ import {
   introductionsModePayload,
   IntroductionsConfigError,
 } from "@/lib/introduction/runtime-mode";
+import { requireOpsViewer } from "@/lib/ops/auth";
+import { handleOpsApiError } from "@/lib/ops/api-response";
 
 export async function GET() {
+  try {
+    await requireOpsViewer();
+  } catch (err) {
+    return handleOpsApiError(err);
+  }
+
   let modePayload;
   try {
     modePayload = introductionsModePayload();

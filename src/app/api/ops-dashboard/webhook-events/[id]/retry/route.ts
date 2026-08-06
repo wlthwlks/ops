@@ -1,4 +1,4 @@
-import { requireOpsAdmin } from "@/lib/ops/auth";
+import { requireLiveAdmin } from "@/lib/ops/auth";
 import { handleOpsApiError, jsonOk } from "@/lib/ops/api-response";
 import { reprocessWebhookEvent } from "@/lib/forms/webhooks/reprocess";
 import { FormsError } from "@/lib/forms/errors";
@@ -11,7 +11,7 @@ export async function POST(
   ctx: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requireOpsAdmin();
+    await requireLiveAdmin("webhook-events/retry");
     const { id } = await ctx.params;
     if (!id) return jsonError("BAD_REQUEST", "id required", 400);
     const result = await reprocessWebhookEvent(id);

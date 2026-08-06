@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createPineconeClient } from "@/lib/integrations/pinecone";
 import { CITIES } from "@/lib/constants";
+import { requireOpsViewer } from "@/lib/ops/auth";
+import { handleOpsApiError } from "@/lib/ops/api-response";
 
 export async function GET(request: NextRequest) {
+  try {
+    await requireOpsViewer();
+  } catch (err) {
+    return handleOpsApiError(err);
+  }
+
   const pineconeKey = process.env.PINECONE_API_KEY;
   const pineconeIndex = process.env.PINECONE_INDEX_NAME;
 

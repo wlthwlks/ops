@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAirtableClient } from "@/lib/integrations/airtable";
 import { CITIES, CityGroup } from "@/lib/constants";
+import { requireOpsViewer } from "@/lib/ops/auth";
+import { handleOpsApiError } from "@/lib/ops/api-response";
 
 interface SublocationBreakdown {
   sublocation: string;
@@ -55,6 +57,7 @@ function matchSublocation(city: string, cityGroup: CityGroup): string {
 
 export async function GET(request: NextRequest) {
   try {
+  await requireOpsViewer();
   const token = process.env.AIRTABLE_GET_DATA_TOKEN;
   const baseId = process.env.AIRTABLE_BASE_ID;
 
@@ -202,6 +205,8 @@ export async function GET(request: NextRequest) {
     })),
   });
   } catch (err) {
+    const ops = handleOpsApiError(err);
+    if (ops.status === 401 || ops.status === 403) return ops;
     console.error("[API] get-daily-new-customers-for-cities error:", err);
     return NextResponse.json(
       { success: false, error: String(err) },
