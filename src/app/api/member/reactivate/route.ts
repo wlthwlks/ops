@@ -46,6 +46,8 @@ export async function POST(request: Request) {
           subscriptionId: result.subscriptionId || null,
           subscriptionStatus: result.subscriptionStatus || null,
           paymentMethodReused: result.paymentMethodReused || false,
+          /** false when cancel_at_period_end was only reversed (no new charge) */
+          charged: Boolean(result.charged),
         },
         { status: httpStatus }
       ),

@@ -23,6 +23,11 @@ export type ReactivateResult = {
   subscriptionId?: string;
   subscriptionStatus?: string;
   paymentMethodReused?: boolean;
+  /**
+   * True only when a new Stripe subscription was created (immediate charge path).
+   * False for already-active and cancel_at_period_end reverse (no new charge).
+   */
+  charged?: boolean;
 };
 
 function fieldStr(fields: Record<string, unknown>, key: string): string {
@@ -140,6 +145,7 @@ export async function reactivateMembershipForMember(input: {
       status: "no_stripe_customer",
       reason:
         "No Stripe customer on file yet. Complete checkout once to save a card, then you can reactivate with one click.",
+      charged: false,
     };
   }
 
@@ -150,6 +156,7 @@ export async function reactivateMembershipForMember(input: {
       success: false,
       status: "no_price",
       reason: "No Stripe membership price configured. Set STRIPE_REACTIVATION_PRICE_ID=price_…",
+      charged: false,
     };
   }
 
@@ -159,7 +166,12 @@ export async function reactivateMembershipForMember(input: {
     limit: 15,
   });
 
-  // Already active without pending cancel
+  /**
+   * Reactivation charge rules (do not double-bill):
+   * 1) active/trialing && !cancel_at_period_end → already live, no Checkout/charge
+   * 2) active/trialing && cancel_at_period_end  → only clear cancel flag, no charge
+   * 3) canceled (ended)                        → new subscription (or Checkout if no card)
+   */
   const live = subs.data.find(
     (s) =>
       (s.status === "active" || s.status === "trialing") && !s.cancel_at_period_end
@@ -191,10 +203,11 @@ export async function reactivateMembershipForMember(input: {
       subscriptionId: live.id,
       subscriptionStatus: live.status,
       paymentMethodReused: true,
+      charged: false,
     };
   }
 
-  // Undo scheduled cancellation
+  // Still in paid period with cancel scheduled — reverse only, never new Checkout.
   const pendingCancel = subs.data.find(
     (s) =>
       (s.status === "active" || s.status === "trialing") && s.cancel_at_period_end
@@ -227,10 +240,11 @@ export async function reactivateMembershipForMember(input: {
       subscriptionId: updated.id,
       subscriptionStatus: updated.status,
       paymentMethodReused: true,
+      charged: false,
     };
   }
 
-  // Create new subscription with default/saved card
+  // Subscription has ended (canceled / incomplete_expired / etc.) — new paid sub.
   const pmId = await resolveDefaultPaymentMethodId(stripe, stripeCustomerId);
   if (!pmId) {
     return {
@@ -238,6 +252,7 @@ export async function reactivateMembershipForMember(input: {
       status: "no_payment_method",
       reason:
         "No card on file. Use Manage billing to add a payment method, then try Reactivate again.",
+      charged: false,
     };
   }
 
@@ -290,5 +305,6 @@ export async function reactivateMembershipForMember(input: {
     subscriptionId: created.id,
     subscriptionStatus: created.status,
     paymentMethodReused: true,
+    charged: true,
   };
 }

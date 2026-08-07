@@ -1032,7 +1032,19 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           return;
         }
       } else {
-        setOk(String(res.reason || "Membership reactivated with your card on file."));
+        const status = String(res.status || "");
+        if (status === "cancellation_reversed") {
+          setOk(
+            String(
+              res.reason ||
+                "Cancellation removed — your membership stays active. You were not charged again."
+            )
+          );
+        } else if (status === "already_active") {
+          setOk(String(res.reason || "Your membership is already active."));
+        } else {
+          setOk(String(res.reason || "Membership reactivated with your card on file."));
+        }
       }
       const bill = await api(props.apiBase, "/api/member/billing-status", { token });
       setBilling((bill.billing || null) as typeof billing);
