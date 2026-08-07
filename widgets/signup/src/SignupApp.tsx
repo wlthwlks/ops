@@ -21,6 +21,7 @@ import {
   tryResolveSessionAccessToken,
 } from "../../shared/memberstack-auth";
 import { captureAttribution } from "../../shared/attribution";
+import { trackAbleAuth, trackAbleLead } from "../../shared/able-tracking";
 import {
   AnimatedLoader,
   type AnimationVariant,
@@ -718,6 +719,21 @@ export function SignupApp(props: { apiBase: string }) {
       const mid =
         (auth.memberId || "").trim() || memberIdFromAccessToken(auth.accessToken);
       if (mid) setSignupFlowMarker(mid);
+
+      // Able CDP: Lead + Auth only for genuine new Memberstack signups (before bootstrap).
+      if (auth.source === "signup") {
+        trackAbleLead({
+          email: values.email,
+          memberId: mid,
+          firstName: values.firstName,
+          lastName: values.lastName,
+        });
+        trackAbleAuth({
+          email: values.email,
+          memberId: mid,
+        });
+      }
+
       setAsyncState(BUSY.saving);
 
       await api(props.apiBase, "/api/onboarding/bootstrap", {
