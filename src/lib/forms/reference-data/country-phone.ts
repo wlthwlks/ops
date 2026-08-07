@@ -157,15 +157,24 @@ export function enrichCountriesWithPhoneMeta(
   });
 }
 
-/** Validate national number + dial prefix; returns E.164-ish parts or error. */
+/**
+ * Normalize national digits: strip spaces/hyphens/parens.
+ * Leading trunk 0 is stripped by libphonenumber when parsing with country.
+ */
+export function normalizeNationalDigits(nationalNumber: string): string {
+  return (nationalNumber || "").trim().replace(/[\s().-]/g, "");
+}
+
+/** Validate national number + dial prefix; returns E.164 parts or error. */
 export function validatePhoneParts(
   phonePrefix: string,
-  nationalNumber: string
-): { ok: true; e164: string } | { ok: false; message: string } {
+  nationalNumber: string,
+  iso2?: string | null
+): { ok: true; e164: string; national: string; prefix: string } | { ok: false; message: string } {
   const prefix = (phonePrefix || "").trim();
-  const national = (nationalNumber || "").trim().replace(/[\s().-]/g, "");
+  let national = normalizeNationalDigits(nationalNumber);
   if (!prefix || !/^\+\d{1,4}$/.test(prefix)) {
-    return { ok: false, message: "Choose a country calling code" };
+    return { ok: false, message: "Select a country so we can add the correct calling code" };
   }
   if (!national || national.length < 4) {
     return { ok: false, message: "Enter a valid phone number" };
@@ -173,15 +182,52 @@ export function validatePhoneParts(
   if (!/^\d+$/.test(national)) {
     return { ok: false, message: "Phone number should contain digits only" };
   }
-  const combined = `${prefix}${national}`;
-  const parsed = parsePhoneNumberFromString(combined);
+
+  const country = (iso2 || "").trim().toUpperCase() as CountryCode | "";
+  let parsed = country
+    ? parsePhoneNumberFromString(national, country)
+    : parsePhoneNumberFromString(`${prefix}${national}`);
+
+  // Retry with full international if national-with-country failed
+  if ((!parsed || !parsed.isValid()) && !country) {
+    parsed = parsePhoneNumberFromString(`${prefix}${national}`);
+  }
+  if ((!parsed || !parsed.isValid()) && country) {
+    parsed = parsePhoneNumberFromString(`${prefix}${national}`);
+  }
+
   if (!parsed || !parsed.isValid()) {
     return {
       ok: false,
-      message: "That phone number doesn’t look valid for the selected country code",
+      message: "That phone number doesn’t look valid for the selected country",
     };
   }
-  return { ok: true, e164: parsed.format("E.164") };
+
+  // Ensure calling code matches selected prefix
+  const parsedPrefix = `+${parsed.countryCallingCode}`;
+  if (parsedPrefix !== prefix) {
+    return {
+      ok: false,
+      message: "Phone number does not match the selected country’s calling code",
+    };
+  }
+
+  return {
+    ok: true,
+    e164: parsed.format("E.164"),
+    national: parsed.nationalNumber,
+    prefix: parsedPrefix,
+  };
+}
+
+export function normalizePostCode(value: string | undefined | null): string {
+  return (value || "").trim().replace(/\s+/g, " ").slice(0, 32);
+}
+
+export function isValidPostCodeShape(value: string): boolean {
+  if (!value) return true; // optional
+  if (value.length > 32) return false;
+  return /^[A-Za-z0-9][A-Za-z0-9 \-]*$/.test(value);
 }
 
 /**

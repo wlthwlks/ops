@@ -14,7 +14,13 @@ import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 import { FormsError } from "@/lib/forms/errors";
 import { getFormFeatureFlags } from "@/lib/forms/feature-flags";
 import { enforcePublicWriteRateLimit } from "@/lib/forms/http";
-import { resolveIndustryForWrite } from "@/lib/forms/reference-data";
+import {
+  findCatalogCityByCode,
+  resolveIndustryForWrite,
+  validatePhoneParts,
+} from "@/lib/forms/reference-data";
+import { normalizePostCode } from "@/lib/forms/reference-data/country-phone";
+import { syncMemberstackCustomFields } from "@/lib/forms/memberstack/custom-fields";
 
 export const runtime = "nodejs";
 
@@ -116,13 +122,62 @@ export async function PATCH(request: Request) {
 
     const d = parsed.data;
     const patch: Record<string, unknown> = {};
-    if (d.firstName != null) patch[MEMBER_FIELDS.firstName] = d.firstName;
-    if (d.lastName != null) patch[MEMBER_FIELDS.lastName] = d.lastName;
-    if (d.phone != null) patch[MEMBER_FIELDS.phone] = d.phone;
-    if (d.phonePrefix != null) patch[MEMBER_FIELDS.phonePrefix] = d.phonePrefix;
+    const msFields: {
+      firstName?: string;
+      lastName?: string;
+      phoneNumber?: string;
+      city?: string;
+      country?: string;
+      postCode?: string;
+    } = {};
+
+    if (d.firstName != null) {
+      patch[MEMBER_FIELDS.firstName] = d.firstName;
+      msFields.firstName = d.firstName;
+    }
+    if (d.lastName != null) {
+      patch[MEMBER_FIELDS.lastName] = d.lastName;
+      msFields.lastName = d.lastName;
+    }
+
+    if (d.phone != null || d.phonePrefix != null) {
+      const prefix = (d.phonePrefix || "").trim();
+      const phone = (d.phone || "").trim();
+      if (prefix || phone) {
+        const phoneResult = validatePhoneParts(
+          prefix,
+          phone,
+          d.countryIso2 || null
+        );
+        if (!phoneResult.ok) {
+          throw new FormsError("PROFILE_VALIDATION_FAILED", phoneResult.message, {
+            status: 400,
+            retryable: false,
+          });
+        }
+        patch[MEMBER_FIELDS.phone] = phoneResult.national;
+        patch[MEMBER_FIELDS.phonePrefix] = phoneResult.prefix;
+        msFields.phoneNumber = phoneResult.e164;
+      }
+    }
+
+    if (d.postCode !== undefined) {
+      const postCode = normalizePostCode(d.postCode || "");
+      patch[MEMBER_FIELDS.postCode] = postCode;
+      msFields.postCode = postCode;
+    }
+
     if (d.cityCode != null) patch._appCityCode = d.cityCode;
     if (d.countryCode != null) patch._appCountryCode = d.countryCode;
     if (d.availability != null) patch[MEMBER_FIELDS.availabilityV2] = d.availability;
+
+    if (d.cityCode) {
+      const city = await findCatalogCityByCode(d.cityCode);
+      if (city) {
+        msFields.city = city.label;
+        msFields.country = city.countryLabel;
+      }
+    }
 
     if (d.primaryIndustry != null) {
       const industry = resolveIndustryForWrite(d.primaryIndustry, d.otherIndustry);
@@ -155,11 +210,23 @@ export async function PATCH(request: Request) {
       patch,
     });
 
+    const msSync = await syncMemberstackCustomFields({
+      memberId: member.id,
+      fields: msFields,
+    });
+
     return withCors(
       NextResponse.json({
         success: true,
         shadowed: result.shadowed,
         profile: await recordToProfileDtoResolved(result.record),
+        memberstackCustomFieldsSynced: msSync.ok,
+        ...(msSync.ok
+          ? {}
+          : {
+              memberstackSyncWarning: msSync.message,
+              code: "MEMBERSTACK_CUSTOM_FIELDS_PARTIAL",
+            }),
       }),
       request
     );

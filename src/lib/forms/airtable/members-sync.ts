@@ -121,8 +121,6 @@ export type MinimalSignupInput = {
   email: string;
   firstName: string;
   lastName: string;
-  phone?: string;
-  phonePrefix?: string;
   attribution?: Record<string, string | undefined>;
   source?: string;
 };
@@ -280,13 +278,6 @@ export async function upsertMinimalSignupMember(
       : "ACCOUNT_CREATED",
     [MEMBER_FIELDS.lastCompletedSignupStep]: "ACCOUNT",
   };
-
-  if (input.phone != null && String(input.phone).trim()) {
-    fields[MEMBER_FIELDS.phone] = String(input.phone).trim();
-  }
-  if (input.phonePrefix != null && String(input.phonePrefix).trim()) {
-    fields[MEMBER_FIELDS.phonePrefix] = String(input.phonePrefix).trim();
-  }
 
   // New accounts only — never promote to Active/Paid from signup alone.
   // Airtable default Membership is Active when blank; always set Pending Payment on create.
@@ -720,6 +711,7 @@ export function recordToProfileDto(record: AirtableRecord) {
     phone: phoneParts.phone,
     phonePrefix: phoneParts.phonePrefix,
     phoneLegacyUnparsed: phoneParts.legacyUnparsed,
+    postCode: fieldStr(f, MEMBER_FIELDS.postCode),
     city: fieldStr(f, MEMBER_FIELDS.city),
     cityCode: relId,
     countryCode: "",

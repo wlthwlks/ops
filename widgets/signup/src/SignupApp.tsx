@@ -25,7 +25,11 @@ import {
   AnimatedLoader,
   type AnimationVariant,
 } from "../../shared/AnimatedLoader";
-import { PhoneField, resolveDefaultPhonePrefix, dialCodeForCountryCode } from "../../shared/PhoneField";
+import {
+  PhoneField,
+  dialCodeForCountryCode,
+  iso2ForCountryCode,
+} from "../../shared/PhoneField";
 import {
   AvailabilityFields,
   BusinessFields,
@@ -235,7 +239,6 @@ export function SignupApp(props: { apiBase: string }) {
   const [token, setToken] = useState<string | null>(null);
   const [communityOk, setCommunityOk] = useState(false);
   const [communityError, setCommunityError] = useState<string | undefined>();
-  const phonePrefixManual = useRef(false);
   const mountedRef = useRef(true);
   const attribution = useMemo(() => captureAttribution(), []);
   const busy = asyncState.kind === "busy" || asyncState.kind === "loading-form";
@@ -439,14 +442,20 @@ export function SignupApp(props: { apiBase: string }) {
       lastName: "",
       email: "",
       password: "",
-      phone: "",
-      phonePrefix: "",
     },
     mode: "onBlur",
   });
   const locationForm = useForm<LocationForm>({
     resolver: zodResolver(locationFormSchema),
-    defaultValues: { countryCode: "", cityCode: "", availability: [] },
+    defaultValues: {
+      countryCode: "",
+      cityCode: "",
+      countryIso2: "",
+      postCode: "",
+      phone: "",
+      phonePrefix: "",
+      availability: [],
+    },
     mode: "onBlur",
   });
   const businessForm = useForm<BusinessForm>({
@@ -478,7 +487,7 @@ export function SignupApp(props: { apiBase: string }) {
   });
 
   const countryCode = locationForm.watch("countryCode");
-  const phonePrefix = accountForm.watch("phonePrefix");
+  const phonePrefix = locationForm.watch("phonePrefix");
   const primaryIndustry = businessForm.watch("primaryIndustry");
   const helpWanted = helpForm.watch("helpWanted") || [];
   const expertiseOffered = expertiseForm.watch("expertiseOffered") || [];
@@ -489,13 +498,19 @@ export function SignupApp(props: { apiBase: string }) {
     [refData, countryCode]
   );
 
-  // Sync phone prefix from location country unless member chose a different one.
+  // Fixed phone prefix + ISO2 from selected country (not user-editable).
   useEffect(() => {
-    if (!countryCode || !refData || phonePrefixManual.current) return;
-    const dial = dialCodeForCountryCode(refData.countries, countryCode);
-    if (dial && dial !== phonePrefix) {
-      accountForm.setValue("phonePrefix", dial, { shouldValidate: true });
+    if (!countryCode || !refData) {
+      locationForm.setValue("phonePrefix", "");
+      locationForm.setValue("countryIso2", "");
+      return;
     }
+    const dial = dialCodeForCountryCode(refData.countries, countryCode) || "";
+    const iso2 = iso2ForCountryCode(refData.countries, countryCode) || "";
+    if (dial !== phonePrefix) {
+      locationForm.setValue("phonePrefix", dial, { shouldValidate: true });
+    }
+    locationForm.setValue("countryIso2", iso2);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [countryCode, refData]);
 
@@ -510,12 +525,6 @@ export function SignupApp(props: { apiBase: string }) {
         setConfig(cfg as { membershipPriceId: string; homeUrl: string });
         const rd = ref as unknown as RefData;
         setRefData(rd);
-
-        // Safe default prefix from browser locale — never first alphabetical country.
-        const defaultPrefix = resolveDefaultPhonePrefix(rd.countries || []);
-        if (defaultPrefix && !accountForm.getValues("phonePrefix")) {
-          accountForm.setValue("phonePrefix", defaultPrefix);
-        }
 
         const t = await tryResolveSessionAccessToken();
         logMemberstackDiagnostics("session_resume", {
@@ -718,8 +727,6 @@ export function SignupApp(props: { apiBase: string }) {
           firstName: values.firstName,
           lastName: values.lastName,
           email: values.email,
-          phone: values.phone,
-          phonePrefix: values.phonePrefix,
           attribution,
         }),
       });
@@ -776,11 +783,6 @@ export function SignupApp(props: { apiBase: string }) {
     scrollSignupToTop();
     try {
       await saveStep("LOCATION", values);
-      // Keep phone prefix in sync after location if not manually overridden
-      if (!phonePrefixManual.current && refData) {
-        const dial = dialCodeForCountryCode(refData.countries, values.countryCode);
-        if (dial) accountForm.setValue("phonePrefix", dial);
-      }
       setAsyncState(BUSY.next);
       stepper.setComplete("location");
       await stepper.next();
@@ -1091,22 +1093,6 @@ export function SignupApp(props: { apiBase: string }) {
                 <FieldError message={accountForm.formState.errors.lastName?.message} />
               </div>
             </div>
-            <PhoneField
-              countries={refData.countries}
-              phonePrefix={phonePrefix || ""}
-              phoneRegister={accountForm.register("phone")}
-              onPrefixChange={(dial) => {
-                phonePrefixManual.current = true;
-                accountForm.setValue("phonePrefix", dial, {
-                  shouldValidate: true,
-                  shouldDirty: true,
-                });
-              }}
-              prefixError={accountForm.formState.errors.phonePrefix}
-              phoneError={accountForm.formState.errors.phone}
-              idPrefix="signup-ph"
-            />
-            <input type="hidden" {...accountForm.register("phonePrefix")} />
             <div className="wlth-field">
               <label htmlFor="em">Email</label>
               <input
@@ -1151,15 +1137,6 @@ export function SignupApp(props: { apiBase: string }) {
                 locationForm.register("countryCode", {
                   onChange: () => {
                     locationForm.setValue("cityCode", "");
-                    if (!phonePrefixManual.current && refData) {
-                      const next = locationForm.getValues("countryCode");
-                      // onChange fires with event — read after tick
-                      queueMicrotask(() => {
-                        const cc = locationForm.getValues("countryCode");
-                        const dial = dialCodeForCountryCode(refData.countries, cc || next);
-                        if (dial) accountForm.setValue("phonePrefix", dial);
-                      });
-                    }
                   },
                 }) as never
               }
@@ -1167,6 +1144,26 @@ export function SignupApp(props: { apiBase: string }) {
               countryError={locationForm.formState.errors.countryCode?.message}
               cityError={locationForm.formState.errors.cityCode?.message}
             />
+            <div className="wlth-field">
+              <label htmlFor="signup-postcode">Post code</label>
+              <input
+                id="signup-postcode"
+                autoComplete="postal-code"
+                placeholder="Optional"
+                aria-invalid={!!locationForm.formState.errors.postCode}
+                {...locationForm.register("postCode")}
+              />
+              <FieldError message={locationForm.formState.errors.postCode?.message} />
+            </div>
+            <PhoneField
+              phonePrefix={phonePrefix || ""}
+              phoneRegister={locationForm.register("phone")}
+              prefixError={locationForm.formState.errors.phonePrefix}
+              phoneError={locationForm.formState.errors.phone}
+              idPrefix="signup-ph"
+            />
+            <input type="hidden" {...locationForm.register("phonePrefix")} />
+            <input type="hidden" {...locationForm.register("countryIso2")} />
             <AvailabilityFields
               options={refData.availabilityOptions}
               selected={availability}

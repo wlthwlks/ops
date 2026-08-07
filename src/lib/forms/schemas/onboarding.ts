@@ -7,7 +7,11 @@ import {
   REVENUE_BRACKETS,
   isAirtableRecordId,
 } from "@/lib/forms/reference-data";
-import { validatePhoneParts } from "@/lib/forms/reference-data/country-phone";
+import {
+  isValidPostCodeShape,
+  normalizePostCode,
+  validatePhoneParts,
+} from "@/lib/forms/reference-data/country-phone";
 
 const stageCodes = BUSINESS_STAGES.map((s) => s.code) as [string, ...string[]];
 const revenueCodes = REVENUE_BRACKETS.map((s) => s.code) as [string, ...string[]];
@@ -29,7 +33,7 @@ const matchingOptionCode = z.string().trim().min(1).max(64);
 const phonePrefixSchema = z
   .string()
   .trim()
-  .regex(/^\+\d{1,4}$/, "Choose a country calling code");
+  .regex(/^\+\d{1,4}$/, "Select a country so we can add the correct calling code");
 
 const nationalPhoneSchema = z
   .string()
@@ -37,27 +41,48 @@ const nationalPhoneSchema = z
   .min(4, "Enter a valid phone number")
   .max(30);
 
-function withPhoneValidation<T extends z.ZodObject<z.ZodRawShape>>(schema: T) {
+const postCodeSchema = z
+  .string()
+  .trim()
+  .max(32)
+  .transform((v) => normalizePostCode(v))
+  .refine((v) => isValidPostCodeShape(v), {
+    message: "Enter a valid post code",
+  });
+
+function withPhoneValidation<T extends z.ZodObject<z.ZodRawShape>>(
+  schema: T,
+  opts?: { required?: boolean }
+) {
+  const required = opts?.required !== false;
   return schema.superRefine((raw, ctx) => {
-    const data = raw as { phone?: string; phonePrefix?: string };
-    if (data.phone == null && data.phonePrefix == null) return;
-    if (!data.phonePrefix || !data.phone) {
-      if (data.phone || data.phonePrefix) {
+    const data = raw as {
+      phone?: string;
+      phonePrefix?: string;
+      countryIso2?: string;
+    };
+    if (!required && !data.phone && !data.phonePrefix) return;
+    if (required || data.phone || data.phonePrefix) {
+      if (!data.phonePrefix || !data.phone) {
         ctx.addIssue({
           code: "custom",
-          message: "Phone number and country calling code are both required",
+          message: "Phone number is required once a country is selected",
           path: data.phonePrefix ? ["phone"] : ["phonePrefix"],
         });
+        return;
       }
-      return;
-    }
-    const result = validatePhoneParts(data.phonePrefix, data.phone);
-    if (!result.ok) {
-      ctx.addIssue({
-        code: "custom",
-        message: result.message,
-        path: ["phone"],
-      });
+      const result = validatePhoneParts(
+        data.phonePrefix,
+        data.phone,
+        data.countryIso2
+      );
+      if (!result.ok) {
+        ctx.addIssue({
+          code: "custom",
+          message: result.message,
+          path: ["phone"],
+        });
+      }
     }
   });
 }
@@ -95,16 +120,23 @@ const accountObjectSchema = z.object({
     .transform((e) => e.toLowerCase()),
   /** Password never logged or stored by our APIs — Memberstack only. */
   password: z.string().min(8).max(128).optional(),
-  phone: nationalPhoneSchema.optional(),
-  phonePrefix: phonePrefixSchema.optional(),
 });
 
-export const accountSchema = withPhoneValidation(accountObjectSchema);
+export const accountSchema = accountObjectSchema;
 
-export const locationSchema = z.object({
+const locationObjectSchema = z.object({
   countryCode: airtableId,
   cityCode: airtableId,
+  /** Optional ISO2 from reference data — used for phone validation only */
+  countryIso2: z.string().trim().length(2).optional().or(z.literal("")),
+  postCode: postCodeSchema.optional().or(z.literal("")),
+  phone: nationalPhoneSchema,
+  phonePrefix: phonePrefixSchema,
   availability: z.array(z.enum(availCodes)).min(1).max(21),
+});
+
+export const locationSchema = withPhoneValidation(locationObjectSchema, {
+  required: true,
 });
 
 export const businessSchema = z
@@ -153,7 +185,7 @@ export const attributionSchema = z.object({
 export const onboardingStepSchema = z.discriminatedUnion("stage", [
   z.object({
     stage: z.literal("ACCOUNT"),
-    data: withPhoneValidation(accountObjectSchema.omit({ password: true })),
+    data: accountObjectSchema.omit({ password: true }),
   }),
   z.object({ stage: z.literal("LOCATION"), data: locationSchema }),
   z.object({ stage: z.literal("BUSINESS"), data: businessSchema }),
@@ -162,7 +194,6 @@ export const onboardingStepSchema = z.discriminatedUnion("stage", [
     stage: z.literal("PAYMENT_CONFIRMED"),
     data: z
       .object({
-        /** Optional Stripe cus_… from Memberstack after checkout */
         stripeCustomerId: z.string().trim().max(80).optional(),
       })
       .optional(),
@@ -173,20 +204,16 @@ export const onboardingStepSchema = z.discriminatedUnion("stage", [
   z.object({ stage: z.literal("CONNECTION"), data: connectionSchema }),
 ]);
 
-export const bootstrapSchema = withPhoneValidation(
-  z.object({
-    firstName: z.string().trim().min(1).max(80),
-    lastName: z.string().trim().min(1).max(80),
-    email: z
-      .string()
-      .trim()
-      .email()
-      .transform((e) => e.toLowerCase()),
-    phone: nationalPhoneSchema,
-    phonePrefix: phonePrefixSchema,
-    attribution: attributionSchema.optional(),
-  })
-);
+export const bootstrapSchema = z.object({
+  firstName: z.string().trim().min(1).max(80),
+  lastName: z.string().trim().min(1).max(80),
+  email: z
+    .string()
+    .trim()
+    .email()
+    .transform((e) => e.toLowerCase()),
+  attribution: attributionSchema.optional(),
+});
 
 export const updateProfileSchema = withPhoneValidation(
   z
@@ -197,9 +224,11 @@ export const updateProfileSchema = withPhoneValidation(
       phonePrefix: z
         .string()
         .trim()
-        .regex(/^\+\d{1,4}$/, "Choose a country calling code")
+        .regex(/^\+\d{1,4}$/, "Select a country so we can add the correct calling code")
         .optional()
         .or(z.literal("")),
+      countryIso2: z.string().trim().length(2).optional().or(z.literal("")),
+      postCode: postCodeSchema.optional().or(z.literal("")),
       businessName: z.string().trim().max(120).optional(),
       businessWebsite: z.string().trim().max(500).optional(),
       socialUrl: z.string().trim().max(500).optional(),
@@ -220,7 +249,8 @@ export const updateProfileSchema = withPhoneValidation(
       topicsToDiscuss: z.string().trim().max(1000).optional(),
       hobbies: z.string().trim().max(1000).optional(),
     })
-    .superRefine(otherIndustryRefine)
+    .superRefine(otherIndustryRefine),
+  { required: false }
 );
 
 export type OnboardingStage =

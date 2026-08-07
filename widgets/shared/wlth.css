@@ -558,15 +558,33 @@
   font-weight: 600;
 }
 
-/* —— Phone compound field —— */
+/* —— Phone compound field (fixed country prefix + national number) —— */
 .wlth-widget .wlth-phone {
   display: grid;
-  grid-template-columns: minmax(7.5rem, 38%) 1fr;
+  grid-template-columns: minmax(4.25rem, auto) 1fr;
   gap: 8px;
   align-items: start;
 }
 
-.wlth-widget .wlth-phone__prefix select,
+.wlth-widget .wlth-phone__prefix--fixed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--wlth-border, #d6d3d1);
+  border-radius: 10px;
+  background: var(--wlth-surface-muted, #f5f5f4);
+  color: var(--wlth-text, #1c1917);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.wlth-widget .wlth-phone__prefix-value {
+  line-height: 1;
+}
+
 .wlth-widget .wlth-phone__number input {
   margin-bottom: 0;
 }

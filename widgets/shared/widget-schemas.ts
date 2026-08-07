@@ -6,7 +6,7 @@ import { z } from "zod";
 import { parsePhoneNumberFromString } from "libphonenumber-js";
 
 function validatePhonePair(
-  data: { phone?: string; phonePrefix?: string },
+  data: { phone?: string; phonePrefix?: string; countryIso2?: string },
   ctx: z.RefinementCtx,
   required: boolean
 ) {
@@ -16,7 +16,7 @@ function validatePhonePair(
   if (!prefix || !/^\+\d{1,4}$/.test(prefix)) {
     ctx.addIssue({
       code: "custom",
-      message: "Choose a country calling code",
+      message: "Select a country so we can add the correct calling code",
       path: ["phonePrefix"],
     });
     return;
@@ -37,11 +37,25 @@ function validatePhonePair(
     });
     return;
   }
-  const parsed = parsePhoneNumberFromString(`${prefix}${phone}`);
+  const iso = (data.countryIso2 || "").trim().toUpperCase();
+  let parsed = iso
+    ? parsePhoneNumberFromString(phone, iso as never)
+    : parsePhoneNumberFromString(`${prefix}${phone}`);
+  if (!parsed?.isValid()) {
+    parsed = parsePhoneNumberFromString(`${prefix}${phone}`);
+  }
   if (!parsed?.isValid()) {
     ctx.addIssue({
       code: "custom",
-      message: "That phone number doesn’t look valid for the selected country code",
+      message: "That phone number doesn’t look valid for the selected country",
+      path: ["phone"],
+    });
+    return;
+  }
+  if (`+${parsed.countryCallingCode}` !== prefix) {
+    ctx.addIssue({
+      code: "custom",
+      message: "Phone number does not match the selected country’s calling code",
       path: ["phone"],
     });
   }
@@ -70,30 +84,43 @@ function otherIndustryRefine(
   }
 }
 
-export const accountFormSchema = z
+const postCodeField = z
+  .string()
+  .trim()
+  .max(32)
+  .optional()
+  .or(z.literal(""))
+  .refine((v) => !v || /^[A-Za-z0-9][A-Za-z0-9 \-]*$/.test(v), {
+    message: "Enter a valid post code",
+  });
+
+/** Account step: name / email / password only (no phone). */
+export const accountFormSchema = z.object({
+  firstName: z.string().trim().min(1, "First name is required").max(80),
+  lastName: z.string().trim().min(1, "Last name is required").max(80),
+  email: z
+    .string()
+    .trim()
+    .email("Enter a valid email")
+    .transform((e) => e.toLowerCase()),
+  password: z.string().min(8, "Password must be at least 8 characters").max(128),
+});
+
+/** Location: Country → City → Post code → Phone (prefix fixed from country). */
+export const locationFormSchema = z
   .object({
-    firstName: z.string().trim().min(1, "First name is required").max(80),
-    lastName: z.string().trim().min(1, "Last name is required").max(80),
-    email: z
-      .string()
-      .trim()
-      .email("Enter a valid email")
-      .transform((e) => e.toLowerCase()),
-    password: z.string().min(8, "Password must be at least 8 characters").max(128),
+    countryCode: z.string().min(10, "Country is required").max(64),
+    cityCode: z.string().min(10, "City is required").max(64),
+    countryIso2: z.string().trim().max(2).optional().or(z.literal("")),
+    postCode: postCodeField,
     phone: z.string().trim().min(1, "Phone number is required").max(30),
     phonePrefix: z
       .string()
       .trim()
-      .regex(/^\+\d{1,4}$/, "Choose a country calling code"),
+      .regex(/^\+\d{1,4}$/, "Select a country so we can add the correct calling code"),
+    availability: z.array(z.string()).min(1, "Select at least one availability slot"),
   })
   .superRefine((d, ctx) => validatePhonePair(d, ctx, true));
-
-export const locationFormSchema = z.object({
-  // Airtable COUNTRIES / ALL CITIES record ids (rec…)
-  countryCode: z.string().min(10, "Country is required").max(64),
-  cityCode: z.string().min(10, "City is required").max(64),
-  availability: z.array(z.string()).min(1, "Select at least one availability slot"),
-});
 
 export const businessFormSchema = z
   .object({
@@ -148,6 +175,8 @@ export const profileFormSchema = z
       .transform((e) => e.toLowerCase()),
     phone: z.string().trim().max(40).optional(),
     phonePrefix: z.string().trim().optional(),
+    countryIso2: z.string().trim().max(2).optional().or(z.literal("")),
+    postCode: postCodeField,
     countryCode: z.string().min(10).max(64).optional().or(z.literal("")),
     cityCode: z.string().max(64).optional(),
     availability: z.array(z.string()).max(21).optional(),

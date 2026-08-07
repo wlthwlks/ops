@@ -5,18 +5,18 @@ import {
   locationFormSchema,
 } from "../../../widgets/shared/widget-schemas";
 
+const COUNTRY_ID = "reccnnjiVkL28NBgV";
+const CITY_ID = "rec8cL36vOg1PpgIY";
+
 describe("widget schemas", () => {
-  it("validates account and lowercases email", () => {
+  it("validates account and lowercases email (no phone)", () => {
     const r = accountFormSchema.parse({
       firstName: "Ada",
       lastName: "Lovelace",
       email: " Ada@WLTH.COM ",
       password: "password1",
-      phone: "211234567",
-      phonePrefix: "+64",
     });
     expect(r.email).toBe("ada@wlth.com");
-    expect(r.phonePrefix).toBe("+64");
   });
 
   it("rejects short password", () => {
@@ -26,23 +26,30 @@ describe("widget schemas", () => {
         lastName: "B",
         email: "a@b.com",
         password: "short",
-        phone: "211234567",
-        phonePrefix: "+64",
       }).success
     ).toBe(false);
   });
 
-  it("requires valid phone on account", () => {
+  it("requires valid phone on location", () => {
     expect(
-      accountFormSchema.safeParse({
-        firstName: "A",
-        lastName: "B",
-        email: "a@b.com",
-        password: "password1",
+      locationFormSchema.safeParse({
+        countryCode: COUNTRY_ID,
+        cityCode: CITY_ID,
         phone: "12",
         phonePrefix: "+64",
+        availability: ["mon_morning"],
       }).success
     ).toBe(false);
+
+    const ok = locationFormSchema.safeParse({
+      countryCode: COUNTRY_ID,
+      cityCode: CITY_ID,
+      phone: "211234567",
+      phonePrefix: "+64",
+      postCode: "1010",
+      availability: ["mon_morning"],
+    });
+    expect(ok.success).toBe(true);
   });
 
   it("requires other industry text when OTHER selected", () => {
@@ -61,8 +68,10 @@ describe("widget schemas", () => {
   it("requires availability", () => {
     expect(
       locationFormSchema.safeParse({
-        countryCode: "reccnnjiVkL28NBgV",
-        cityCode: "rec8cL36vOg1PpgIY",
+        countryCode: COUNTRY_ID,
+        cityCode: CITY_ID,
+        phone: "211234567",
+        phonePrefix: "+64",
         availability: [],
       }).success
     ).toBe(false);

@@ -34,19 +34,35 @@ describe("onboarding schemas", () => {
     const r = locationSchema.safeParse({
       countryCode: "GB",
       cityCode: "GB-LON",
+      phone: "211234567",
+      phonePrefix: "+64",
       availability: ["mon_morning"],
     });
     expect(r.success).toBe(false);
   });
 
-  it("accepts valid location with Airtable record ids", () => {
+  it("accepts valid location with phone and optional post code", () => {
     const r = locationSchema.parse({
       countryCode: COUNTRY_ID,
       cityCode: CITY_ID,
+      phone: "211234567",
+      phonePrefix: "+64",
+      postCode: "EC1V 9HX",
       availability: ["mon_morning", "tue_evening"],
     });
     expect(r.cityCode).toBe(CITY_ID);
     expect(r.countryCode).toBe(COUNTRY_ID);
+    expect(r.phonePrefix).toBe("+64");
+    expect(r.postCode).toBe("EC1V 9HX");
+  });
+
+  it("rejects location without phone", () => {
+    const r = locationSchema.safeParse({
+      countryCode: COUNTRY_ID,
+      cityCode: CITY_ID,
+      availability: ["mon_morning"],
+    });
+    expect(r.success).toBe(false);
   });
 
   it("enforces business description length", () => {

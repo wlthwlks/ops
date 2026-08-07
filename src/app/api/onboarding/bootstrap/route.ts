@@ -10,6 +10,7 @@ import { FormsError } from "@/lib/forms/errors";
 import { getFormFeatureFlags } from "@/lib/forms/feature-flags";
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 import { enforcePublicWriteRateLimit } from "@/lib/forms/http";
+import { syncMemberstackCustomFields } from "@/lib/forms/memberstack/custom-fields";
 
 export const runtime = "nodejs";
 
@@ -68,10 +69,17 @@ export async function POST(request: Request) {
       email: parsed.data.email,
       firstName: parsed.data.firstName,
       lastName: parsed.data.lastName,
-      phone: parsed.data.phone,
-      phonePrefix: parsed.data.phonePrefix,
       attribution: parsed.data.attribution as Record<string, string | undefined>,
       source: "signup_widget",
+    });
+
+    // Best-effort MS custom fields (never account email). Airtable already saved.
+    const msSync = await syncMemberstackCustomFields({
+      memberId: member.id,
+      fields: {
+        firstName: parsed.data.firstName,
+        lastName: parsed.data.lastName,
+      },
     });
 
     return withCors(
@@ -85,6 +93,13 @@ export async function POST(request: Request) {
           "ACCOUNT_CREATED",
         profile: result.record.id !== "shadow" ? recordToProfileDto(result.record) : null,
         memberstackId: member.id,
+        memberstackCustomFieldsSynced: msSync.ok,
+        ...(msSync.ok
+          ? {}
+          : {
+              memberstackSyncWarning: msSync.message,
+              code: "MEMBERSTACK_CUSTOM_FIELDS_PARTIAL",
+            }),
       }),
       request
     );

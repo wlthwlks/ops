@@ -46,9 +46,13 @@ describe("country phone mapping", () => {
   });
 
   it("validates NZ mobile numbers", () => {
-    const ok = validatePhoneParts("+64", "211234567");
+    const ok = validatePhoneParts("+64", "211234567", "NZ");
     expect(ok.ok).toBe(true);
-    if (ok.ok) expect(ok.e164).toBe("+64211234567");
+    if (ok.ok) {
+      expect(ok.e164).toBe("+64211234567");
+      expect(ok.national).toMatch(/^\d+$/);
+      expect(ok.prefix).toBe("+64");
+    }
   });
 
   it("rejects invalid phone input", () => {

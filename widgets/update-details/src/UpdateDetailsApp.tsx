@@ -10,7 +10,11 @@ import {
 } from "../../shared/memberstack-auth";
 import { AnimatedLoader } from "../../shared/AnimatedLoader";
 import { PageBlockingLoader } from "../../shared/PageBlockingLoader";
-import { PhoneField, dialCodeForCountryCode } from "../../shared/PhoneField";
+import {
+  PhoneField,
+  dialCodeForCountryCode,
+  iso2ForCountryCode,
+} from "../../shared/PhoneField";
 import {
   AvailabilityFields,
   BusinessFields,
@@ -180,7 +184,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const [previousCityUnavailable, setPreviousCityUnavailable] = useState(false);
   const [previousCityLabel, setPreviousCityLabel] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "dirty" | "saved">("idle");
-  const phonePrefixManual = useRef(false);
   const mountedRef = useRef(true);
 
   const form = useForm<ProfileForm>({
@@ -191,6 +194,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       email: "",
       phone: "",
       phonePrefix: "",
+      countryIso2: "",
+      postCode: "",
       countryCode: "",
       cityCode: "",
       availability: [],
@@ -212,7 +217,15 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
   const refreshLocation = useForm({
     resolver: zodResolver(locationFormSchema),
-    defaultValues: { countryCode: "", cityCode: "", availability: [] as string[] },
+    defaultValues: {
+      countryCode: "",
+      cityCode: "",
+      countryIso2: "",
+      postCode: "",
+      phone: "",
+      phonePrefix: "",
+      availability: [] as string[],
+    },
   });
   const refreshBusiness = useForm({
     resolver: zodResolver(businessFormSchema),
@@ -256,6 +269,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const isDirty = form.formState.isDirty;
 
   const rCountry = refreshLocation.watch("countryCode");
+  const rPhonePrefix = refreshLocation.watch("phonePrefix") || "";
   const rAvailability = refreshLocation.watch("availability") || [];
   const rIndustry = refreshBusiness.watch("primaryIndustry") || "";
   const rHelp = refreshHelp.watch("helpWanted") || [];
@@ -267,6 +281,36 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       mountedRef.current = false;
     };
   }, []);
+
+  // Fixed calling code from selected country on main profile form.
+  useEffect(() => {
+    if (!refData) return;
+    if (!countryCode) {
+      form.setValue("phonePrefix", "");
+      form.setValue("countryIso2", "");
+      return;
+    }
+    const dial = dialCodeForCountryCode(refData.countries, countryCode) || "";
+    const iso2 = iso2ForCountryCode(refData.countries, countryCode) || "";
+    form.setValue("phonePrefix", dial, { shouldValidate: true });
+    form.setValue("countryIso2", iso2);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [countryCode, refData]);
+
+  // Fixed calling code on progressive refresh location step.
+  useEffect(() => {
+    if (!refData) return;
+    if (!rCountry) {
+      refreshLocation.setValue("phonePrefix", "");
+      refreshLocation.setValue("countryIso2", "");
+      return;
+    }
+    const dial = dialCodeForCountryCode(refData.countries, rCountry) || "";
+    const iso2 = iso2ForCountryCode(refData.countries, rCountry) || "";
+    refreshLocation.setValue("phonePrefix", dial, { shouldValidate: true });
+    refreshLocation.setValue("countryIso2", iso2);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rCountry, refData]);
 
   useEffect(() => {
     if (isDirty) setSaveStatus("dirty");
@@ -338,13 +382,17 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         setPreviousCityUnavailable(cityUnavailable);
         setPreviousCityLabel(String(p.previousCityLabel || p.city || ""));
 
+        const countryCodeDefault = String(p.countryCode || "");
+        const phonePrefixDefault = String(p.phonePrefix || "");
         const defaults: ProfileForm = {
           firstName: String(p.firstName || ""),
           lastName: String(p.lastName || ""),
           email: String(p.email || ""),
           phone: String(p.phone || ""),
-          phonePrefix: String(p.phonePrefix || ""),
-          countryCode: String(p.countryCode || ""),
+          phonePrefix: phonePrefixDefault,
+          countryIso2: "",
+          postCode: String(p.postCode || ""),
+          countryCode: countryCodeDefault,
           cityCode: cityUnavailable ? "" : String(p.cityCode || ""),
           availability: Array.isArray(p.availability) ? (p.availability as string[]) : [],
           primaryIndustry: String(p.primaryIndustry || ""),
@@ -367,6 +415,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         refreshLocation.reset({
           countryCode: defaults.countryCode || "",
           cityCode: defaults.cityCode || "",
+          countryIso2: "",
+          postCode: defaults.postCode || "",
+          phone: defaults.phone || "",
+          phonePrefix: defaults.phonePrefix || "",
           availability: defaults.availability || [],
         });
         refreshBusiness.reset({
@@ -639,15 +691,19 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
             countryCode: values.countryCode,
             cityCode: values.cityCode,
             availability: values.availability,
+            postCode: values.postCode ?? "",
+            phone: values.phone,
+            phonePrefix: values.phonePrefix,
+            countryIso2: values.countryIso2 || undefined,
           });
         }
         form.setValue("countryCode", values.countryCode);
         form.setValue("cityCode", values.cityCode);
         form.setValue("availability", values.availability);
-        if (!phonePrefixManual.current && refData) {
-          const dial = dialCodeForCountryCode(refData.countries, values.countryCode);
-          if (dial) form.setValue("phonePrefix", dial);
-        }
+        form.setValue("postCode", values.postCode ?? "");
+        form.setValue("phone", values.phone);
+        form.setValue("phonePrefix", values.phonePrefix);
+        form.setValue("countryIso2", values.countryIso2 ?? "");
         setPreviousCityUnavailable(false);
         setRefreshStep("business");
         scrollDetailsToTop();
@@ -835,6 +891,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           lastName: values.lastName,
           phone: values.phone ?? "",
           phonePrefix: values.phonePrefix ?? "",
+          countryIso2: values.countryIso2 || undefined,
+          postCode: values.postCode ?? "",
           countryCode: values.countryCode || undefined,
           cityCode: values.cityCode || undefined,
           availability: values.availability ?? [],
@@ -860,6 +918,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         email: String(p.email ?? values.email),
         phone: String(p.phone ?? values.phone ?? ""),
         phonePrefix: String(p.phonePrefix ?? values.phonePrefix ?? ""),
+        countryIso2: String(p.countryIso2 ?? values.countryIso2 ?? ""),
+        postCode: String(p.postCode ?? values.postCode ?? ""),
         countryCode: String(p.countryCode ?? values.countryCode ?? ""),
         cityCode: String(p.cityCode ?? values.cityCode ?? ""),
         availability: Array.isArray(p.availability)
@@ -1194,6 +1254,27 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 previousCityUnavailable={previousCityUnavailable}
                 previousCityLabel={previousCityLabel}
               />
+              <div className="wlth-field">
+                <label htmlFor="refresh-postcode">Post code</label>
+                <input
+                  id="refresh-postcode"
+                  autoComplete="postal-code"
+                  placeholder="Optional"
+                  {...refreshLocation.register("postCode")}
+                />
+                <FieldError
+                  message={refreshLocation.formState.errors.postCode?.message as string}
+                />
+              </div>
+              <PhoneField
+                phonePrefix={rPhonePrefix}
+                phoneRegister={refreshLocation.register("phone") as never}
+                prefixError={refreshLocation.formState.errors.phonePrefix as never}
+                phoneError={refreshLocation.formState.errors.phone as never}
+                idPrefix="refresh-ph"
+              />
+              <input type="hidden" {...refreshLocation.register("phonePrefix")} />
+              <input type="hidden" {...refreshLocation.register("countryIso2")} />
               <AvailabilityFields
                 options={refData.availabilityOptions}
                 selected={rAvailability}
@@ -1520,22 +1601,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 <input id="em" type="email" {...form.register("email")} />
                 <FieldError message={form.formState.errors.email?.message} />
               </div>
-              <PhoneField
-                countries={refData.countries}
-                phonePrefix={phonePrefix}
-                phoneRegister={form.register("phone")}
-                onPrefixChange={(dial) => {
-                  phonePrefixManual.current = true;
-                  form.setValue("phonePrefix", dial, {
-                    shouldDirty: true,
-                    shouldValidate: true,
-                  });
-                }}
-                prefixError={form.formState.errors.phonePrefix}
-                phoneError={form.formState.errors.phone}
-                idPrefix="upd-ph"
-              />
-              <input type="hidden" {...form.register("phonePrefix")} />
 
               <p className="wlth-section-title">Location & availability</p>
               <LocationFields
@@ -1550,6 +1615,25 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 previousCityUnavailable={previousCityUnavailable}
                 previousCityLabel={previousCityLabel}
               />
+              <div className="wlth-field">
+                <label htmlFor="upd-postcode">Post code</label>
+                <input
+                  id="upd-postcode"
+                  autoComplete="postal-code"
+                  placeholder="Optional"
+                  {...form.register("postCode")}
+                />
+                <FieldError message={form.formState.errors.postCode?.message} />
+              </div>
+              <PhoneField
+                phonePrefix={phonePrefix}
+                phoneRegister={form.register("phone")}
+                prefixError={form.formState.errors.phonePrefix}
+                phoneError={form.formState.errors.phone}
+                idPrefix="upd-ph"
+              />
+              <input type="hidden" {...form.register("phonePrefix")} />
+              <input type="hidden" {...form.register("countryIso2")} />
               <AvailabilityFields
                 options={refData.availabilityOptions}
                 selected={availability}

@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import type { FieldError, UseFormRegisterReturn } from "react-hook-form";
 
 export type PhoneCountryOption = {
@@ -9,81 +8,49 @@ export type PhoneCountryOption = {
 };
 
 type Props = {
-  countries: PhoneCountryOption[];
+  /** Fixed calling code from selected country (not user-editable). */
   phonePrefix: string;
   phoneRegister: UseFormRegisterReturn;
-  onPrefixChange: (dialCode: string, meta?: { manual?: boolean }) => void;
   prefixError?: FieldError;
   phoneError?: FieldError;
   disabled?: boolean;
   idPrefix?: string;
+  /** Shown when no country selected yet */
+  emptyPrefixHint?: string;
 };
 
 /**
- * Compound phone control: country calling-code selector + national number.
- * Prefix values are international dial codes only (+64), never city area codes.
+ * Phone control: fixed country calling-code prefix + national number.
+ * Prefix is derived from Location country — never a free-choice dial selector.
  */
 export function PhoneField({
-  countries,
   phonePrefix,
   phoneRegister,
-  onPrefixChange,
   prefixError,
   phoneError,
   disabled,
   idPrefix = "ph",
+  emptyPrefixHint = "Select country first",
 }: Props) {
-  const dialOptions = useMemo(() => {
-    const seen = new Set<string>();
-    const opts: Array<{ dialCode: string; label: string }> = [];
-    for (const c of countries) {
-      const dial = (c.dialCode || "").trim();
-      if (!dial || !/^\+\d{1,4}$/.test(dial)) continue;
-      const key = `${dial}|${c.label}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      opts.push({ dialCode: dial, label: c.label });
-    }
-    opts.sort((a, b) => a.label.localeCompare(b.label));
-    return opts;
-  }, [countries]);
-
-  const uniqueDial = useMemo(() => {
-    const byDial = new Map<string, { dialCode: string; labels: string[] }>();
-    for (const o of dialOptions) {
-      const cur = byDial.get(o.dialCode);
-      if (cur) cur.labels.push(o.label);
-      else byDial.set(o.dialCode, { dialCode: o.dialCode, labels: [o.label] });
-    }
-    return [...byDial.values()].sort((a, b) => {
-      const la = a.labels[0] || a.dialCode;
-      const lb = b.labels[0] || b.dialCode;
-      return la.localeCompare(lb);
-    });
-  }, [dialOptions]);
+  const prefix = (phonePrefix || "").trim();
+  const hasPrefix = /^\+\d{1,4}$/.test(prefix);
 
   return (
     <div className="wlth-field">
       <label htmlFor={`${idPrefix}-number`}>Phone number</label>
       <div className="wlth-phone">
-        <div className="wlth-phone__prefix">
-          <label className="wlth-sr-only" htmlFor={`${idPrefix}-prefix`}>
-            Country calling code
-          </label>
-          <select
-            id={`${idPrefix}-prefix`}
-            value={phonePrefix || ""}
-            disabled={disabled}
-            aria-invalid={!!prefixError}
-            onChange={(e) => onPrefixChange(e.target.value, { manual: true })}
-          >
-            <option value="">Code</option>
-            {uniqueDial.map((o) => (
-              <option key={o.dialCode} value={o.dialCode}>
-                {o.labels[0]} ({o.dialCode})
-              </option>
-            ))}
-          </select>
+        <div
+          className="wlth-phone__prefix wlth-phone__prefix--fixed"
+          aria-label="Country calling code"
+          title={
+            hasPrefix
+              ? `Calling code ${prefix} (from your country)`
+              : emptyPrefixHint
+          }
+        >
+          <span className="wlth-phone__prefix-value" id={`${idPrefix}-prefix`}>
+            {hasPrefix ? prefix : "—"}
+          </span>
         </div>
         <div className="wlth-phone__number">
           <input
@@ -91,9 +58,9 @@ export function PhoneField({
             type="tel"
             inputMode="tel"
             autoComplete="tel-national"
-            placeholder="Phone number"
-            aria-invalid={!!phoneError}
-            disabled={disabled}
+            placeholder={hasPrefix ? "Phone number" : emptyPrefixHint}
+            aria-invalid={!!phoneError || !!prefixError}
+            disabled={disabled || !hasPrefix}
             {...phoneRegister}
           />
         </div>
@@ -105,7 +72,7 @@ export function PhoneField({
   );
 }
 
-/** Prefer locale dial code; otherwise empty (member must choose). */
+/** Prefer locale dial code; otherwise empty (member must choose country). */
 export function resolveDefaultPhonePrefix(
   countries: PhoneCountryOption[],
   locale?: string | null
@@ -138,4 +105,13 @@ export function dialCodeForCountryCode(
 ): string | null {
   const c = countries.find((x) => x.code === countryCode);
   return c?.dialCode || null;
+}
+
+export function iso2ForCountryCode(
+  countries: PhoneCountryOption[],
+  countryCode: string
+): string | null {
+  const c = countries.find((x) => x.code === countryCode);
+  const iso = (c?.iso2 || "").trim().toUpperCase();
+  return iso.length === 2 ? iso : null;
 }

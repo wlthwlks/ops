@@ -37,5 +37,7 @@ export function stripComputedMemberWriteFields(
   delete out.annualRevenue;
   delete out.helpWanted; // app key — Airtable uses "Help wanted" via MEMBER_FIELDS
   delete out.phonePrefix; // app key — Airtable uses "Phone prefix"
+  delete out.countryIso2; // validation-only, never Airtable
+  delete out.postCode; // app key — Airtable uses "post code" via MEMBER_FIELDS
   return out;
 }

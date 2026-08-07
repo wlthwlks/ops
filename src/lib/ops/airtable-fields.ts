@@ -47,6 +47,8 @@ export const MEMBER_FIELDS = {
   lastName: "Last Name",
   phone: "phone number",
   phonePrefix: "Phone prefix",
+  /** Exact Airtable column used by Pinecone sync and forms */
+  postCode: "post code",
   industry: "Industry",
   revenue: "Revenue",
   /** @deprecated use industry — kept for gradual migration of call sites */
