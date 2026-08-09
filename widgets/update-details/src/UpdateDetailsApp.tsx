@@ -45,6 +45,17 @@ import {
   isAwaitingPostPaymentMatching,
   markAwaitingPostPaymentMatching,
 } from "../../shared/signup-flow-marker";
+import {
+  normalizeBusinessWebsite,
+  normalizeSocialUrl,
+  findDuplicateSocialPlatforms,
+  displayUrl,
+  type SocialPlatform,
+  type SocialLink,
+  SOCIAL_PLATFORM_LABELS,
+  ADDABLE_SOCIAL_PLATFORMS,
+  isSocialPlatform,
+} from "../../shared/profile-urls";
 
 const passwordSchema = z
   .object({
@@ -184,6 +195,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const [previousCityUnavailable, setPreviousCityUnavailable] = useState(false);
   const [previousCityLabel, setPreviousCityLabel] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "dirty" | "saved">("idle");
+  const [socialLinks, setSocialLinks] = useState<SocialLink[]>([]);
+  const [socialError, setSocialError] = useState("");
+  const [addingSocialPlatform, setAddingSocialPlatform] = useState(false);
   const mountedRef = useRef(true);
 
   const form = useForm<ProfileForm>({
@@ -199,6 +213,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       countryCode: "",
       cityCode: "",
       availability: [],
+      professionalHeadline: "",
+      profileBio: "",
+      businessName: "",
+      businessWebsite: "",
       primaryIndustry: "",
       otherIndustry: "",
       businessStage: "",
@@ -211,6 +229,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       expertiseContext: "",
       connectionType: "",
       topicsToDiscuss: "",
+      socialLinks: [],
     },
     mode: "onBlur",
   });
@@ -395,6 +414,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           countryCode: countryCodeDefault,
           cityCode: cityUnavailable ? "" : String(p.cityCode || ""),
           availability: Array.isArray(p.availability) ? (p.availability as string[]) : [],
+          professionalHeadline: String(p.professionalHeadline || ""),
+          profileBio: String(p.profileBio || ""),
+          businessName: String(p.businessName || ""),
+          businessWebsite: String(p.businessWebsite || ""),
           primaryIndustry: String(p.primaryIndustry || ""),
           otherIndustry: String(p.otherIndustry || ""),
           businessStage: String(p.businessStage || ""),
@@ -409,8 +432,14 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           expertiseContext: String(p.expertiseContext || ""),
           connectionType: String(p.connectionType || ""),
           topicsToDiscuss: String(p.topicsToDiscuss || ""),
+          socialLinks:
+            Array.isArray(p.socialLinks) ? (p.socialLinks as SocialLink[]) : [],
         };
         form.reset(defaults);
+
+        if (Array.isArray(p.socialLinks) && p.socialLinks.length > 0) {
+          setSocialLinks(p.socialLinks as SocialLink[]);
+        }
 
         refreshLocation.reset({
           countryCode: defaults.countryCode || "",
@@ -519,6 +548,41 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
   const scrollDetailsToTop = () => {
     scrollWidgetToTop("wlth-update-details-root");
+  };
+
+  const addSocialLink = (platform: SocialPlatform) => {
+    if (socialLinks.some((l) => l.platform === platform)) {
+      setSocialError("This platform is already added.");
+      return;
+    }
+    setSocialLinks([...socialLinks, { platform, url: "" }]);
+    setSocialError("");
+    setAddingSocialPlatform(false);
+    setSaveStatus("dirty");
+  };
+
+  const updateSocialUrl = (index: number, url: string) => {
+    const next = [...socialLinks];
+    next[index] = { ...next[index], url };
+    setSocialLinks(next);
+    setSaveStatus("dirty");
+  };
+
+  const removeSocialLink = (index: number) => {
+    setSocialLinks(socialLinks.filter((_, i) => i !== index));
+    setSocialError("");
+    setSaveStatus("dirty");
+  };
+
+  const validateSocialLink = (link: SocialLink): boolean => {
+    if (!link.url.trim()) return false;
+    const result = normalizeSocialUrl(link.platform, link.url);
+    if (!result.ok) {
+      setSocialError(result.message);
+      return false;
+    }
+    link.url = result.url;
+    return true;
   };
 
   const patchProfile = async (body: Record<string, unknown>) => {
@@ -901,6 +965,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           businessStage: values.businessStage || undefined,
           annualRevenue: values.annualRevenue || undefined,
           businessDescription: values.businessDescription || undefined,
+          businessName: values.businessName ?? "",
+          businessWebsite: values.businessWebsite ?? "",
+          professionalHeadline: values.professionalHeadline ?? "",
+          profileBio: values.profileBio ?? "",
           ninetyDayGoal: values.ninetyDayGoal || undefined,
           // Explicit arrays/strings so empty clears Airtable
           helpWanted: values.helpWanted ?? [],
@@ -909,6 +977,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           expertiseContext: values.expertiseContext ?? "",
           connectionType: values.connectionType || undefined,
           topicsToDiscuss: values.topicsToDiscuss ?? "",
+          socialLinks: socialLinks.length > 0
+            ? socialLinks.map((l) => ({ platform: l.platform, url: l.url }))
+            : [],
         }),
       });
       const p = (res.profile || {}) as Record<string, unknown>;
@@ -932,6 +1003,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         businessDescription: String(
           p.businessDescription ?? values.businessDescription ?? ""
         ),
+        businessName: String(p.businessName ?? values.businessName ?? ""),
+        businessWebsite: String(p.businessWebsite ?? values.businessWebsite ?? ""),
+        professionalHeadline: String(p.professionalHeadline ?? values.professionalHeadline ?? ""),
+        profileBio: String(p.profileBio ?? values.profileBio ?? ""),
         ninetyDayGoal: String(p.ninetyDayGoal ?? values.ninetyDayGoal ?? ""),
         helpWanted: Array.isArray(p.helpWanted)
           ? (p.helpWanted as string[])
@@ -943,7 +1018,14 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         expertiseContext: String(p.expertiseContext ?? values.expertiseContext ?? ""),
         connectionType: String(p.connectionType ?? values.connectionType ?? ""),
         topicsToDiscuss: String(p.topicsToDiscuss ?? values.topicsToDiscuss ?? ""),
+        socialLinks:
+          Array.isArray(p.socialLinks)
+            ? (p.socialLinks as SocialLink[])
+            : socialLinks,
       });
+      if (!Array.isArray(p.socialLinks) || (p.socialLinks as SocialLink[]).length === 0) {
+        setSocialLinks(socialLinks);
+      }
       setPreviousCityUnavailable(Boolean(p.previousCityUnavailable));
       setOk("Your profile is up to date and ready for stronger introductions.");
       setSaveStatus("saved");
@@ -1613,6 +1695,27 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 <input id="em" type="email" {...form.register("email")} />
                 <FieldError message={form.formState.errors.email?.message} />
               </div>
+              <div className="wlth-field">
+                <label htmlFor="upd-headline">Professional headline</label>
+                <input
+                  id="upd-headline"
+                  placeholder="e.g. Founder & CEO, Brand Strategist"
+                  maxLength={80}
+                  {...form.register("professionalHeadline")}
+                />
+                <FieldError message={form.formState.errors.professionalHeadline?.message} />
+              </div>
+              <div className="wlth-field">
+                <label htmlFor="upd-bio">About me</label>
+                <textarea
+                  id="upd-bio"
+                  rows={3}
+                  maxLength={500}
+                  placeholder="Tell other members a little about who you are and what you do."
+                  {...form.register("profileBio")}
+                />
+                <FieldError message={form.formState.errors.profileBio?.message} />
+              </div>
 
               <p className="wlth-section-title">Location & availability</p>
               <LocationFields
@@ -1664,6 +1767,25 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               />
 
               <p className="wlth-section-title">Business</p>
+              <div className="wlth-field">
+                <label htmlFor="upd-bizname">Business name</label>
+                <input
+                  id="upd-bizname"
+                  placeholder="Your company or brand name"
+                  maxLength={120}
+                  {...form.register("businessName")}
+                />
+                <FieldError message={form.formState.errors.businessName?.message} />
+              </div>
+              <div className="wlth-field">
+                <label htmlFor="upd-bizweb">Business website</label>
+                <input
+                  id="upd-bizweb"
+                  placeholder="yourbusiness.com"
+                  {...form.register("businessWebsite")}
+                />
+                <FieldError message={form.formState.errors.businessWebsite?.message} />
+              </div>
               <BusinessFields
                 industries={refData.industries}
                 stages={refData.businessStages}
@@ -1718,6 +1840,87 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 <label htmlFor="td">Topics to discuss</label>
                 <textarea id="td" rows={2} {...form.register("topicsToDiscuss")} />
               </div>
+
+              <p className="wlth-section-title">Links</p>
+              <p className="wlth-muted">Add your social profiles and links so members can connect.</p>
+              {socialError && (
+                <div className="wlth-banner-error" role="alert" style={{ marginBottom: 12 }}>
+                  {socialError}
+                </div>
+              )}
+              {socialLinks.map((link, idx) => (
+                <div key={link.platform} className="wlth-social-row">
+                  <span className="wlth-social-row__label">
+                    {SOCIAL_PLATFORM_LABELS[link.platform]}
+                  </span>
+                  <input
+                    className="wlth-social-row__input"
+                    placeholder={link.platform + ".com/..."}
+                    value={displayUrl(link.url)}
+                    onChange={(e) => updateSocialUrl(idx, e.target.value)}
+                    onBlur={() => {
+                      if (link.url.trim()) {
+                        const result = normalizeSocialUrl(link.platform, link.url);
+                        if (result.ok && result.url) {
+                          const next = [...socialLinks];
+                          next[idx] = { ...next[idx], url: displayUrl(result.url) };
+                          setSocialLinks(next);
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="wlth-btn-remove"
+                    onClick={() => removeSocialLink(idx)}
+                    aria-label={"Remove " + SOCIAL_PLATFORM_LABELS[link.platform]}
+                  >
+                    &times;
+                  </button>
+                </div>
+              ))}
+              {!addingSocialPlatform ? (
+                <button
+                  type="button"
+                  className="wlth-btn-secondary"
+                  style={{ marginTop: 8 }}
+                  onClick={() => {
+                    setSocialError("");
+                    setAddingSocialPlatform(true);
+                  }}
+                >
+                  + Add social profile
+                </button>
+              ) : (
+                <div className="wlth-social-picker">
+                  <p className="wlth-muted">Select a platform:</p>
+                  <div className="wlth-social-picker__options">
+                    {ADDABLE_SOCIAL_PLATFORMS.filter(
+                      (p) => !socialLinks.some((l) => l.platform === p)
+                    ).map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        className="wlth-btn-secondary"
+                        onClick={() => addSocialLink(p)}
+                      >
+                        {SOCIAL_PLATFORM_LABELS[p]}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="wlth-btn-secondary"
+                    style={{ marginTop: 8 }}
+                    onClick={() => {
+                      setAddingSocialPlatform(false);
+                      setSocialError("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
 
               <div className="wlth-sticky-save">
                 <span

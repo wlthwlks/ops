@@ -26,8 +26,6 @@ export function stripComputedMemberWriteFields(
   delete out.utm_campaign;
   delete out.utm_content;
   delete out.utm_term;
-  delete out["Business name"];
-  delete out["Business website"];
   // Obsolete name — correct field is "Expertise"
   delete out["Expertise offered"];
   // App-only keys (never Airtable columns)

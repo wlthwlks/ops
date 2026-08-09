@@ -95,6 +95,11 @@ export const MEMBERS_CANONICAL_FIELDS = [
   "Last payment failure message",
   "Billing last synced at",
   "Last Stripe event ID",
+  "Business name",
+  "Business website",
+  "social media",
+  "Professional Headline",
+  "Profile Bio",
 ] as const;
 
 export type MembersCanonicalField = (typeof MEMBERS_CANONICAL_FIELDS)[number];
@@ -175,6 +180,11 @@ export const MEMBERS_WRITABLE_FIELDS = [
   "Last payment failure message",
   "Billing last synced at",
   "Last Stripe event ID",
+  "Business name",
+  "Business website",
+  "social media",
+  "Professional Headline",
+  "Profile Bio",
 ] as const;
 
 const MEMBERS_WRITABLE_SET = new Set<string>(MEMBERS_WRITABLE_FIELDS);

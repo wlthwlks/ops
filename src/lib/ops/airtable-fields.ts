@@ -107,6 +107,11 @@ export const MEMBER_FIELDS = {
   firstIntroductionStatus: "First introduction status",
   firstIntroductionSentAt: "First introduction sent at",
   recurringEligibleFrom: "Recurring eligible from",
+  businessName: "Business name",
+  businessWebsite: "Business website",
+  socialMedia: "social media",
+  professionalHeadline: "Professional Headline",
+  profileBio: "Profile Bio",
 } as const;
 
 export const MEMBER_LIST_FIELDS: string[] = [

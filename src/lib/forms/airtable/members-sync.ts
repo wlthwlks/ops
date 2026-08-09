@@ -26,6 +26,9 @@ import {
 import { FormsError } from "@/lib/forms/errors";
 import { canWriteAirtableFromForms } from "@/lib/forms/feature-flags";
 import { stripComputedMemberWriteFields } from "@/lib/forms/airtable/write-guards";
+import {
+  parseSocialMediaField,
+} from "@/lib/forms/validation/profile-urls";
 
 function fieldStr(fields: Record<string, unknown>, key: string): string {
   const v = fields[key];
@@ -375,6 +378,8 @@ export async function updateOnboardingStep(
   delete fields.cityCode;
   delete fields._appCityCode;
   delete fields._appCountryCode;
+  delete fields._appProfessionalHeadline;
+  delete fields._appProfileBio;
   delete fields.expertiseOffered;
   delete fields.businessName;
   delete fields.businessWebsite;
@@ -463,6 +468,8 @@ export async function updateMemberProfile(
 
   delete fields._appCityCode;
   delete fields._appCountryCode;
+  delete fields._appProfessionalHeadline;
+  delete fields._appProfileBio;
   delete fields.cityCode;
   delete fields.countryCode;
   delete fields.expertiseOffered;
@@ -727,8 +734,11 @@ export function recordToProfileDto(record: AirtableRecord) {
     stripeCustomerId: fieldStr(f, MEMBER_FIELDS.stripeCustomerId),
     memberstackId: fieldStr(f, MEMBER_FIELDS.memberstackId),
     onboardingStatus: fieldStr(f, MEMBER_FIELDS.onboardingStatus),
-    businessName: "",
-    businessWebsite: "",
+    businessName: fieldStr(f, MEMBER_FIELDS.businessName),
+    businessWebsite: fieldStr(f, MEMBER_FIELDS.businessWebsite),
+    professionalHeadline: fieldStr(f, MEMBER_FIELDS.professionalHeadline),
+    profileBio: fieldStr(f, MEMBER_FIELDS.profileBio),
+    socialLinks: parseSocialMediaField(f[MEMBER_FIELDS.socialMedia]),
     primaryIndustry: industrySplit.primaryIndustry,
     otherIndustry: industrySplit.otherIndustry,
     businessStage: fieldStr(f, MEMBER_FIELDS.businessStage),

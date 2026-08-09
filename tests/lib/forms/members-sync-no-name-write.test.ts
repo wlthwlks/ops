@@ -169,7 +169,7 @@ describe("Airtable member writes never include computed Name", () => {
     expect(dto.firstName).toBe("First");
   });
 
-  it("stripComputedMemberWriteFields removes nonexistent aliases but keeps Help wanted / Expertise", async () => {
+  it("stripComputedMemberWriteFields preserves Business name and Business website, removes nonexistent aliases", async () => {
     const { stripComputedMemberWriteFields } = await loadMembersSync();
     const stripped = stripComputedMemberWriteFields({
       "Last form source": "signup",
@@ -180,6 +180,7 @@ describe("Airtable member writes never include computed Name", () => {
       Expertise: ["recExp1"],
       "Expertise offered": "y",
       "Business name": "Acme",
+      "Business website": "acme.com",
       "90-day goal": "grow",
       "First attribution at": "2020-01-01",
       utm_source: "google",
@@ -195,7 +196,8 @@ describe("Airtable member writes never include computed Name", () => {
     expect(stripped["Help wanted"]).toEqual(["recHelp1"]);
     expect(stripped.Expertise).toEqual(["recExp1"]);
     expect(stripped["Expertise offered"]).toBeUndefined();
-    expect(stripped["Business name"]).toBeUndefined();
+    expect(stripped["Business name"]).toBe("Acme");
+    expect(stripped["Business website"]).toBe("acme.com");
     expect(stripped["90-day goal"]).toBeUndefined();
     expect(stripped["First attribution at"]).toBeUndefined();
     expect(stripped.utm_source).toBeUndefined();

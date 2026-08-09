@@ -21,6 +21,17 @@ import {
 } from "@/lib/forms/reference-data";
 import { normalizePostCode } from "@/lib/forms/reference-data/country-phone";
 import { syncMemberstackCustomFields } from "@/lib/forms/memberstack/custom-fields";
+import {
+  normalizeBusinessWebsite,
+  normalizeBusinessName,
+  normalizeProfessionalHeadline,
+  normalizeProfileBio,
+  normalizeSocialUrl,
+  findDuplicateSocialPlatforms,
+  serializeSocialMediaField,
+  type SocialLink,
+  isSocialPlatform,
+} from "@/lib/forms/validation/profile-urls";
 
 export const runtime = "nodejs";
 
@@ -188,6 +199,54 @@ export async function PATCH(request: Request) {
     if (d.annualRevenue != null) patch[MEMBER_FIELDS.revenue] = d.annualRevenue;
     if (d.businessDescription != null)
       patch[MEMBER_FIELDS.businessDescription] = d.businessDescription;
+
+    if (d.businessName !== undefined)
+      patch[MEMBER_FIELDS.businessName] = normalizeBusinessName(d.businessName);
+    if (d.businessWebsite !== undefined) {
+      const websiteResult = normalizeBusinessWebsite(d.businessWebsite);
+      if (!websiteResult.ok) {
+        throw new FormsError("PROFILE_VALIDATION_FAILED", websiteResult.message, {
+          status: 400,
+          retryable: false,
+        });
+      }
+      patch[MEMBER_FIELDS.businessWebsite] = websiteResult.url;
+    }
+    if (d.professionalHeadline !== undefined)
+      patch[MEMBER_FIELDS.professionalHeadline] = normalizeProfessionalHeadline(d.professionalHeadline);
+    if (d.profileBio !== undefined)
+      patch[MEMBER_FIELDS.profileBio] = normalizeProfileBio(d.profileBio);
+
+    if (d.socialLinks !== undefined) {
+      if (Array.isArray(d.socialLinks)) {
+        const dupe = findDuplicateSocialPlatforms(d.socialLinks);
+        if (dupe) {
+          throw new FormsError(
+            "PROFILE_VALIDATION_FAILED",
+            `Duplicate social platform: ${dupe}`,
+            { status: 400, retryable: false }
+          );
+        }
+        const validLinks: SocialLink[] = [];
+        for (const link of d.socialLinks) {
+          if (!link.platform || !link.url || !isSocialPlatform(link.platform)) continue;
+          const result = normalizeSocialUrl(link.platform, link.url);
+          if (!result.ok) {
+            throw new FormsError("PROFILE_VALIDATION_FAILED", result.message, {
+              status: 400,
+              retryable: false,
+            });
+          }
+          if (result.url) {
+            validLinks.push({ platform: link.platform, url: result.url });
+          }
+        }
+        patch[MEMBER_FIELDS.socialMedia] = serializeSocialMediaField(validLinks);
+      } else {
+        patch[MEMBER_FIELDS.socialMedia] = "";
+      }
+    }
+
     if (d.ninetyDayGoal != null) {
       patch[MEMBER_FIELDS.ninetyDayGoal] = d.ninetyDayGoal;
       patch[MEMBER_FIELDS.goalUpdatedAt] = new Date().toISOString();

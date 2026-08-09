@@ -53,7 +53,9 @@ describe("airtable field maps", () => {
     expect(MEMBER_FIELDS).not.toHaveProperty("countryCode");
     expect(MEMBER_FIELDS).not.toHaveProperty("cityCode");
     expect(MEMBER_FIELDS).not.toHaveProperty("expertiseOffered");
-    expect(MEMBER_FIELDS).not.toHaveProperty("businessName");
+    expect(MEMBER_FIELDS.businessName).toBe("Business name");
+    expect(MEMBER_FIELDS.businessWebsite).toBe("Business website");
+    expect(MEMBER_FIELDS.socialMedia).toBe("social media");
   });
 
   it("Slack channels fields use exact export names", () => {

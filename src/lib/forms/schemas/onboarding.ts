@@ -215,6 +215,11 @@ export const bootstrapSchema = z.object({
   attribution: attributionSchema.optional(),
 });
 
+export const socialLinkSchema = z.object({
+  platform: z.string().trim().min(1).max(20),
+  url: z.string().trim().max(500),
+});
+
 export const updateProfileSchema = withPhoneValidation(
   z
     .object({
@@ -231,7 +236,9 @@ export const updateProfileSchema = withPhoneValidation(
       postCode: postCodeSchema.optional().or(z.literal("")),
       businessName: z.string().trim().max(120).optional(),
       businessWebsite: z.string().trim().max(500).optional(),
-      socialUrl: z.string().trim().max(500).optional(),
+      professionalHeadline: z.string().trim().max(80).optional(),
+      profileBio: z.string().trim().max(500).optional(),
+      socialLinks: z.array(socialLinkSchema).optional(),
       countryCode: airtableId.optional(),
       cityCode: airtableId.optional(),
       availability: z.array(z.enum(availCodes)).max(21).optional(),

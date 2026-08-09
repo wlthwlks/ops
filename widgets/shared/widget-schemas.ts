@@ -180,6 +180,10 @@ export const profileFormSchema = z
     countryCode: z.string().min(10).max(64).optional().or(z.literal("")),
     cityCode: z.string().max(64).optional(),
     availability: z.array(z.string()).max(21).optional(),
+    professionalHeadline: z.string().trim().max(80).optional(),
+    profileBio: z.string().trim().max(500).optional(),
+    businessName: z.string().trim().max(120).optional(),
+    businessWebsite: z.string().trim().max(500).optional(),
     primaryIndustry: z.string().optional(),
     otherIndustry: z.string().trim().max(120).optional(),
     businessStage: z.string().optional(),
@@ -192,6 +196,14 @@ export const profileFormSchema = z
     expertiseContext: z.string().trim().max(400).optional(),
     connectionType: z.string().optional(),
     topicsToDiscuss: z.string().trim().max(1000).optional(),
+    socialLinks: z
+      .array(
+        z.object({
+          platform: z.string().trim().min(1).max(20),
+          url: z.string().trim().max(500),
+        })
+      )
+      .optional(),
   })
   .superRefine((d, ctx) => {
     otherIndustryRefine(d, ctx);
