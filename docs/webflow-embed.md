@@ -36,6 +36,26 @@ Use the shared helper exposed by the signup bundle as `window.WlthSignupFlow` (s
 <script src="https://ops.wlthwlks.com/widgets/update-details/v1/update-details.js" defer></script>
 ```
 
+## Getting Started
+
+```html
+<div id="wlth-getting-started-root" data-directory-url="https://women.wlthwlks.com/member-directory"></div>
+<link rel="stylesheet" href="https://ops.wlthwlks.com/widgets/getting-started/v1/getting-started.css" />
+<script src="https://ops.wlthwlks.com/widgets/getting-started/v1/getting-started.js" defer></script>
+```
+
+Memberstack DOM script must be on the page (same as signup/update-details).
+
+| Attribute | Purpose | Required? |
+|---|---|---|
+| `data-directory-url` | URL for Member Directory CTA button | Optional (defaults to `#`) |
+| `data-allow-anonymous` | Set to `true` to skip Memberstack gate (dev only) | Optional (defaults `false`) |
+
+Behaviour:
+- Resolves Memberstack session via shared `tryResolveSessionAccessToken`
+- Logged out → "Log in to view Getting Started" message
+- Authed → full Getting Started page
+
 ## Staging
 
 1. Embed only on Webflow staging / password pages first.
