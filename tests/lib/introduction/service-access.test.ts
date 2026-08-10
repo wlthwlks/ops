@@ -39,18 +39,19 @@ describe("hasServiceAccess", () => {
 
 describe("checkServiceAccess", () => {
   it("returns accessible true for Active+Paid", () => {
-    expect(checkServiceAccess("Active", "Paid", null, new Date())).toEqual({ accessible: true });
+    const r = checkServiceAccess("Active", "Paid", null, new Date());
+    expect(r.accessible).toBe(true);
   });
 
   it("returns reason when Inactive and no extension", () => {
     const result = checkServiceAccess("Inactive", "Paid", null, new Date());
     expect(result.accessible).toBe(false);
-    expect((result as { reason: string }).reason).toContain("Not paid");
+    expect((result as { message: string }).message).toContain("Not paid");
   });
 
   it("returns reason when extension has expired", () => {
     const result = checkServiceAccess("Inactive", "Unpaid", "2020-01-01", new Date("2026-07-25"));
     expect(result.accessible).toBe(false);
-    expect((result as { reason: string }).reason).toContain("expired");
+    expect((result as { message: string }).message).toContain("expired");
   });
 });

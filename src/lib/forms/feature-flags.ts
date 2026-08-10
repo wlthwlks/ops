@@ -20,6 +20,7 @@ export function getFormFeatureFlags() {
     newFormAnalyticsEnabled: flag("NEW_FORM_ANALYTICS_ENABLED"),
     makeShadowMode: flag("MAKE_SHADOW_MODE"),
     billingAlertsToSlackEnabled: flag("BILLING_ALERTS_TO_SLACK_ENABLED"),
+    serviceAccessPolicyV2Enabled: flag("SERVICE_ACCESS_POLICY_V2_ENABLED"),
   } as const;
 }
 

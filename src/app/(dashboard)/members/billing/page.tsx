@@ -215,6 +215,38 @@ function BillingPageInner() {
                     "Status of full Stripe scan pipeline."
                   )}
                 </Col>
+                {(data?.entitlementSnapshot as Record<string, unknown>) ? (() => {
+                  const s = data?.entitlementSnapshot as Record<string, unknown>;
+                  const kpiCustom = (label: string, val: unknown, tooltip: string) => (
+                    <Col xs={24} sm={12} md={8} lg={6}>
+                      <KpiCard
+                        title={label}
+                        value={String(val ?? "—")}
+                        tooltip={tooltip}
+                      />
+                    </Col>
+                  );
+                  return (
+                    <Col span={24}>
+                      <Card size="small" title={"Entitlement policy: " + (s.policy ?? "unknown")} style={{ marginTop: 8 }}>
+                        <Row gutter={[12, 12]}>
+                          {kpiCustom("V2 verified access", s.v2Access, "V2 paid-through only — Active+Paid alone does not grant access under V2")}
+                          {kpiCustom("Legacy access", s.legacyAccess, "Legacy Active+Paid OR valid Service access until")}
+                          {kpiCustom("Legacy bypass gap", Number(s.legacyActivePaidBypass ?? 0), "Active+Paid without valid paid-through date (would lose access under V2)")}
+                          {kpiCustom("Active+Paid expired access", s.activePaidExpiredAccess, "Active+Paid with expired Service access until (V2: no access; legacy: has access)")}
+                          {kpiCustom("Active+Paid blank access", s.activePaidBlankAccess, "Active+Paid with no Service access date (V2: no access; legacy: has access)")}
+                          {kpiCustom("Cancelled with future access", s.cancelledWithFutureAccess, "Cancelled but legitimately prepaid through a future date")}
+                          {kpiCustom("Future access total", s.futureAccessTotal, "All members with Service access until in the future")}
+                        </Row>
+                        {(s.flags as Record<string, unknown>) ? (
+                          <Typography.Text style={{ fontSize: 12, color: "#94a3b8", marginTop: 8, display: "block" }}>
+                            Flags: V2={String((s.flags as Record<string, unknown>).serviceAccessPolicyV2Enabled ?? false)} · Stripe webhooks={String((s.flags as Record<string, unknown>).newStripeWebhooksEnabled ?? false)}
+                          </Typography.Text>
+                        ) : null}
+                      </Card>
+                    </Col>
+                  );
+                })() : null}
                 <Col span={24}>
                   <Card size="small">
                     <Typography.Text>

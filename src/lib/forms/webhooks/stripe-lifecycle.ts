@@ -8,6 +8,7 @@ import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 import { updateMemberBilling } from "@/lib/forms/airtable/members-sync";
 import { recordIntegrationError } from "@/lib/forms/webhooks/store";
 import { canApplyExpandedStripeWebhooks } from "@/lib/forms/feature-flags";
+import { classifyChargeRefundFromStripe } from "@/lib/billing/stripe-entitlement";
 
 function customerId(ref: string | Stripe.Customer | Stripe.DeletedCustomer | null): string {
   if (!ref) return "";
@@ -208,16 +209,40 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
     case "charge.refunded": {
       const charge = event.data.object as Stripe.Charge;
       const cus = customerId(charge.customer);
+      if (!cus) {
+        return { processed: true, status: "manual_review", reason: "Refund logged — no Stripe customer" };
+      }
+
+      const refundKind = classifyChargeRefundFromStripe(charge);
+      const patch: Record<string, unknown> = {};
+
+      if (refundKind === "full") {
+        patch[MEMBER_FIELDS.payment] = "Refunded";
+      }
+
+      const result = await updateMemberBilling({
+        stripeCustomerId: cus,
+        patch,
+      });
+
       await recordIntegrationError({
         code: "STRIPE_RECONCILIATION_PENDING",
         source: "stripe",
         operation: event.type,
-        title: "Charge refunded — manual review",
-        message: `Charge ${charge.id}`,
+        title: refundKind === "full"
+          ? "Charge fully refunded — Payment set to Refunded"
+          : refundKind === "partial"
+            ? "Charge partially refunded — manual review"
+            : "Charge refunded — manual review",
+        message: `Charge ${charge.id} (refund kind: ${refundKind})`,
         severity: "warning",
-        stripeCustomerId: cus || null,
+        stripeCustomerId: cus,
       });
-      return { processed: true, status: "manual_review", reason: "Refund logged" };
+
+      if (refundKind === "full") {
+        return { processed: true, status: result.status, reason: "Full refund — Payment set to Refunded" };
+      }
+      return { processed: true, status: "manual_review", reason: "Partial/unknown refund — manual review" };
     }
 
     default:

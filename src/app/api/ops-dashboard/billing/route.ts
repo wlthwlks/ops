@@ -2,6 +2,8 @@ import { requireOpsViewer } from "@/lib/ops/auth";
 import { handleOpsApiError, jsonOk } from "@/lib/ops/api-response";
 import { filterMembers, scanMemberHealth } from "@/lib/ops/member-health";
 import { severityRank } from "@/lib/ops/member-issue-classifier";
+import { summarizeAirtableEntitlementSnapshot } from "@/lib/introduction/service-access";
+import { getFormFeatureFlags } from "@/lib/forms/feature-flags";
 import type { MemberHealthRow } from "@/lib/ops/member-health-types";
 
 export const runtime = "nodejs";
@@ -177,10 +179,34 @@ export async function GET(request: Request) {
     }
 
     if (tab === "overview") {
+      const flags = getFormFeatureFlags();
+      const snapshot = summarizeAirtableEntitlementSnapshot(
+        members.map((m) => ({
+          membership: m.membership,
+          payment: m.payment,
+          serviceAccessUntil: m.serviceAccessUntil || null,
+        })),
+        new Date()
+      );
       return jsonOk({
         tab,
-        summary: scan.summary,
+        summary: { ...scan.summary, policy: flags.serviceAccessPolicyV2Enabled ? "v2" : "legacy" },
         kpis,
+        entitlementSnapshot: {
+          total: snapshot.total,
+          legacyAccess: snapshot.legacyAccess,
+          v2Access: snapshot.v2Access,
+          policy: flags.serviceAccessPolicyV2Enabled ? "v2" as const : "legacy" as const,
+          legacyActivePaidBypass: snapshot.legacyActivePaidBypass,
+          activePaidExpiredAccess: snapshot.activePaidExpiredAccess,
+          activePaidBlankAccess: snapshot.activePaidBlankAccess,
+          cancelledWithFutureAccess: snapshot.cancelledWithFutureAccess,
+          futureAccessTotal: snapshot.futureAccessTotal,
+          flags: {
+            serviceAccessPolicyV2Enabled: flags.serviceAccessPolicyV2Enabled,
+            newStripeWebhooksEnabled: flags.newStripeWebhooksEnabled,
+          },
+        },
         mode: scan.summary.mode,
       });
     }

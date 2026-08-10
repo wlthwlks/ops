@@ -12,7 +12,7 @@ Verified against the live preview base via Airtable REST (Metadata API token lac
 | `phone number` | text | National / local number only |
 | `Phone prefix` | text | International calling code only (`+64`, `+61`, …) |
 | `Membership` | single select | Options include `Active`, **`Pending Payment`** (required for signup) |
-| `Payment` | single select | `Unpaid`, `Paid` |
+| `Payment` | single select | `Unpaid`, `Paid`, **`Failed`**, **`Refunded`** |
 | `City` | text | City label |
 | `City relation` | linked → ALL CITIES | Write `[recordId]` |
 | `Timezone` | text | |

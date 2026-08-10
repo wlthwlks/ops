@@ -304,6 +304,8 @@ export async function updateServiceAccessUntilForCustomer(input: {
   stripeEventId?: string;
   dryRun?: boolean;
   billing?: InvoiceBillingExtras;
+  /** Allow reducing Service access until. Default false (monotonic). */
+  allowServiceAccessReduction?: boolean;
 }): Promise<ServiceAccessSyncResult> {
   const {
     airtable,
@@ -313,6 +315,7 @@ export async function updateServiceAccessUntilForCustomer(input: {
     stripeEventId,
     dryRun = false,
     billing,
+    allowServiceAccessReduction = false,
   } = input;
 
   const paidThroughIso = paidThrough.toISOString();
@@ -363,6 +366,22 @@ export async function updateServiceAccessUntilForCustomer(input: {
       oldValue,
       Math.floor(paidThrough.getTime() / 1000)
     );
+
+    // Reduction mode: trust corrective paid-through from Stripe, bypass monotonic guard
+    const effectiveShouldUpdate =
+      allowServiceAccessReduction
+        ? (() => {
+            if (comparison.invalidCurrent) return false; // invalid ⇒ skip write
+            if (comparison.shouldUpdate) return true; // forward
+            // Backwards — compare raw values directly
+            const candidateUnix = Math.floor(paidThrough.getTime() / 1000);
+            if (oldValue) {
+              const oldUnix = Math.floor(new Date(oldValue).getTime() / 1000);
+              if (!Number.isNaN(oldUnix) && oldUnix !== candidateUnix) return true;
+            }
+            return false;
+          })()
+        : comparison.shouldUpdate && !comparison.invalidCurrent;
 
     // Authoritative paid state + billing snapshot (even if access date unchanged).
     const configuredPlan = getConfiguredMemberstackPlanId();
@@ -432,7 +451,7 @@ export async function updateServiceAccessUntilForCustomer(input: {
       continue;
     }
 
-    if (comparison.shouldUpdate) {
+    if (effectiveShouldUpdate) {
       fields[SERVICE_ACCESS_FIELD] = paidThroughIso;
       results.push({
         airtableRecordId: rec.id,

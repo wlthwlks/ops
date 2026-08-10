@@ -20,6 +20,8 @@
     "airtable:reconcile-stripe-customers": "npx tsx scripts/reconcile-stripe-customer-ids.ts",
     "airtable:historical-stripe-repair": "npx tsx scripts/sync-paying-stripe-members-to-airtable.ts",
     "airtable:repair-city-relations": "npx tsx scripts/repair-city-channel-relations.ts",
+    "billing:audit": "npx tsx scripts/entitlement-audit.ts",
+    "billing:reconcile": "npx tsx scripts/entitlement-reconcile.ts",
     "widgets:build": "WIDGET=signup vite build --config widgets/vite.config.ts && WIDGET=update-details vite build --config widgets/vite.config.ts",
     "widgets:build:signup": "WIDGET=signup vite build --config widgets/vite.config.ts",
     "widgets:build:update": "WIDGET=update-details vite build --config widgets/vite.config.ts",
