@@ -1203,30 +1203,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           res.status === "no_payment_method" ||
           res.status === "no_stripe_customer"
         ) {
-          const w = window as unknown as {
-            $memberstackDom?: {
-              purchasePlansWithCheckout?: (p: {
-                priceId: string;
-                successUrl: string;
-                cancelUrl: string;
-              }) => Promise<unknown>;
-            };
-          };
-          if (!membershipPriceId || !w.$memberstackDom?.purchasePlansWithCheckout) {
-            setError(String(res.reason || "Could not reactivate membership"));
-            return;
-          }
-          const base = window.location.origin + window.location.pathname;
-          await w.$memberstackDom.purchasePlansWithCheckout({
-            priceId: membershipPriceId,
-            successUrl: `${base}?reactivated=1`,
-            cancelUrl: `${base}?reactivated=0`,
-          });
-          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-            method: "POST",
-            token,
-            body: JSON.stringify({}),
-          }).catch(() => undefined);
+          setError(
+            "No payment method on file. Use Manage billing below to add a card via Stripe, then reactivate."
+          );
+          return;
         } else {
           setError(String(res.reason || "Could not reactivate membership"));
           return;
@@ -1918,7 +1898,11 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 stageRegister={form.register("businessStage") as never}
                 revenueRegister={form.register("annualRevenue") as never}
                 descriptionRegister={form.register("businessDescription") as never}
+                industryError={form.formState.errors.primaryIndustry?.message}
                 otherIndustryError={form.formState.errors.otherIndustry?.message}
+                stageError={form.formState.errors.businessStage?.message}
+                revenueError={form.formState.errors.annualRevenue?.message}
+                descriptionError={form.formState.errors.businessDescription?.message}
               />
 
               <p className="wlth-section-title">Matching preferences</p>
