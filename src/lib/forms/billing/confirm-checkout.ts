@@ -740,9 +740,14 @@ export async function confirmCheckoutForMember(input: {
     configuredPlan ||
     "";
 
-  const patch: Record<string, unknown> = {
-    [MEMBER_FIELDS.onboardingStatus]: "PAYMENT_CONFIRMED",
-  };
+  const currentOnboardingStatus = String(
+    existingRows[0]?.fields[MEMBER_FIELDS.onboardingStatus] ?? ""
+  ).trim();
+
+  const patch: Record<string, unknown> = {};
+  if (currentOnboardingStatus !== "COMPLETE") {
+    patch[MEMBER_FIELDS.onboardingStatus] = "PAYMENT_CONFIRMED";
+  }
   if (subscriptionId) {
     patch[MEMBER_FIELDS.stripeSubscriptionId] = subscriptionId;
   }

@@ -180,7 +180,6 @@ export async function handleMemberstackEvent(input: {
     const patch: Record<string, unknown> = {
       [MEMBER_FIELDS.membership]: "Active",
       [MEMBER_FIELDS.payment]: "Paid",
-      [MEMBER_FIELDS.onboardingStatus]: "PAYMENT_CONFIRMED",
     };
     if (m.planId) patch[MEMBER_FIELDS.memberstackPlanId] = m.planId;
     else {

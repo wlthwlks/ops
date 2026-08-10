@@ -597,14 +597,20 @@ export async function applyTrustedPaymentByMemberstackId(
     );
   }
 
+  const currentStatus = String(
+    existing.fields[MEMBER_FIELDS.onboardingStatus] ?? ""
+  ).trim();
+
   const patch: Record<string, unknown> = {
     [MEMBER_FIELDS.stripeCustomerId]: cus,
     [MEMBER_FIELDS.payment]: "Paid",
     [MEMBER_FIELDS.membership]: "Active",
-    [MEMBER_FIELDS.onboardingStatus]: "PAYMENT_CONFIRMED",
     [MEMBER_FIELDS.billingLastSyncedAt]: new Date().toISOString(),
     ...(input.patch || {}),
   };
+  if (currentStatus !== "COMPLETE") {
+    patch[MEMBER_FIELDS.onboardingStatus] = "PAYMENT_CONFIRMED";
+  }
 
   if (!canWriteBillingToAirtable()) {
     return {
