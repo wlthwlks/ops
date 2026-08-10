@@ -1945,7 +1945,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                     type="submit"
                     form="wlth-update-profile-form"
                     className="wlth-btn-primary"
-                    disabled={saving || !isDirty}
+                    disabled={saving || (!isDirty && saveStatus !== "dirty")}
                   >
                     Save changes
                   </button>
