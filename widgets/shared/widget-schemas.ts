@@ -178,23 +178,33 @@ export const profileFormSchema = z
     countryIso2: z.string().trim().max(2).optional().or(z.literal("")),
     postCode: postCodeField,
     countryCode: z.string().min(10).max(64).optional().or(z.literal("")),
-    cityCode: z.string().max(64).optional(),
+    cityCode: z.string().min(10).max(64).optional(),
     availability: z.array(z.string()).max(21).optional(),
     professionalHeadline: z.string().trim().max(80).optional(),
     profileBio: z.string().trim().max(500).optional(),
     businessName: z.string().trim().max(120).optional(),
     businessWebsite: z.string().trim().max(500).optional(),
-    primaryIndustry: z.string().optional(),
+    primaryIndustry: z.string().min(1, "Select an industry").optional(),
     otherIndustry: z.string().trim().max(120).optional(),
-    businessStage: z.string().optional(),
-    annualRevenue: z.string().optional(),
-    businessDescription: z.string().trim().max(400).optional(),
-    ninetyDayGoal: z.string().trim().max(300).optional(),
+    businessStage: z.string().min(1, "Select a business stage").optional(),
+    annualRevenue: z.string().min(1, "Select a revenue bracket").optional(),
+    businessDescription: z
+      .string()
+      .trim()
+      .min(40, "Please write at least 40 characters")
+      .max(400, "Keep under 400 characters")
+      .optional(),
+    ninetyDayGoal: z
+      .string()
+      .trim()
+      .min(30, "Please write at least 30 characters")
+      .max(300, "Keep under 300 characters")
+      .optional(),
     helpWanted: z.array(z.string()).max(3).optional(),
     helpWantedContext: z.string().trim().max(400).optional(),
     expertiseOffered: z.array(z.string()).max(5).optional(),
     expertiseContext: z.string().trim().max(400).optional(),
-    connectionType: z.string().optional(),
+    connectionType: z.string().min(1, "Select a connection type").optional(),
     topicsToDiscuss: z.string().trim().max(1000).optional(),
     socialLinks: z
       .array(

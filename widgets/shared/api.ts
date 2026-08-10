@@ -38,10 +38,12 @@ export async function widgetApi(
     const err = new Error(message) as Error & {
       status?: number;
       code?: string;
+      details?: unknown;
     };
     err.status = res.status;
-    if (json && typeof json === "object" && "code" in json) {
-      err.code = String((json as { code?: string }).code || "");
+    if (json && typeof json === "object") {
+      if ("code" in json) err.code = String((json as { code?: string }).code || "");
+      if ("details" in json) err.details = (json as { details?: unknown }).details;
     }
     throw err;
   }

@@ -658,6 +658,43 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     });
   };
 
+  /** Parse Zod fieldErrors from server response into readable RHF + social errors. */
+  const applyServerFieldErrors = (e: unknown) => {
+    const err = e as Error & { details?: unknown; code?: string };
+    const fieldErrors = (err.details as Record<string, { _errors?: string[] }>)?.fieldErrors as
+      | Record<string, string[]>
+      | undefined;
+    if (!fieldErrors) return false;
+
+    let found = false;
+    for (const [field, messages] of Object.entries(fieldErrors)) {
+      const msg = Array.isArray(messages) ? messages[0] : messages;
+      if (!msg) continue;
+
+      // Social links errors
+      if (field === "socialLinks") {
+        setSocialError(String(msg));
+        found = true;
+        continue;
+      }
+
+      // Try setting on the main form
+      form.setError(field as keyof ProfileForm, { message: String(msg) }, { shouldFocus: true });
+      found = true;
+    }
+
+    if (found) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => scrollToFirstFormError(
+          document.getElementById("wlth-update-profile-form") as HTMLFormElement | null,
+          Object.keys(fieldErrors),
+          document.querySelectorAll("#wlth-update-profile-form .wlth-error") as unknown as Element[],
+        ));
+      });
+    }
+    return found;
+  };
+
   /** Save progress like signup — updates Onboarding status + Last completed signup step. */
   const saveOnboardingStep = async (stage: string, data: unknown) => {
     if (!token) throw new Error("Not signed in");
@@ -836,7 +873,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         setRefreshStep("business");
         scrollDetailsToTop();
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Could not save location");
+        if (!applyServerFieldErrors(e)) {
+          setError(e instanceof Error ? e.message : "Could not save location");
+        }
       } finally {
         if (mountedRef.current) setRefreshBusy(false);
       }
@@ -875,7 +914,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         }
         scrollDetailsToTop();
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Could not save business details");
+        if (!applyServerFieldErrors(e)) {
+          setError(e instanceof Error ? e.message : "Could not save business details");
+        }
       } finally {
         if (mountedRef.current) setRefreshBusy(false);
       }
@@ -898,7 +939,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         setRefreshStep("help");
         scrollDetailsToTop();
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Could not save goal");
+        if (!applyServerFieldErrors(e)) {
+          setError(e instanceof Error ? e.message : "Could not save goal");
+        }
       } finally {
         if (mountedRef.current) setRefreshBusy(false);
       }
@@ -925,7 +968,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         setRefreshStep("expertise");
         scrollDetailsToTop();
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Could not save help preferences");
+        if (!applyServerFieldErrors(e)) {
+          setError(e instanceof Error ? e.message : "Could not save help preferences");
+        }
       } finally {
         if (mountedRef.current) setRefreshBusy(false);
       }
@@ -952,7 +997,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         setRefreshStep("connection");
         scrollDetailsToTop();
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Could not save expertise");
+        if (!applyServerFieldErrors(e)) {
+          setError(e instanceof Error ? e.message : "Could not save expertise");
+        }
       } finally {
         if (mountedRef.current) setRefreshBusy(false);
       }
@@ -990,7 +1037,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           "You’re all set — your profile is complete and ready for stronger introductions."
         );
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Could not finish profile");
+        if (!applyServerFieldErrors(e)) {
+          setError(e instanceof Error ? e.message : "Could not finish profile");
+        }
       } finally {
         if (mountedRef.current) setRefreshBusy(false);
       }
@@ -1097,7 +1146,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       setOk("Your profile is up to date and ready for stronger introductions.");
       setSaveStatus("saved");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Save failed");
+      if (!applyServerFieldErrors(e)) {
+        setError(e instanceof Error ? e.message : "Save failed");
+      }
     } finally {
       if (mountedRef.current) setSaving(false);
     }
