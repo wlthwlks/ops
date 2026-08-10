@@ -22,9 +22,10 @@
     "airtable:repair-city-relations": "npx tsx scripts/repair-city-channel-relations.ts",
     "billing:audit": "npx tsx scripts/entitlement-audit.ts",
     "billing:reconcile": "npx tsx scripts/entitlement-reconcile.ts",
-    "widgets:build": "WIDGET=signup vite build --config widgets/vite.config.ts && WIDGET=update-details vite build --config widgets/vite.config.ts",
+    "widgets:build": "WIDGET=signup vite build --config widgets/vite.config.ts && WIDGET=update-details vite build --config widgets/vite.config.ts && WIDGET=getting-started vite build --config widgets/vite.config.ts",
     "widgets:build:signup": "WIDGET=signup vite build --config widgets/vite.config.ts",
     "widgets:build:update": "WIDGET=update-details vite build --config widgets/vite.config.ts",
+    "widgets:build:getting-started": "WIDGET=getting-started vite build --config widgets/vite.config.ts",
     "forms:city-alias-dry-run": "npx tsx scripts/report-city-alias-dry-run.ts",
     "security:check-files": "tsx scripts/check-sensitive-files.ts",
     "test:e2e": "playwright test"

@@ -77,16 +77,30 @@ export default defineConfig({
     outDir: path.resolve(__dirname, `../public/widgets/${widget}/v1`),
     lib: {
       entry: path.resolve(__dirname, `${widget}/src/main.tsx`),
-      name: widget === "signup" ? "WlthSignup" : "WlthUpdateDetails",
+      name:
+        widget === "signup"
+          ? "WlthSignup"
+          : widget === "update-details"
+            ? "WlthUpdateDetails"
+            : "WlthGettingStarted",
       formats: ["iife"],
-      fileName: () => (widget === "signup" ? "signup.js" : "update-details.js"),
+      fileName: () =>
+        widget === "signup"
+          ? "signup.js"
+          : widget === "update-details"
+            ? "update-details.js"
+            : "getting-started.js",
     },
     rollupOptions: {
       output: {
         assetFileNames: (assetInfo) => {
           const name = assetInfo.names?.[0] || assetInfo.name || "";
           if (name.endsWith(".css") || assetInfo.name?.endsWith(".css")) {
-            return widget === "signup" ? "signup.css" : "update-details.css";
+            return widget === "signup"
+              ? "signup.css"
+              : widget === "update-details"
+                ? "update-details.css"
+                : "getting-started.css";
           }
           return "assets/[name]-[hash][extname]";
         },
