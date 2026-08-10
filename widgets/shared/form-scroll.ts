@@ -34,11 +34,13 @@ function isElementInViewport(el: Element): boolean {
 
 /**
  * Focus and scroll to the first invalid field when it is not already on screen.
+ * When multiple errors exist, picks the topmost visible error by viewport order.
  * Prefer aria-invalid, then .wlth-error with text, then [name] from RHF error keys.
  */
 export function scrollToFirstFormError(
   formEl?: HTMLFormElement | null,
-  errorFields?: string[]
+  errorFields?: string[],
+  extraCandidates?: Element[]
 ) {
   try {
     const scope =
@@ -47,9 +49,14 @@ export function scrollToFirstFormError(
       document.querySelector(".wlth-widget");
     if (!scope) return;
 
-    const candidates: Element[] = [];
+    const candidates: Array<{ el: Element; top: number }> = [];
 
-    scope.querySelectorAll("[aria-invalid='true']").forEach((el) => candidates.push(el));
+    const add = (el: Element) => {
+      const top = el.getBoundingClientRect().top;
+      candidates.push({ el, top: Number.isFinite(top) ? top : Infinity });
+    };
+
+    scope.querySelectorAll("[aria-invalid='true']").forEach((el) => add(el));
 
     if (errorFields?.length) {
       for (const name of errorFields) {
@@ -57,7 +64,7 @@ export function scrollToFirstFormError(
           scope.querySelector(`[name="${CSS.escape(name)}"]`) ||
           scope.querySelector(`#${CSS.escape(name)}`) ||
           scope.querySelector(`[id$="-${CSS.escape(name)}"]`);
-        if (byName) candidates.push(byName);
+        if (byName) add(byName);
       }
     }
 
@@ -68,10 +75,19 @@ export function scrollToFirstFormError(
       const control =
         field?.querySelector("input, select, textarea, button.wlth-ms__trigger") ||
         errEl.previousElementSibling;
-      if (control) candidates.push(control);
+      if (control) add(control);
     });
 
-    const target = candidates[0];
+    // Extra candidates from client-side validation (e.g. social links outside RHF)
+    if (extraCandidates?.length) {
+      for (const el of extraCandidates) {
+        if (el && el instanceof Element) add(el);
+      }
+    }
+
+    // Sort by viewport top — scroll to the highest error first
+    candidates.sort((a, b) => a.top - b.top);
+    const target = candidates[0]?.el;
     if (!target) return;
 
     if (!isElementInViewport(target)) {
@@ -96,11 +112,14 @@ export function scrollToFirstFormError(
 /** RHF invalid submit: scroll first errored field into view if needed. */
 export function onInvalidScrollToError(
   errors: Record<string, unknown>,
-  formEl?: HTMLFormElement | null
+  formEl?: HTMLFormElement | null,
+  extraCandidates?: Element[]
 ) {
   const keys = Object.keys(errors || {});
   // Defer so RHF can paint aria-invalid / error text first
   requestAnimationFrame(() => {
-    requestAnimationFrame(() => scrollToFirstFormError(formEl, keys));
+    requestAnimationFrame(() =>
+      scrollToFirstFormError(formEl, keys, extraCandidates)
+    );
   });
 }

@@ -39,7 +39,7 @@ import {
   markProfileRefreshComplete,
   decodeJwtPayload,
 } from "../../shared/session-refresh-gate";
-import { onInvalidScrollToError, scrollWidgetToTop } from "../../shared/form-scroll";
+import { onInvalidScrollToError, scrollWidgetToTop, scrollToFirstFormError } from "../../shared/form-scroll";
 import {
   clearAwaitingPostPaymentMatching,
   isAwaitingPostPaymentMatching,
@@ -196,7 +196,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const [previousCityLabel, setPreviousCityLabel] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "dirty" | "saved">("idle");
   const [socialLinks, setSocialLinks] = useState<SocialLink[]>([]);
+  const [socialLinksErrors, setSocialLinksErrors] = useState<Array<string>>([]);
   const [socialError, setSocialError] = useState("");
+  const [webError, setWebError] = useState("");
   const [addingSocialPlatform, setAddingSocialPlatform] = useState(false);
   const mountedRef = useRef(true);
 
@@ -439,6 +441,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
         if (Array.isArray(p.socialLinks) && p.socialLinks.length > 0) {
           setSocialLinks(p.socialLinks as SocialLink[]);
+          setSocialLinksErrors(
+            (p.socialLinks as SocialLink[]).map(() => "")
+          );
         }
 
         refreshLocation.reset({
@@ -556,6 +561,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       return;
     }
     setSocialLinks([...socialLinks, { platform, url: "" }]);
+    setSocialLinksErrors([...socialLinksErrors, ""]);
     setSocialError("");
     setAddingSocialPlatform(false);
     setSaveStatus("dirty");
@@ -565,24 +571,82 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     const next = [...socialLinks];
     next[index] = { ...next[index], url };
     setSocialLinks(next);
+    // Clear per-link error on edit
+    if (socialLinksErrors[index]) {
+      const nextErrors = [...socialLinksErrors];
+      nextErrors[index] = "";
+      setSocialLinksErrors(nextErrors);
+    }
     setSaveStatus("dirty");
   };
 
   const removeSocialLink = (index: number) => {
     setSocialLinks(socialLinks.filter((_, i) => i !== index));
+    setSocialLinksErrors(socialLinksErrors.filter((_, i) => i !== index));
     setSocialError("");
     setSaveStatus("dirty");
   };
 
-  const validateSocialLink = (link: SocialLink): boolean => {
-    if (!link.url.trim()) return false;
-    const result = normalizeSocialUrl(link.platform, link.url);
-    if (!result.ok) {
-      setSocialError(result.message);
-      return false;
+  const validateFormSocialLinksAndWebsite = (): { ok: boolean; errorEls: Element[] } => {
+    const errorEls: Element[] = [];
+    let ok = true;
+
+    // Validate business website
+    const webVal = String(form.getValues("businessWebsite") || "").trim();
+    if (webVal) {
+      const result = normalizeBusinessWebsite(webVal);
+      if (!result.ok) {
+        setWebError(result.message);
+        ok = false;
+        const input = document.getElementById("upd-bizweb");
+        if (input) { input.setAttribute("aria-invalid", "true"); errorEls.push(input); }
+      } else {
+        setWebError("");
+        const input = document.getElementById("upd-bizweb");
+        if (input) input.removeAttribute("aria-invalid");
+      }
+    } else {
+      setWebError("");
+      const input = document.getElementById("upd-bizweb");
+      if (input) input.removeAttribute("aria-invalid");
     }
-    link.url = result.url;
-    return true;
+
+    // Validate social links
+    const nextErrors = socialLinks.map(() => "");
+    let hasSocialError = false;
+
+    for (let i = 0; i < socialLinks.length; i++) {
+      const link = socialLinks[i];
+      if (!link.url.trim()) continue;
+      const result = normalizeSocialUrl(link.platform, link.url);
+      if (!result.ok) {
+        nextErrors[i] = result.message;
+        hasSocialError = true;
+        ok = false;
+      }
+    }
+
+    setSocialLinksErrors(nextErrors);
+    if (hasSocialError) {
+      setSocialError("Some links need attention. Check the errors below.");
+    } else {
+      setSocialError("");
+    }
+
+    // Collect error elements for scroll
+    if (!ok) {
+      requestAnimationFrame(() => {
+        const els = document.querySelectorAll("#wlth-update-profile-form .wlth-social-row__input[aria-invalid='true'], #wlth-update-profile-form #upd-bizweb[aria-invalid='true']");
+        els.forEach(el => errorEls.push(el));
+        scrollToFirstFormError(
+          document.getElementById("wlth-update-profile-form") as HTMLFormElement | null,
+          [],
+          errorEls,
+        );
+      });
+    }
+
+    return { ok, errorEls };
   };
 
   const patchProfile = async (body: Record<string, unknown>) => {
@@ -937,10 +1001,13 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const onSave = form.handleSubmit(
     async (values) => {
     if (!token || saving) return;
+    const preCheck = validateFormSocialLinksAndWebsite();
+    if (!preCheck.ok) return;
     setSaving(true);
     scrollDetailsToTop();
     setError(null);
     setOk(null);
+    setWebError("");
     try {
       await api(props.apiBase, "/api/member/email", {
         method: "POST",
@@ -1783,8 +1850,12 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   id="upd-bizweb"
                   placeholder="yourbusiness.com"
                   {...form.register("businessWebsite")}
+                  onChange={(e) => {
+                    form.register("businessWebsite").onChange(e);
+                    if (webError) setWebError("");
+                  }}
                 />
-                <FieldError message={form.formState.errors.businessWebsite?.message} />
+                <FieldError message={webError || form.formState.errors.businessWebsite?.message} />
               </div>
               <BusinessFields
                 industries={refData.industries}
@@ -1839,6 +1910,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               <div className="wlth-field">
                 <label htmlFor="td">Topics to discuss</label>
                 <textarea id="td" rows={2} {...form.register("topicsToDiscuss")} />
+                <FieldError message={form.formState.errors.topicsToDiscuss?.message} />
               </div>
 
               <p className="wlth-section-title">Links</p>
@@ -1855,8 +1927,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   </span>
                   <input
                     className="wlth-social-row__input"
+                    id={"upd-social-" + link.platform}
                     placeholder={link.platform + ".com/..."}
                     value={displayUrl(link.url)}
+                    aria-invalid={!!socialLinksErrors[idx]}
                     onChange={(e) => updateSocialUrl(idx, e.target.value)}
                     onBlur={() => {
                       if (link.url.trim()) {
@@ -1865,6 +1939,11 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                           const next = [...socialLinks];
                           next[idx] = { ...next[idx], url: displayUrl(result.url) };
                           setSocialLinks(next);
+                          if (socialLinksErrors[idx]) {
+                            const nextErrors = [...socialLinksErrors];
+                            nextErrors[idx] = "";
+                            setSocialLinksErrors(nextErrors);
+                          }
                         }
                       }
                     }}
@@ -1877,6 +1956,11 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   >
                     &times;
                   </button>
+                  {socialLinksErrors[idx] ? (
+                    <div className="wlth-error" style={{ width: "100%", marginTop: 4 }}>
+                      {socialLinksErrors[idx]}
+                    </div>
+                  ) : null}
                 </div>
               ))}
               {!addingSocialPlatform ? (
