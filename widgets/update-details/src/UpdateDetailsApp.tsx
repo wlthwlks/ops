@@ -1922,7 +1922,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               />
 
               <p className="wlth-section-title">Matching preferences</p>
-              <MatchingGoalField register={form.register("ninetyDayGoal") as never} />
+              <MatchingGoalField
+                register={form.register("ninetyDayGoal") as never}
+                error={form.formState.errors.ninetyDayGoal?.message}
+              />
               <MultiSelectDropdown
                 label="Help wanted"
                 helperText="Choose up to three areas."
@@ -1936,6 +1939,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               <div className="wlth-field">
                 <label htmlFor="hw">Help wanted context (optional)</label>
                 <textarea id="hw" rows={2} {...form.register("helpWantedContext")} />
+                <FieldError message={form.formState.errors.helpWantedContext?.message} />
               </div>
               <MultiSelectDropdown
                 label="Expertise offered"
@@ -1953,10 +1957,12 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               <div className="wlth-field">
                 <label htmlFor="ex">Expertise context (optional)</label>
                 <textarea id="ex" rows={2} {...form.register("expertiseContext")} />
+                <FieldError message={form.formState.errors.expertiseContext?.message} />
               </div>
               <ConnectionTypeField
                 options={refData.connectionTypes}
                 register={form.register("connectionType") as never}
+                error={form.formState.errors.connectionType?.message}
               />
               <div className="wlth-field">
                 <label htmlFor="td">Topics to discuss</label>
