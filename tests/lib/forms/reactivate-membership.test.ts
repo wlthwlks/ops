@@ -100,6 +100,7 @@ describe("reactivateMembershipForMember", () => {
     expect(result.nextRenewalDate).toBeTruthy();
     expect(subscriptionsUpdate).toHaveBeenCalledWith("sub_pending", {
       cancel_at_period_end: false,
+      cancel_at: null,
     });
     expect(subscriptionsCreate).not.toHaveBeenCalled();
     expect(applyTrustedPaymentByMemberstackId).toHaveBeenCalled();

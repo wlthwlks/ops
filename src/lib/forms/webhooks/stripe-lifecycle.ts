@@ -64,10 +64,21 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
         [MEMBER_FIELDS.stripeCustomerId]: cus,
       };
 
-      if (sub.cancel_at_period_end) {
+      const scheduledCancel =
+        Boolean(sub.cancel_at_period_end) ||
+        (typeof sub.cancel_at === "number" && sub.cancel_at * 1000 > Date.now());
+
+      if (scheduledCancel) {
         patch[MEMBER_FIELDS.cancelAtPeriodEnd] = "true";
         patch[MEMBER_FIELDS.cancellationRequestedAt] = new Date().toISOString();
-        if (accessUntil) {
+        const cancelAtIso =
+          typeof sub.cancel_at === "number"
+            ? new Date(sub.cancel_at * 1000).toISOString().slice(0, 10)
+            : accessUntil;
+        if (cancelAtIso) {
+          patch[MEMBER_FIELDS.cancellationEffectiveAt] = cancelAtIso;
+          patch[MEMBER_FIELDS.serviceAccessUntil] = cancelAtIso;
+        } else if (accessUntil) {
           patch[MEMBER_FIELDS.cancellationEffectiveAt] = accessUntil;
           patch[MEMBER_FIELDS.serviceAccessUntil] = accessUntil;
         }

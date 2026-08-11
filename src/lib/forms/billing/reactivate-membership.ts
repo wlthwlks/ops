@@ -214,9 +214,13 @@ export async function reactivateMembershipForMember(input: {
    * 3) past_due / unpaid / incomplete          → payment-method / portal path
    * 4) canceled (ended)                        → new subscription (or portal if no card)
    */
+  const isScheduledCancel = (s: Stripe.Subscription) =>
+    Boolean(s.cancel_at_period_end) ||
+    (typeof s.cancel_at === "number" && s.cancel_at * 1000 > Date.now());
+
   const live = subs.data.find(
     (s) =>
-      (s.status === "active" || s.status === "trialing") && !s.cancel_at_period_end
+      (s.status === "active" || s.status === "trialing") && !isScheduledCancel(s)
   );
   if (live) {
     const { plan } = commerceIds(live, priceId);
@@ -249,14 +253,16 @@ export async function reactivateMembershipForMember(input: {
   }
 
   // Still in paid period with cancel scheduled — reverse only, never new Checkout.
-  // Do not require a card: undoing cancel_at_period_end does not charge.
+  // Do not require a card: undoing cancel_at_period_end / cancel_at does not charge.
   const pendingCancel = subs.data.find(
     (s) =>
-      (s.status === "active" || s.status === "trialing") && s.cancel_at_period_end
+      (s.status === "active" || s.status === "trialing") && isScheduledCancel(s)
   );
   if (pendingCancel) {
     const updated = await stripe.subscriptions.update(pendingCancel.id, {
       cancel_at_period_end: false,
+      // Clear a fixed cancel_at timestamp if Memberstack/portal set one
+      cancel_at: null,
     });
     const { subPrice, plan } = commerceIds(updated, priceId);
     const next = periodEndIso(updated);

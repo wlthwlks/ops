@@ -343,16 +343,67 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     if (isDirty) setSaveStatus("dirty");
   }, [isDirty]);
 
+  const applyBillingPayload = (raw: unknown) => {
+    if (!raw || typeof raw !== "object") {
+      setBilling(null);
+      return;
+    }
+    const b = raw as Record<string, unknown>;
+    const cancelRaw = b.cancelAtPeriodEnd;
+    const cancelAtPeriodEnd =
+      cancelRaw === true ||
+      cancelRaw === 1 ||
+      String(cancelRaw ?? "")
+        .trim()
+        .toLowerCase() === "true" ||
+      String(cancelRaw ?? "")
+        .trim()
+        .toLowerCase() === "1" ||
+      String(cancelRaw ?? "")
+        .trim()
+        .toLowerCase() === "yes";
+
+    setBilling({
+      membership: String(b.membership ?? ""),
+      payment: String(b.payment ?? ""),
+      serviceAccessUntil: String(b.serviceAccessUntil ?? ""),
+      cancelAtPeriodEnd,
+      cancellationEffectiveAt: String(b.cancellationEffectiveAt ?? ""),
+      stripeCustomerId:
+        typeof b.stripeCustomerId === "string" ? b.stripeCustomerId : null,
+      hasPaymentMethod: Boolean(b.hasPaymentMethod),
+      uiState: typeof b.uiState === "string" ? b.uiState : undefined,
+      stripeSubscriptionStatus:
+        typeof b.stripeSubscriptionStatus === "string"
+          ? b.stripeSubscriptionStatus
+          : b.stripeSubscriptionStatus == null
+            ? null
+            : String(b.stripeSubscriptionStatus),
+      stripeSubscriptionId:
+        typeof b.stripeSubscriptionId === "string"
+          ? b.stripeSubscriptionId
+          : undefined,
+      currentPeriodEnd:
+        typeof b.currentPeriodEnd === "string"
+          ? b.currentPeriodEnd
+          : b.currentPeriodEnd == null
+            ? null
+            : String(b.currentPeriodEnd).slice(0, 10),
+      hasServiceAccess: Boolean(b.hasServiceAccess),
+      accessUntilLabel:
+        typeof b.accessUntilLabel === "string" ? b.accessUntilLabel : undefined,
+    });
+  };
+
   const refreshBilling = async (accessToken?: string | null) => {
     const t = accessToken || token;
     if (!t) return;
     try {
       const bill = await api(props.apiBase, "/api/member/billing-status", {
         token: t,
-        // bust any intermediate caches
         cache: "no-store",
       });
-      setBilling((bill.billing || null) as typeof billing);
+      applyBillingPayload(bill.billing);
     } catch {
       /* ignore — billing refreshes on next mount */
     }
@@ -532,9 +583,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           }
         }
 
-        setBilling(
-          (bill.billing || null) as typeof billing
-        );
+        applyBillingPayload(bill.billing);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load profile");
       } finally {
@@ -582,11 +631,30 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     const sub = (billing.stripeSubscriptionStatus || "").toLowerCase();
 
     // 1) Scheduled cancel — highest priority for this banner
+    // Also: Active member with a future cancellation/access end date (Airtable lag).
+    const futureEnd =
+      endsOn &&
+      !Number.isNaN(
+        Date.parse(endsOn.length <= 10 ? `${endsOn}T23:59:59.999Z` : endsOn)
+      ) &&
+      Date.parse(endsOn.length <= 10 ? `${endsOn}T23:59:59.999Z` : endsOn) >= Date.now();
+
     if (
       billing.cancelAtPeriodEnd ||
-      ui === "cancellation_scheduled"
+      ui === "cancellation_scheduled" ||
+      (futureEnd &&
+        (mem === "active" || mem === "cancelled" || mem === "canceled") &&
+        Boolean(billing.cancellationEffectiveAt || billing.accessUntilLabel))
     ) {
-      return { showBanner: true, kind: "cancellation_scheduled" as const, endsOn };
+      // Only treat future-end Active as scheduled cancel when we also have a cancel signal
+      // (cancel flag OR cancellationEffectiveAt OR uiState). Avoid false positives on normal renewals.
+      if (
+        billing.cancelAtPeriodEnd ||
+        ui === "cancellation_scheduled" ||
+        Boolean(String(billing.cancellationEffectiveAt || "").trim())
+      ) {
+        return { showBanner: true, kind: "cancellation_scheduled" as const, endsOn };
+      }
     }
 
     // 2) Explicit server states
@@ -641,6 +709,118 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   }, [billing]);
 
   const needsReactivation = membershipDisplay.showBanner;
+
+  const membershipBannerEl =
+    billing && membershipDisplay.showBanner ? (
+      <div className="wlth-reactivate" data-membership-state={membershipDisplay.kind}>
+        {membershipDisplay.kind === "cancellation_scheduled" ? (
+          <>
+            <h3>
+              Membership ends
+              {membershipDisplay.endsOn ? ` on ${membershipDisplay.endsOn}` : ""}
+            </h3>
+            <p className="wlth-muted" style={{ marginBottom: 12 }}>
+              {membershipDisplay.endsOn
+                ? `You still have access until ${membershipDisplay.endsOn}. Your membership will not renew after this date.`
+                : "You still have access until the end of your paid period. Your membership will not renew after it ends."}
+            </p>
+            <p className="wlth-muted" style={{ marginBottom: 12 }}>
+              Reactivate now to continue without interruption — you will not be charged today.
+            </p>
+            <div className="wlth-actions">
+              <button
+                type="button"
+                className="wlth-btn-primary"
+                disabled={reactivating}
+                onClick={() => void reactivateMembership()}
+              >
+                {reactivating ? "Reactivating…" : "Reactivate membership"}
+              </button>
+              <button
+                type="button"
+                className="wlth-btn-secondary"
+                onClick={() => void openPortal()}
+              >
+                Manage billing
+              </button>
+            </div>
+          </>
+        ) : membershipDisplay.kind === "expired" ? (
+          <>
+            <h3>Your membership has ended</h3>
+            <p className="wlth-muted" style={{ marginBottom: 12 }}>
+              Your paid access has expired. Resubscribe charges the card on file when available.
+              Use Manage billing to add or change cards.
+            </p>
+            <div className="wlth-actions">
+              <button
+                type="button"
+                className="wlth-btn-primary"
+                disabled={reactivating}
+                onClick={() => void reactivateMembership()}
+              >
+                {reactivating ? "Resubscribing…" : "Resubscribe"}
+              </button>
+              <button
+                type="button"
+                className="wlth-btn-secondary"
+                onClick={() => void openPortal()}
+              >
+                Manage billing
+              </button>
+            </div>
+          </>
+        ) : membershipDisplay.kind === "payment_problem" ? (
+          <>
+            <h3>Payment issue</h3>
+            <p className="wlth-muted" style={{ marginBottom: 12 }}>
+              {billing.hasServiceAccess
+                ? "Your payment needs attention but you still have access."
+                : "Your payment has failed. Update your card to restore access."}{" "}
+              Use Manage billing to update your payment method.
+            </p>
+            <div className="wlth-actions">
+              <button
+                type="button"
+                className="wlth-btn-primary"
+                onClick={() => void openPortal()}
+              >
+                Manage billing
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h3>Reactivate your membership</h3>
+            <p className="wlth-muted" style={{ marginBottom: 12 }}>
+              Your membership is not fully active
+              {billing.membership ? ` (${billing.membership}` : ""}
+              {billing.payment
+                ? `${billing.membership ? " · " : " ("}${billing.payment}`
+                : ""}
+              {billing.membership || billing.payment ? ")" : ""}.
+            </p>
+            <div className="wlth-actions">
+              <button
+                type="button"
+                className="wlth-btn-primary"
+                disabled={reactivating}
+                onClick={() => void reactivateMembership()}
+              >
+                {reactivating ? "Reactivating…" : "Reactivate membership"}
+              </button>
+              <button
+                type="button"
+                className="wlth-btn-secondary"
+                onClick={() => void openPortal()}
+              >
+                Manage billing
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    ) : null;
 
   /** Payment inside progressive flow only for mid-signup who are not yet Paid+Active. */
   const refreshNeedsPaymentStep = useMemo(() => {
@@ -932,7 +1112,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         () => null
       );
       const bill = await api(props.apiBase, "/api/member/billing-status", { token });
-      setBilling((bill.billing || null) as typeof billing);
+      applyBillingPayload(bill.billing);
       if (st && st.paymentConfirmed) {
         goAfterPaymentToMatching();
       }
@@ -974,7 +1154,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         body: JSON.stringify({}),
       }).catch(() => undefined);
       const bill = await api(props.apiBase, "/api/member/billing-status", { token });
-      setBilling((bill.billing || null) as typeof billing);
+      applyBillingPayload(bill.billing);
       goAfterPaymentToMatching();
     } catch (e) {
       const werr = e as WidgetApiError;
@@ -1399,7 +1579,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         setOk(String(res.reason || res.message || "Membership reactivated with your card on file."));
       }
       const bill = await api(props.apiBase, "/api/member/billing-status", { token });
-      setBilling((bill.billing || null) as typeof billing);
+      applyBillingPayload(bill.billing);
     } catch (e) {
       const werr = e as WidgetApiError;
       // API returns 402 with message now — surface it
@@ -1490,7 +1670,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           await new Promise((r) => setTimeout(r, 2000));
         }
         const bill = await api(props.apiBase, "/api/member/billing-status", { token });
-        setBilling((bill.billing || null) as typeof billing);
+        applyBillingPayload(bill.billing);
         if (confirmed) {
           clearAwaitingPostPaymentMatching();
           setPaymentConfirmed(true);
@@ -1620,6 +1800,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
             </div>
           )}
           {ok && <div className="wlth-banner-success">{ok}</div>}
+          {membershipBannerEl}
 
           {refreshStep === "location" && (
             <form onSubmit={onRefreshLocation} noValidate>
@@ -1927,116 +2108,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
         {!token && <p>Log in to continue.</p>}
 
-        {billing && membershipDisplay.showBanner && (
-          <div className="wlth-reactivate" data-membership-state={membershipDisplay.kind}>
-            {membershipDisplay.kind === "cancellation_scheduled" ? (
-              <>
-                <h3>
-                  Membership ends
-                  {membershipDisplay.endsOn ? ` on ${membershipDisplay.endsOn}` : ""}
-                </h3>
-                <p className="wlth-muted" style={{ marginBottom: 12 }}>
-                  {membershipDisplay.endsOn
-                    ? `You still have access until ${membershipDisplay.endsOn}. Your membership will not renew after this date.`
-                    : "You still have access until the end of your paid period. Your membership will not renew after it ends."}
-                </p>
-                <p className="wlth-muted" style={{ marginBottom: 12 }}>
-                  Reactivate now to continue without interruption — you will not be charged today.
-                </p>
-                <div className="wlth-actions">
-                  <button
-                    type="button"
-                    className="wlth-btn-primary"
-                    disabled={reactivating}
-                    onClick={() => void reactivateMembership()}
-                  >
-                    {reactivating ? "Reactivating…" : "Reactivate membership"}
-                  </button>
-                  <button
-                    type="button"
-                    className="wlth-btn-secondary"
-                    onClick={() => void openPortal()}
-                  >
-                    Manage billing
-                  </button>
-                </div>
-              </>
-            ) : membershipDisplay.kind === "expired" ? (
-              <>
-                <h3>Your membership has ended</h3>
-                <p className="wlth-muted" style={{ marginBottom: 12 }}>
-                  Your paid access has expired. Resubscribe charges the card on file when
-                  available. Use Manage billing to add or change cards.
-                </p>
-                <div className="wlth-actions">
-                  <button
-                    type="button"
-                    className="wlth-btn-primary"
-                    disabled={reactivating}
-                    onClick={() => void reactivateMembership()}
-                  >
-                    {reactivating ? "Resubscribing…" : "Resubscribe"}
-                  </button>
-                  <button
-                    type="button"
-                    className="wlth-btn-secondary"
-                    onClick={() => void openPortal()}
-                  >
-                    Manage billing
-                  </button>
-                </div>
-              </>
-            ) : membershipDisplay.kind === "payment_problem" ? (
-              <>
-                <h3>Payment issue</h3>
-                <p className="wlth-muted" style={{ marginBottom: 12 }}>
-                  {billing.hasServiceAccess
-                    ? "Your payment needs attention but you still have access."
-                    : "Your payment has failed. Update your card to restore access."}{" "}
-                  Use Manage billing to update your payment method.
-                </p>
-                <div className="wlth-actions">
-                  <button
-                    type="button"
-                    className="wlth-btn-primary"
-                    onClick={() => void openPortal()}
-                  >
-                    Manage billing
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <h3>Reactivate your membership</h3>
-                <p className="wlth-muted" style={{ marginBottom: 12 }}>
-                  Your membership is not fully active
-                  {billing.membership ? ` (${billing.membership}` : ""}
-                  {billing.payment
-                    ? `${billing.membership ? " · " : " ("}${billing.payment}`
-                    : ""}
-                  {billing.membership || billing.payment ? ")" : ""}.
-                </p>
-                <div className="wlth-actions">
-                  <button
-                    type="button"
-                    className="wlth-btn-primary"
-                    disabled={reactivating}
-                    onClick={() => void reactivateMembership()}
-                  >
-                    {reactivating ? "Reactivating…" : "Reactivate membership"}
-                  </button>
-                  <button
-                    type="button"
-                    className="wlth-btn-secondary"
-                    onClick={() => void openPortal()}
-                  >
-                    Manage billing
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        )}
+        {membershipBannerEl}
 
         {token && refData && (
           <>
