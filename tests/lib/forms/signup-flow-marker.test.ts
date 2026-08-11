@@ -172,3 +172,20 @@ describe("signup flow marker (/apply gate)", () => {
     expect(isAwaitingPostPaymentMatching("mem_pay")).toBe(false);
   });
 });
+
+describe("existing cancelled-at-period-end member entering /apply", () => {
+  it("existing member without active signup marker is redirected, not allowed to re-create", () => {
+    const replace = vi.fn();
+    const redirected = redirectExistingMemberOffApply({
+      isLoggedIn: true,
+      memberId: "mem_cancelled_end_of_period",
+      replace,
+    });
+    expect(redirected).toBe(true);
+    expect(replace).toHaveBeenCalledWith("/update-details");
+  });
+
+  it("logged-out user stays on /apply regardless", () => {
+    expect(shouldStayOnApplyPage({ isLoggedIn: false, memberId: null })).toBe(true);
+  });
+});

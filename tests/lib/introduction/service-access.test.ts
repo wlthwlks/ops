@@ -55,3 +55,22 @@ describe("checkServiceAccess", () => {
     expect((result as { message: string }).message).toContain("expired");
   });
 });
+
+describe("cancel_at_period_end access preservation", () => {
+  // cancel_at_period_end=true + Service access until future = member still has access
+  it("Active+Paid+cancel_at_period_end with future access → has access", () => {
+    expect(hasServiceAccess("Active", "Paid", "2026-11-01", new Date("2026-08-11"))).toBe(true);
+  });
+
+  it("Cancelled+cancel_at_period_end with future access → has access", () => {
+    expect(hasServiceAccess("Cancelled", "Paid", "2026-11-01", new Date("2026-08-11"))).toBe(true);
+  });
+
+  it("Cancelled with past access until → no access", () => {
+    expect(hasServiceAccess("Cancelled", "Unpaid", "2026-01-01", new Date("2026-08-11"))).toBe(false);
+  });
+
+  it("Past_due with future access → has access (legacy)", () => {
+    expect(hasServiceAccess("Active", "Unpaid", "2026-11-01", new Date("2026-08-11"))).toBe(true);
+  });
+});

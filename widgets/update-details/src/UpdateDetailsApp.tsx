@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { widgetApi } from "../../shared/api";
+import { widgetApi, type WidgetApiError } from "../../shared/api";
 import {
   changeMemberstackPassword,
   logMemberstackDiagnostics,
@@ -185,6 +185,12 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     cancellationEffectiveAt: string;
     stripeCustomerId?: string | null;
     hasPaymentMethod?: boolean;
+    uiState?: string;
+    stripeSubscriptionStatus?: string | null;
+    stripeSubscriptionId?: string;
+    currentPeriodEnd?: string | null;
+    hasServiceAccess?: boolean;
+    accessUntilLabel?: string;
   } | null>(null);
   const [needsRefresh, setNeedsRefresh] = useState(false);
   /** True when Airtable onboarding is not COMPLETE — use step API + resume. */
@@ -523,6 +529,16 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
   const needsReactivation = useMemo(() => {
     if (!billing) return false;
+    // Use server uiState when available (derived from live Stripe + Airtable)
+    if (billing.uiState) {
+      if (billing.uiState === "active") return false;
+      if (billing.uiState === "cancellation_scheduled") return true;
+      if (billing.uiState === "payment_problem") return true;
+      if (billing.uiState === "expired") return true;
+      if (billing.uiState === "incomplete_onboarding") return true;
+      return true;
+    }
+    // Fallback — legacy Airtable-based heuristic
     const mem = (billing.membership || "").toLowerCase();
     const pay = (billing.payment || "").toLowerCase();
     if (pay === "paid" && mem === "active" && !billing.cancelAtPeriodEnd) return false;
@@ -658,38 +674,67 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     });
   };
 
-  /** Parse Zod fieldErrors from server response into readable RHF + social errors. */
+  /** Parse Zod fieldErrors or structured fields from server response into RHF + social errors. */
   const applyServerFieldErrors = (e: unknown) => {
-    const err = e as Error & { details?: unknown; code?: string };
-    const fieldErrors = (err.details as Record<string, { _errors?: string[] }>)?.fieldErrors as
-      | Record<string, string[]>
-      | undefined;
-    if (!fieldErrors) return false;
+    const err = e as WidgetApiError;
+
+    // 1) Structured fields map (new format from profile route / reactivate)
+    let fieldMap: Record<string, string> | undefined;
+    if (err.fields && typeof err.fields === "object") {
+      fieldMap = err.fields;
+    } else if (err.body?.fields && typeof err.body.fields === "object") {
+      fieldMap = err.body.fields as Record<string, string>;
+    }
+
+    // 2) Legacy details.fieldErrors (Zod flatten)
+    let legacyFieldErrors: Record<string, string[]> | undefined;
+    if (err.details && typeof err.details === "object") {
+      const d = err.details as Record<string, unknown>;
+      if (d.fieldErrors && typeof d.fieldErrors === "object") {
+        legacyFieldErrors = d.fieldErrors as Record<string, string[]>;
+      }
+    }
 
     let found = false;
-    for (const [field, messages] of Object.entries(fieldErrors)) {
-      const msg = Array.isArray(messages) ? messages[0] : messages;
-      if (!msg) continue;
 
-      // Social links errors
-      if (field === "socialLinks") {
-        setSocialError(String(msg));
+    // Process structured fields map first
+    if (fieldMap) {
+      for (const [field, msg] of Object.entries(fieldMap)) {
+        if (!msg) continue;
+        if (field === "socialLinks") {
+          setSocialError(String(msg));
+          found = true;
+          continue;
+        }
+        form.setError(field as keyof ProfileForm, { message: String(msg) }, { shouldFocus: true });
         found = true;
-        continue;
       }
+    }
 
-      // Try setting on the main form
-      form.setError(field as keyof ProfileForm, { message: String(msg) }, { shouldFocus: true });
-      found = true;
+    // Process legacy Zod field errors
+    if (!found && legacyFieldErrors) {
+      for (const [field, messages] of Object.entries(legacyFieldErrors)) {
+        const msg = Array.isArray(messages) ? messages[0] : messages;
+        if (!msg) continue;
+        if (field === "socialLinks") {
+          setSocialError(String(msg));
+          found = true;
+          continue;
+        }
+        form.setError(field as keyof ProfileForm, { message: String(msg) }, { shouldFocus: true });
+        found = true;
+      }
     }
 
     if (found) {
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => scrollToFirstFormError(
-          document.getElementById("wlth-update-profile-form") as HTMLFormElement | null,
-          Object.keys(fieldErrors),
-          document.querySelectorAll("#wlth-update-profile-form .wlth-error") as unknown as Element[],
-        ));
+        requestAnimationFrame(() =>
+          scrollToFirstFormError(
+            document.getElementById("wlth-update-profile-form") as HTMLFormElement | null,
+            Object.keys(fieldMap || legacyFieldErrors || {}),
+            document.querySelectorAll("#wlth-update-profile-form .wlth-error") as unknown as Element[]
+          )
+        );
       });
     }
     return found;
@@ -812,20 +857,22 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     setRefreshBusy(true);
     scrollDetailsToTop();
     try {
-      const res = await api(props.apiBase, "/api/member/reactivate", {
+      const res = (await api(props.apiBase, "/api/member/reactivate", {
         method: "POST",
         token,
         body: JSON.stringify({}),
-      });
+      })) as Record<string, unknown>;
       if (!res.success) {
+        const status = String(res.status || "");
         if (
-          res.status === "no_payment_method" ||
-          res.status === "no_stripe_customer"
+          status === "no_payment_method" ||
+          status === "no_stripe_customer" ||
+          Boolean(res.requiresPaymentMethod)
         ) {
           await startRefreshCheckout();
           return;
         }
-        setError(String(res.reason || "Could not activate membership"));
+        setError(String(res.reason || res.message || "Could not activate membership"));
         return;
       }
       await api(props.apiBase, "/api/onboarding/confirm-checkout", {
@@ -837,6 +884,11 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       setBilling((bill.billing || null) as typeof billing);
       goAfterPaymentToMatching();
     } catch (e) {
+      const werr = e as WidgetApiError;
+      if (werr.apiStatus === "no_payment_method" || werr.requiresPaymentMethod) {
+        await startRefreshCheckout();
+        return;
+      }
       setError(e instanceof Error ? e.message : "Could not activate membership");
     } finally {
       if (mountedRef.current) setRefreshBusy(false);
@@ -1193,44 +1245,66 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     setError(null);
     setOk(null);
     try {
-      const res = await api(props.apiBase, "/api/member/reactivate", {
+      const res = (await api(props.apiBase, "/api/member/reactivate", {
         method: "POST",
         token,
         body: JSON.stringify({}),
-      });
+      })) as Record<string, unknown>;
       if (!res.success) {
+        const status = String(res.status || "");
         if (
-          res.status === "no_payment_method" ||
-          res.status === "no_stripe_customer"
+          status === "no_payment_method" ||
+          status === "payment_problem" ||
+          Boolean(res.requiresPaymentMethod)
         ) {
           setError(
-            "No payment method on file. Use Manage billing below to add a card via Stripe, then reactivate."
+            String(res.reason || res.message || "Add a payment method to continue your membership.")
           );
           return;
-        } else {
-          setError(String(res.reason || "Could not reactivate membership"));
+        }
+        if (status === "no_stripe_customer") {
+          setError(
+            String(res.reason || res.message || "No Stripe customer — complete checkout first.")
+          );
           return;
         }
+        setError(String(res.reason || res.message || "Could not reactivate membership"));
+        return;
+      }
+      const status = String(res.status || "");
+      if (status === "cancellation_reversed") {
+        const next = typeof res.nextRenewalDate === "string" ? res.nextRenewalDate : "";
+        setOk(
+          String(
+            res.reason ||
+              res.message ||
+              "Your membership is active again. You will not be charged today." +
+                (next ? ` Your next renewal is ${next}.` : "")
+          )
+        );
+      } else if (status === "already_active") {
+        setOk(String(res.reason || res.message || "Your membership is already active."));
       } else {
-        const status = String(res.status || "");
-        if (status === "cancellation_reversed") {
-          setOk(
-            String(
-              res.reason ||
-                "Cancellation removed — your membership stays active. You were not charged again."
-            )
-          );
-        } else if (status === "already_active") {
-          setOk(String(res.reason || "Your membership is already active."));
-        } else {
-          setOk(String(res.reason || "Membership reactivated with your card on file."));
-        }
+        setOk(String(res.reason || res.message || "Membership reactivated with your card on file."));
       }
       const bill = await api(props.apiBase, "/api/member/billing-status", { token });
       setBilling((bill.billing || null) as typeof billing);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "";
-      if (msg && !/cancel|closed|abort/i.test(msg)) setError(msg);
+      const werr = e as WidgetApiError;
+      // API returns 402 with message now — surface it
+      const reason = werr.reason || werr.message || "";
+      if (
+        reason &&
+        !/cancel|closed|abort/i.test(reason)
+      ) {
+        if (werr.apiStatus === "no_payment_method" || werr.requiresPaymentMethod) {
+          setError(reason);
+        } else {
+          setError(reason);
+        }
+      } else if (!reason) {
+        setError("Could not reactivate membership. Please try again.");
+      }
     } finally {
       if (mountedRef.current) setReactivating(false);
     }
@@ -1737,16 +1811,51 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
         {billing && needsReactivation && (
           <div className="wlth-reactivate">
-            <h3>Reactivate your membership</h3>
-            <p className="wlth-muted" style={{ marginBottom: 12 }}>
-              Your membership is not fully active
-              {billing.membership ? ` (${billing.membership}` : ""}
-              {billing.payment
-                ? `${billing.membership ? " · " : " ("}${billing.payment}`
-                : ""}
-              {billing.membership || billing.payment ? ")" : ""}. Reactivate charges the card
-              already on file when possible. Use Manage billing to change cards or cancel.
-            </p>
+            <h3>
+              {billing.uiState === "cancellation_scheduled"
+                ? "Membership cancelled"
+                : billing.uiState === "payment_problem"
+                  ? "Payment issue"
+                  : "Reactivate your membership"}
+            </h3>
+            {billing.uiState === "cancellation_scheduled" ? (
+              <>
+                <p className="wlth-muted" style={{ marginBottom: 12 }}>
+                  You still have access
+                  {billing.accessUntilLabel
+                    ? ` until ${billing.accessUntilLabel}`
+                    : billing.serviceAccessUntil
+                      ? ` until ${String(billing.serviceAccessUntil).slice(0, 10)}`
+                      : ""}
+                  . Your membership will not renew after this date.
+                </p>
+                <p className="wlth-muted" style={{ marginBottom: 12 }}>
+                  Reactivate to continue without interruption — you will not be charged today.
+                </p>
+              </>
+            ) : billing.uiState === "payment_problem" ? (
+              <p className="wlth-muted" style={{ marginBottom: 12 }}>
+                {billing.hasServiceAccess
+                  ? "Your payment needs attention but you still have access."
+                  : "Your payment has failed. Update your card to restore access."}{" "}
+                Use Manage billing to update your payment method.
+              </p>
+            ) : billing.uiState === "expired" ? (
+              <p className="wlth-muted" style={{ marginBottom: 12 }}>
+                Your membership has ended. Reactivate charges the card already on file when
+                possible. Use Manage billing to change cards.
+              </p>
+            ) : (
+              <p className="wlth-muted" style={{ marginBottom: 12 }}>
+                Your membership is not fully active
+                {billing.membership ? ` (${billing.membership}` : ""}
+                {billing.payment
+                  ? `${billing.membership ? " · " : " ("}${billing.payment}`
+                  : ""}
+                {billing.membership || billing.payment ? ")" : ""}. Reactivate charges the card
+                already on file when possible. Use Manage billing to change cards or cancel.
+              </p>
+            )}
             <div className="wlth-actions">
               <button
                 type="button"
@@ -2132,11 +2241,26 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
         {billing && (
           <p className="wlth-muted" style={{ marginTop: 20 }}>
-            Membership: {billing.membership || "—"} · Payment: {billing.payment || "—"}
-            {billing.serviceAccessUntil
-              ? ` · Access until ${billing.serviceAccessUntil.slice(0, 10)}`
+            {billing.uiState === "active" ? (
+              <>
+                Membership active
+                {billing.currentPeriodEnd
+                  ? ` — renews on ${billing.currentPeriodEnd}`
+                  : ""}
+              </>
+            ) : (
+              <>
+                Membership: {billing.membership || "—"} · Payment: {billing.payment || "—"}
+              </>
+            )}
+            {billing.accessUntilLabel
+              ? ` · Access until ${billing.accessUntilLabel}`
+              : billing.serviceAccessUntil
+                ? ` · Access until ${String(billing.serviceAccessUntil).slice(0, 10)}`
+                : ""}
+            {billing.cancelAtPeriodEnd && billing.uiState !== "cancellation_scheduled"
+              ? " · Cancellation scheduled"
               : ""}
-            {billing.cancelAtPeriodEnd ? " · Cancellation scheduled" : ""}
           </p>
         )}
       </div>

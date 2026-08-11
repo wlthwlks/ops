@@ -2,6 +2,17 @@
  * Shared widget fetch helper — avoid CORS preflight on GETs without body.
  */
 
+export type WidgetApiError = Error & {
+  status?: number;
+  code?: string;
+  details?: unknown;
+  reason?: string;
+  apiStatus?: string;
+  requiresPaymentMethod?: boolean;
+  fields?: Record<string, string>;
+  body?: Record<string, unknown>;
+};
+
 export async function widgetApi(
   base: string,
   path: string,
@@ -27,23 +38,30 @@ export async function widgetApi(
   const rest: RequestInit = { ...opts };
   delete (rest as { token?: string }).token;
   const res = await fetch(`${base}${path}`, { ...rest, headers });
-  const json = await res.json().catch(() => ({}));
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
     const message =
-      (json && typeof json === "object" && "message" in json
-        ? String((json as { message?: string }).message)
+      (typeof json.message === "string" && json.message.trim()
+        ? json.message
+        : null) ||
+      (typeof json.reason === "string" && json.reason.trim()
+        ? json.reason
         : null) ||
       res.statusText ||
       "Request failed";
-    const err = new Error(message) as Error & {
-      status?: number;
-      code?: string;
-      details?: unknown;
-    };
+    const err = new Error(message) as WidgetApiError;
     err.status = res.status;
-    if (json && typeof json === "object") {
-      if ("code" in json) err.code = String((json as { code?: string }).code || "");
-      if ("details" in json) err.details = (json as { details?: unknown }).details;
+    err.body = json;
+    if (typeof json.code === "string") err.code = json.code;
+    if ("details" in json) err.details = json.details;
+    if (typeof json.reason === "string") err.reason = json.reason;
+    if (typeof json.status === "string") err.apiStatus = json.status;
+    if (typeof json.requiresPaymentMethod === "boolean") {
+      err.requiresPaymentMethod = json.requiresPaymentMethod;
+    }
+    // Prefer structured field map when present
+    if (json.fields && typeof json.fields === "object" && !Array.isArray(json.fields)) {
+      err.fields = json.fields as Record<string, string>;
     }
     throw err;
   }

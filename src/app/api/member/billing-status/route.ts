@@ -10,11 +10,89 @@ import {
 } from "@/lib/forms/airtable/members-sync";
 import { FormsError } from "@/lib/forms/errors";
 import { customerHasPaymentMethod } from "@/lib/forms/billing/reactivate-membership";
+import {
+  classifyMembershipUiState,
+  formatMembershipAccessDate,
+  hasRemainingServiceAccess,
+} from "@/lib/forms/billing/membership-state";
+import { getStripeClient } from "@/lib/integrations/stripe";
+import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 
 export const runtime = "nodejs";
 
 export async function OPTIONS(request: Request) {
   return optionsCors(request);
+}
+
+function fieldStr(fields: Record<string, unknown>, key: string): string {
+  const v = fields[key];
+  if (v == null) return "";
+  if (Array.isArray(v)) return String(v[0] ?? "").trim();
+  return String(v).trim();
+}
+
+async function loadLiveStripeSnapshot(stripeCustomerId: string): Promise<{
+  subscriptionStatus: string | null;
+  cancelAtPeriodEnd: boolean | null;
+  currentPeriodEnd: string | null;
+  subscriptionId: string | null;
+}> {
+  if (!stripeCustomerId.startsWith("cus_")) {
+    return {
+      subscriptionStatus: null,
+      cancelAtPeriodEnd: null,
+      currentPeriodEnd: null,
+      subscriptionId: null,
+    };
+  }
+  try {
+    const stripe = getStripeClient();
+    const subs = await stripe.subscriptions.list({
+      customer: stripeCustomerId,
+      status: "all",
+      limit: 10,
+    });
+    const prefer =
+      subs.data.find(
+        (s) =>
+          (s.status === "active" || s.status === "trialing") && s.cancel_at_period_end
+      ) ||
+      subs.data.find((s) => s.status === "active" || s.status === "trialing") ||
+      subs.data.find((s) =>
+        ["past_due", "unpaid", "incomplete"].includes(s.status)
+      ) ||
+      subs.data[0];
+    if (!prefer) {
+      return {
+        subscriptionStatus: null,
+        cancelAtPeriodEnd: null,
+        currentPeriodEnd: null,
+        subscriptionId: null,
+      };
+    }
+    const itemEnd = prefer.items?.data?.[0]?.current_period_end;
+    const top = (prefer as unknown as { current_period_end?: number }).current_period_end;
+    const unix = typeof itemEnd === "number" ? itemEnd : typeof top === "number" ? top : null;
+    return {
+      subscriptionStatus: prefer.status,
+      cancelAtPeriodEnd: Boolean(prefer.cancel_at_period_end),
+      currentPeriodEnd: unix ? new Date(unix * 1000).toISOString().slice(0, 10) : null,
+      subscriptionId: prefer.id,
+    };
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        event: "billing_status_stripe_lookup_failed",
+        error: err instanceof Error ? err.message : String(err),
+      })
+    );
+    return {
+      subscriptionStatus: null,
+      cancelAtPeriodEnd: null,
+      currentPeriodEnd: null,
+      subscriptionId: null,
+    };
+  }
 }
 
 export async function GET(request: Request) {
@@ -27,17 +105,44 @@ export async function GET(request: Request) {
     if (rows.length === 0) {
       return withCors(
         NextResponse.json(
-          { success: false, code: "AIRTABLE_MEMBER_NOT_FOUND", message: "Member not found" },
+          {
+            success: false,
+            code: "AIRTABLE_MEMBER_NOT_FOUND",
+            message: "Member not found",
+          },
           { status: 404 }
         ),
         request
       );
     }
-    const profile = recordToProfileDto(rows[0]);
+    const row = rows[0];
+    const profile = recordToProfileDto(row);
     const stripeCustomerId = profile.stripeCustomerId || "";
     const hasPaymentMethod = stripeCustomerId.startsWith("cus_")
       ? await customerHasPaymentMethod(stripeCustomerId)
       : false;
+
+    const live = await loadLiveStripeSnapshot(stripeCustomerId);
+    const airtableCancel = profile.cancelAtPeriodEnd === "true";
+    const cancelAtPeriodEnd =
+      live.cancelAtPeriodEnd != null ? live.cancelAtPeriodEnd : airtableCancel;
+    const stripeSubscriptionStatus =
+      live.subscriptionStatus ||
+      fieldStr(row.fields, MEMBER_FIELDS.stripeSubscriptionStatus) ||
+      null;
+
+    const uiState = classifyMembershipUiState({
+      membership: profile.membership,
+      payment: profile.payment,
+      serviceAccessUntil: profile.serviceAccessUntil,
+      cancelAtPeriodEnd,
+      stripeSubscriptionStatus,
+      hasPaymentMethod,
+      currentPeriodEnd: live.currentPeriodEnd,
+    });
+
+    const accessUntil = formatMembershipAccessDate(profile.serviceAccessUntil);
+    const hasAccess = hasRemainingServiceAccess(profile.serviceAccessUntil);
 
     return withCors(
       NextResponse.json({
@@ -46,10 +151,16 @@ export async function GET(request: Request) {
           membership: profile.membership,
           payment: profile.payment,
           serviceAccessUntil: profile.serviceAccessUntil,
-          cancelAtPeriodEnd: profile.cancelAtPeriodEnd === "true",
+          cancelAtPeriodEnd,
           cancellationEffectiveAt: profile.cancellationEffectiveAt,
           stripeCustomerId: stripeCustomerId || null,
           hasPaymentMethod,
+          stripeSubscriptionStatus,
+          stripeSubscriptionId: live.subscriptionId,
+          currentPeriodEnd: live.currentPeriodEnd,
+          uiState,
+          hasServiceAccess: hasAccess,
+          accessUntilLabel: accessUntil,
         },
         profile,
       }),
@@ -65,12 +176,18 @@ export async function GET(request: Request) {
         request
       );
     }
+    console.error(
+      JSON.stringify({
+        event: "billing_status_error",
+        error: err instanceof Error ? err.message : String(err),
+      })
+    );
     return withCors(
       NextResponse.json(
         {
           success: false,
           code: "INTERNAL_UNEXPECTED_ERROR",
-          message: err instanceof Error ? err.message : "Billing status failed",
+          message: "Billing status failed",
         },
         { status: 500 }
       ),

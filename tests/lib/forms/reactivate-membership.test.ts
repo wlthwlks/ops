@@ -77,7 +77,8 @@ describe("reactivateMembershipForMember", () => {
           id: "sub_pending",
           status: "active",
           cancel_at_period_end: true,
-          items: { data: [{ price: { id: "price_membership" } }] },
+          items: { data: [{ price: { id: "price_membership" }, current_period_end: 1735689600 }] },
+          current_period_end: 1735689600,
         },
       ],
     });
@@ -85,7 +86,8 @@ describe("reactivateMembershipForMember", () => {
       id: "sub_pending",
       status: "active",
       cancel_at_period_end: false,
-      items: { data: [{ price: { id: "price_membership" } }] },
+      items: { data: [{ price: { id: "price_membership" }, current_period_end: 1735689600 }] },
+      current_period_end: 1735689600,
     });
 
     const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
@@ -93,6 +95,9 @@ describe("reactivateMembershipForMember", () => {
     expect(result.success).toBe(true);
     expect(result.status).toBe("cancellation_reversed");
     expect(result.charged).toBe(false);
+    expect(result.message).toBeTruthy();
+    expect(result.message).toContain("not be charged today");
+    expect(result.nextRenewalDate).toBeTruthy();
     expect(subscriptionsUpdate).toHaveBeenCalledWith("sub_pending", {
       cancel_at_period_end: false,
     });
@@ -208,6 +213,7 @@ describe("reactivateMembershipForMember", () => {
 
     expect(result.success).toBe(false);
     expect(result.status).toBe("no_payment_method");
+    expect(result.requiresPaymentMethod).toBe(true);
     expect(result.charged).toBe(false);
     expect(subscriptionsCreate).not.toHaveBeenCalled();
   });
@@ -234,5 +240,135 @@ describe("reactivateMembershipForMember", () => {
     expect(result.status).toBe("cancellation_reversed");
     expect(result.charged).toBe(false);
     expect(subscriptionsCreate).not.toHaveBeenCalled();
+  });
+
+  it("past_due subscription with no card: returns no_payment_method", async () => {
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_past_due",
+          status: "past_due",
+          cancel_at_period_end: false,
+          items: { data: [{ price: { id: "price_membership" } }] },
+        },
+      ],
+    });
+    customersRetrieve.mockResolvedValue({
+      id: "cus_test",
+      invoice_settings: { default_payment_method: null },
+      default_source: null,
+    });
+    paymentMethodsList.mockResolvedValue({ data: [] });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe("no_payment_method");
+    expect(result.requiresPaymentMethod).toBe(true);
+    expect(subscriptionsCreate).not.toHaveBeenCalled();
+  });
+
+  it("past_due with card: returns payment_problem, directs to portal", async () => {
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_past_due",
+          status: "past_due",
+          cancel_at_period_end: false,
+          items: { data: [{ price: { id: "price_membership" } }] },
+        },
+      ],
+    });
+    customersRetrieve.mockResolvedValue({
+      id: "cus_test",
+      invoice_settings: { default_payment_method: "pm_card" },
+    });
+    paymentMethodsList.mockResolvedValue({ data: [{ id: "pm_card" }] });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe("payment_problem");
+    expect(result.requiresPaymentMethod).toBe(true);
+    expect(subscriptionsCreate).not.toHaveBeenCalled();
+  });
+
+  it("cancellation_reversed includes nextRenewalDate", async () => {
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_cancel_sched",
+          status: "active",
+          cancel_at_period_end: true,
+          items: { data: [{ price: { id: "price_membership" }, current_period_end: 1735689600 }] },
+          current_period_end: 1735689600,
+        },
+      ],
+    });
+    subscriptionsUpdate.mockResolvedValue({
+      id: "sub_cancel_sched",
+      status: "active",
+      cancel_at_period_end: false,
+      items: { data: [{ price: { id: "price_membership" }, current_period_end: 1735689600 }] },
+      current_period_end: 1735689600,
+    });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.status).toBe("cancellation_reversed");
+    expect(result.nextRenewalDate).toBe("2025-01-01");
+    expect(result.currentPeriodEnd).toBe("2025-01-01");
+  });
+
+  it("result includes message for widgetApi consumers", async () => {
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_cancel_sched2",
+          status: "active",
+          cancel_at_period_end: true,
+          items: { data: [{ price: { id: "price_membership" }, current_period_end: 1735689600 }] },
+          current_period_end: 1735689600,
+        },
+      ],
+    });
+    subscriptionsUpdate.mockResolvedValue({
+      id: "sub_cancel_sched2",
+      status: "active",
+      cancel_at_period_end: false,
+      items: { data: [{ price: { id: "price_membership" }, current_period_end: 1735689600 }] },
+      current_period_end: 1735689600,
+    });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.message).toBeTruthy();
+    expect(result.message).toBe(result.reason);
+    expect(result.message).toContain("not be charged today");
+  });
+
+  it("no_payment_method includes message for widgetApi consumers", async () => {
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_old",
+          status: "canceled",
+          cancel_at_period_end: false,
+          items: { data: [{ price: { id: "price_membership" } }] },
+        },
+      ],
+    });
+    customersRetrieve.mockResolvedValue({
+      id: "cus_test",
+      invoice_settings: { default_payment_method: null },
+      default_source: null,
+    });
+    paymentMethodsList.mockResolvedValue({ data: [] });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.success).toBe(false);
+    expect(result.message).toBeTruthy();
+    expect(result.message).toBe(result.reason);
   });
 });

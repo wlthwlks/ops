@@ -1,6 +1,6 @@
 /**
  * POST /api/member/reactivate
- * Reactivate membership with saved Stripe card (no portal).
+ * Reactivate membership for the authenticated member (server resolves Stripe ids).
  */
 import { NextResponse } from "next/server";
 import { optionsCors, withCors } from "@/lib/forms/cors";
@@ -34,20 +34,25 @@ export async function POST(request: Request) {
 
     const httpStatus = result.success
       ? 200
-      : result.status === "no_payment_method"
+      : result.status === "no_payment_method" || result.status === "payment_problem"
         ? 402
         : 400;
+
     return withCors(
       NextResponse.json(
         {
           success: result.success,
           status: result.status,
           reason: result.reason,
+          /** Clients that only read `message` (widgetApi) get the human copy. */
+          message: result.message || result.reason,
           subscriptionId: result.subscriptionId || null,
           subscriptionStatus: result.subscriptionStatus || null,
           paymentMethodReused: result.paymentMethodReused || false,
-          /** false when cancel_at_period_end was only reversed (no new charge) */
           charged: Boolean(result.charged),
+          nextRenewalDate: result.nextRenewalDate || null,
+          currentPeriodEnd: result.currentPeriodEnd || null,
+          requiresPaymentMethod: Boolean(result.requiresPaymentMethod),
         },
         { status: httpStatus }
       ),
@@ -57,18 +62,30 @@ export async function POST(request: Request) {
     if (err instanceof FormsError) {
       return withCors(
         NextResponse.json(
-          { success: false, code: err.code, message: err.message },
+          {
+            success: false,
+            code: err.code,
+            message: err.message,
+            reason: err.message,
+          },
           { status: err.status }
         ),
         request
       );
     }
+    console.error(
+      JSON.stringify({
+        event: "member_reactivate_error",
+        error: err instanceof Error ? err.message : String(err),
+      })
+    );
     return withCors(
       NextResponse.json(
         {
           success: false,
           code: "INTERNAL_UNEXPECTED_ERROR",
-          message: err instanceof Error ? err.message : "Reactivate failed",
+          message: "We could not reactivate your membership. Please try again.",
+          reason: "We could not reactivate your membership. Please try again.",
         },
         { status: 500 }
       ),
