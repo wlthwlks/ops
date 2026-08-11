@@ -1815,68 +1815,115 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
         {billing && needsReactivation && (
           <div className="wlth-reactivate">
-            <h3>
-              {billing.uiState === "cancellation_scheduled"
-                ? "Membership cancelled"
-                : billing.uiState === "payment_problem"
-                  ? "Payment issue"
-                  : "Reactivate your membership"}
-            </h3>
             {billing.uiState === "cancellation_scheduled" ? (
               <>
-                <p className="wlth-muted" style={{ marginBottom: 12 }}>
-                  You still have access
+                <h3>Membership ends
                   {billing.accessUntilLabel
-                    ? ` until ${billing.accessUntilLabel}`
+                    ? ` on ${billing.accessUntilLabel}`
                     : billing.serviceAccessUntil
-                      ? ` until ${String(billing.serviceAccessUntil).slice(0, 10)}`
+                      ? ` on ${String(billing.serviceAccessUntil).slice(0, 10)}`
                       : ""}
-                  . Your membership will not renew after this date.
+                </h3>
+                <p className="wlth-muted" style={{ marginBottom: 12 }}>
+                  You still have access until this date. Your membership will not
+                  renew after it ends.
                 </p>
                 <p className="wlth-muted" style={{ marginBottom: 12 }}>
-                  Reactivate to continue without interruption — you will not be charged today.
+                  Reactivate now to continue without interruption —
+                  you will not be charged today.
                 </p>
+                <div className="wlth-actions">
+                  <button
+                    type="button"
+                    className="wlth-btn-primary"
+                    disabled={reactivating}
+                    onClick={() => void reactivateMembership()}
+                  >
+                    {reactivating ? "Reactivating…" : "Reactivate membership"}
+                  </button>
+                  <button
+                    type="button"
+                    className="wlth-btn-secondary"
+                    onClick={() => void openPortal()}
+                  >
+                    Manage billing
+                  </button>
+                </div>
+              </>
+            ) : billing.uiState === "expired" ? (
+              <>
+                <h3>Your membership has ended</h3>
+                <p className="wlth-muted" style={{ marginBottom: 12 }}>
+                  Your paid access has expired. Reactivate charges the card on file
+                  when available. Use Manage billing to add or change cards.
+                </p>
+                <div className="wlth-actions">
+                  <button
+                    type="button"
+                    className="wlth-btn-primary"
+                    disabled={reactivating}
+                    onClick={() => void reactivateMembership()}
+                  >
+                    {reactivating ? "Resubscribing…" : "Resubscribe"}
+                  </button>
+                  <button
+                    type="button"
+                    className="wlth-btn-secondary"
+                    onClick={() => void openPortal()}
+                  >
+                    Manage billing
+                  </button>
+                </div>
               </>
             ) : billing.uiState === "payment_problem" ? (
-              <p className="wlth-muted" style={{ marginBottom: 12 }}>
-                {billing.hasServiceAccess
-                  ? "Your payment needs attention but you still have access."
-                  : "Your payment has failed. Update your card to restore access."}{" "}
-                Use Manage billing to update your payment method.
-              </p>
-            ) : billing.uiState === "expired" ? (
-              <p className="wlth-muted" style={{ marginBottom: 12 }}>
-                Your membership has ended. Reactivate charges the card already on file when
-                possible. Use Manage billing to change cards.
-              </p>
+              <>
+                <h3>Payment issue</h3>
+                <p className="wlth-muted" style={{ marginBottom: 12 }}>
+                  {billing.hasServiceAccess
+                    ? "Your payment needs attention but you still have access."
+                    : "Your payment has failed. Update your card to restore access."}{" "}
+                  Use Manage billing to update your payment method.
+                </p>
+                <div className="wlth-actions">
+                  <button
+                    type="button"
+                    className="wlth-btn-primary"
+                    onClick={() => void openPortal()}
+                  >
+                    Manage billing
+                  </button>
+                </div>
+              </>
             ) : (
-              <p className="wlth-muted" style={{ marginBottom: 12 }}>
-                Your membership is not fully active
-                {billing.membership ? ` (${billing.membership}` : ""}
-                {billing.payment
-                  ? `${billing.membership ? " · " : " ("}${billing.payment}`
-                  : ""}
-                {billing.membership || billing.payment ? ")" : ""}. Reactivate charges the card
-                already on file when possible. Use Manage billing to change cards or cancel.
-              </p>
+              <>
+                <h3>Reactivate your membership</h3>
+                <p className="wlth-muted" style={{ marginBottom: 12 }}>
+                  Your membership is not fully active
+                  {billing.membership ? ` (${billing.membership}` : ""}
+                  {billing.payment
+                    ? `${billing.membership ? " · " : " ("}${billing.payment}`
+                    : ""}
+                  {billing.membership || billing.payment ? ")" : ""}.
+                </p>
+                <div className="wlth-actions">
+                  <button
+                    type="button"
+                    className="wlth-btn-primary"
+                    disabled={reactivating}
+                    onClick={() => void reactivateMembership()}
+                  >
+                    {reactivating ? "Reactivating…" : "Reactivate membership"}
+                  </button>
+                  <button
+                    type="button"
+                    className="wlth-btn-secondary"
+                    onClick={() => void openPortal()}
+                  >
+                    Manage billing
+                  </button>
+                </div>
+              </>
             )}
-            <div className="wlth-actions">
-              <button
-                type="button"
-                className="wlth-btn-primary"
-                disabled={reactivating}
-                onClick={() => void reactivateMembership()}
-              >
-                Reactivate membership
-              </button>
-              <button
-                type="button"
-                className="wlth-btn-secondary"
-                onClick={() => void openPortal()}
-              >
-                Manage billing
-              </button>
-            </div>
           </div>
         )}
 
