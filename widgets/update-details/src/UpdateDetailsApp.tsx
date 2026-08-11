@@ -538,21 +538,18 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
   const needsReactivation = useMemo(() => {
     if (!billing) return false;
-    // Use server uiState when available (derived from live Stripe + Airtable)
+    // cancelAtPeriodEnd is the clearest signal — show banner when set
+    if (billing.cancelAtPeriodEnd) return true;
+    // Server uiState classifies all other states
     if (billing.uiState) {
       if (billing.uiState === "active") return false;
-      if (billing.uiState === "cancellation_scheduled") return true;
-      if (billing.uiState === "payment_problem") return true;
-      if (billing.uiState === "expired") return true;
-      if (billing.uiState === "incomplete_onboarding") return true;
       return true;
     }
     // Fallback — legacy Airtable-based heuristic
     const mem = (billing.membership || "").toLowerCase();
     const pay = (billing.payment || "").toLowerCase();
-    if (pay === "paid" && mem === "active" && !billing.cancelAtPeriodEnd) return false;
+    if (pay === "paid" && mem === "active") return false;
     if (mem === "pending payment" || pay === "unpaid" || pay === "failed") return true;
-    if (billing.cancelAtPeriodEnd) return true;
     if (mem && mem !== "active") return true;
     if (pay && pay !== "paid") return true;
     return false;

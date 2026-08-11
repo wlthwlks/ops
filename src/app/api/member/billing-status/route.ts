@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import Stripe from "stripe";
 import { optionsCors, withCors } from "@/lib/forms/cors";
 import {
   extractMemberstackToken,
@@ -31,19 +32,17 @@ function fieldStr(fields: Record<string, unknown>, key: string): string {
   return String(v).trim();
 }
 
-async function loadLiveStripeSnapshot(stripeCustomerId: string): Promise<{
+async function loadLiveStripeSnapshot(
+  stripeCustomerId: string,
+  fallbackSubscriptionId?: string | null
+): Promise<{
   subscriptionStatus: string | null;
   cancelAtPeriodEnd: boolean | null;
   currentPeriodEnd: string | null;
   subscriptionId: string | null;
 }> {
   if (!stripeCustomerId.startsWith("cus_")) {
-    return {
-      subscriptionStatus: null,
-      cancelAtPeriodEnd: null,
-      currentPeriodEnd: null,
-      subscriptionId: null,
-    };
+    return { subscriptionStatus: null, cancelAtPeriodEnd: null, currentPeriodEnd: null, subscriptionId: null };
   }
   try {
     const stripe = getStripeClient();
@@ -54,31 +53,27 @@ async function loadLiveStripeSnapshot(stripeCustomerId: string): Promise<{
     });
     const prefer =
       subs.data.find(
-        (s) =>
-          (s.status === "active" || s.status === "trialing") && s.cancel_at_period_end
+        (s) => (s.status === "active" || s.status === "trialing") && s.cancel_at_period_end
       ) ||
       subs.data.find((s) => s.status === "active" || s.status === "trialing") ||
-      subs.data.find((s) =>
-        ["past_due", "unpaid", "incomplete"].includes(s.status)
-      ) ||
+      subs.data.find((s) => ["past_due", "unpaid", "incomplete"].includes(s.status)) ||
       subs.data[0];
-    if (!prefer) {
-      return {
-        subscriptionStatus: null,
-        cancelAtPeriodEnd: null,
-        currentPeriodEnd: null,
-        subscriptionId: null,
-      };
+
+    if (prefer) {
+      return subscriptionToSnapshot(prefer);
     }
-    const itemEnd = prefer.items?.data?.[0]?.current_period_end;
-    const top = (prefer as unknown as { current_period_end?: number }).current_period_end;
-    const unix = typeof itemEnd === "number" ? itemEnd : typeof top === "number" ? top : null;
-    return {
-      subscriptionStatus: prefer.status,
-      cancelAtPeriodEnd: Boolean(prefer.cancel_at_period_end),
-      currentPeriodEnd: unix ? new Date(unix * 1000).toISOString().slice(0, 10) : null,
-      subscriptionId: prefer.id,
-    };
+
+    // If list returned nothing useful, try direct lookup by stored sub id.
+    const stored = (fallbackSubscriptionId || "").trim();
+    if (stored.startsWith("sub_")) {
+      try {
+        const direct = await stripe.subscriptions.retrieve(stored);
+        return subscriptionToSnapshot(direct);
+      } catch {
+        /* direct lookup also failed — return nulls */
+      }
+    }
+    return { subscriptionStatus: null, cancelAtPeriodEnd: null, currentPeriodEnd: null, subscriptionId: null };
   } catch (err) {
     console.error(
       JSON.stringify({
@@ -86,13 +81,20 @@ async function loadLiveStripeSnapshot(stripeCustomerId: string): Promise<{
         error: err instanceof Error ? err.message : String(err),
       })
     );
-    return {
-      subscriptionStatus: null,
-      cancelAtPeriodEnd: null,
-      currentPeriodEnd: null,
-      subscriptionId: null,
-    };
+    return { subscriptionStatus: null, cancelAtPeriodEnd: null, currentPeriodEnd: null, subscriptionId: null };
   }
+}
+
+function subscriptionToSnapshot(sub: Stripe.Subscription) {
+  const itemEnd = sub.items?.data?.[0]?.current_period_end;
+  const top = (sub as unknown as { current_period_end?: number }).current_period_end;
+  const unix = typeof itemEnd === "number" ? itemEnd : typeof top === "number" ? top : null;
+  return {
+    subscriptionStatus: sub.status,
+    cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end),
+    currentPeriodEnd: unix ? new Date(unix * 1000).toISOString().slice(0, 10) : null,
+    subscriptionId: sub.id,
+  };
 }
 
 export async function GET(request: Request) {
@@ -122,7 +124,8 @@ export async function GET(request: Request) {
       ? await customerHasPaymentMethod(stripeCustomerId)
       : false;
 
-    const live = await loadLiveStripeSnapshot(stripeCustomerId);
+    const storedSubId = fieldStr(row.fields, MEMBER_FIELDS.stripeSubscriptionId) || null;
+    const live = await loadLiveStripeSnapshot(stripeCustomerId, storedSubId);
     const airtableCancel = profile.cancelAtPeriodEnd === "true";
     const cancelAtPeriodEnd =
       live.cancelAtPeriodEnd != null ? live.cancelAtPeriodEnd : airtableCancel;
