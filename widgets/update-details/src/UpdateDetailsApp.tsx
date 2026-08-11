@@ -1235,7 +1235,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       setError("Stripe Customer Portal is not available on this page.");
       return;
     }
-    await w.$memberstackDom.launchStripeCustomerPortal();
+    await w.$memberstackDom.launchStripeCustomerPortal({
+      returnUrl: window.location.href,
+    });
   };
 
   const reactivateMembership = async () => {
