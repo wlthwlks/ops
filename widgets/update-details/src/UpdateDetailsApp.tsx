@@ -343,6 +343,23 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     if (isDirty) setSaveStatus("dirty");
   }, [isDirty]);
 
+  // Refresh billing when the user returns to this tab (e.g. after Stripe portal in another tab).
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible" || !token) return;
+      void (async () => {
+        try {
+          const bill = await api(props.apiBase, "/api/member/billing-status", { token });
+          setBilling((bill.billing || null) as typeof billing);
+        } catch {
+          /* ignore — billing refreshes on next mount */
+        }
+      })();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [props.apiBase, token]);
+
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (form.formState.isDirty && !saving) {
@@ -499,15 +516,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         }
 
         setBilling(
-          (bill.billing || null) as {
-            membership: string;
-            payment: string;
-            serviceAccessUntil: string;
-            cancelAtPeriodEnd: boolean;
-            cancellationEffectiveAt: string;
-            stripeCustomerId?: string | null;
-            hasPaymentMethod?: boolean;
-          } | null
+          (bill.billing || null) as typeof billing
         );
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load profile");
@@ -1240,6 +1249,16 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     await w.$memberstackDom.launchStripeCustomerPortal({
       returnUrl: window.location.href,
     });
+    // Refresh billing after portal interaction (handles inline/modal flows
+    // where the page doesn't reload — and is harmless when it does).
+    if (token) {
+      try {
+        const bill = await api(props.apiBase, "/api/member/billing-status", { token });
+        setBilling((bill.billing || null) as typeof billing);
+      } catch {
+        /* portal state will update on next mount */
+      }
+    }
   };
 
   const reactivateMembership = async () => {
