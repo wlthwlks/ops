@@ -23,8 +23,18 @@ export type MembershipStateInput = {
   hasPaymentMethod?: boolean | null;
   /** ISO or date string */
   currentPeriodEnd?: string | null;
+  cancellationEffectiveAt?: string | null;
   now?: Date;
 };
+
+/** Accept checkbox/boolean/string flags from Airtable or Stripe-derived payloads. */
+export function parseTruthyFlag(value: unknown): boolean {
+  if (value === true || value === 1) return true;
+  if (value === false || value === 0 || value == null) return false;
+  const s = String(value).trim().toLowerCase();
+  if (!s) return false;
+  return s === "true" || s === "1" || s === "yes" || s === "y" || s === "checked";
+}
 
 function parseAccessUntil(raw: string | null | undefined): Date | null {
   if (raw == null) return null;
@@ -44,6 +54,27 @@ export function hasRemainingServiceAccess(
 }
 
 /**
+ * Best date to show members for "access until / ends on".
+ * Prefer paid-through, then Stripe period end, then cancellation effective.
+ */
+export function resolveAccessUntilLabel(input: {
+  serviceAccessUntil?: string | null;
+  currentPeriodEnd?: string | null;
+  cancellationEffectiveAt?: string | null;
+}): string {
+  const candidates = [
+    input.serviceAccessUntil,
+    input.currentPeriodEnd,
+    input.cancellationEffectiveAt,
+  ];
+  for (const c of candidates) {
+    const label = formatMembershipAccessDate(c);
+    if (label) return label;
+  }
+  return "";
+}
+
+/**
  * Distinguish voluntary end-of-period cancel from payment problems and true expiry.
  */
 export function classifyMembershipUiState(
@@ -53,7 +84,15 @@ export function classifyMembershipUiState(
   const subStatus = (input.stripeSubscriptionStatus || "").toLowerCase().trim();
   const mem = (input.membership || "").toLowerCase().trim();
   const pay = (input.payment || "").toLowerCase().trim();
-  const accessOk = hasRemainingServiceAccess(input.serviceAccessUntil, now);
+  const cancelAtPeriodEnd = Boolean(input.cancelAtPeriodEnd);
+
+  // Access from any known paid-through signal
+  const accessRaw =
+    input.serviceAccessUntil ||
+    input.currentPeriodEnd ||
+    input.cancellationEffectiveAt ||
+    null;
+  const accessOk = hasRemainingServiceAccess(accessRaw, now);
 
   if (
     subStatus === "past_due" ||
@@ -65,29 +104,31 @@ export function classifyMembershipUiState(
     return "payment_problem";
   }
 
+  // Scheduled cancel is the primary product state we want to surface.
+  // Check BEFORE treating bare active as normal active.
+  if (cancelAtPeriodEnd) {
+    // Still entitled through period end (or Stripe still active/trialing).
+    if (
+      accessOk ||
+      subStatus === "active" ||
+      subStatus === "trialing" ||
+      mem === "active" ||
+      !subStatus
+    ) {
+      return "cancellation_scheduled";
+    }
+    return "expired";
+  }
+
   if (subStatus === "incomplete_expired") {
     return accessOk ? "cancellation_scheduled" : "expired";
   }
 
-  if (
-    (subStatus === "active" || subStatus === "trialing") &&
-    input.cancelAtPeriodEnd
-  ) {
-    return "cancellation_scheduled";
-  }
-
-  if (
-    (subStatus === "active" || subStatus === "trialing") &&
-    !input.cancelAtPeriodEnd
-  ) {
+  if (subStatus === "active" || subStatus === "trialing") {
     return "active";
   }
 
-  if (input.cancelAtPeriodEnd && (mem === "active" || accessOk)) {
-    return "cancellation_scheduled";
-  }
-
-  if (pay === "paid" && mem === "active" && !input.cancelAtPeriodEnd) {
+  if (pay === "paid" && mem === "active") {
     return "active";
   }
 
@@ -95,7 +136,12 @@ export function classifyMembershipUiState(
     return "incomplete_onboarding";
   }
 
-  if (subStatus === "canceled" || mem === "cancelled" || mem === "canceled") {
+  // Fully canceled in Stripe/Airtable but still inside paid-through window
+  if (
+    subStatus === "canceled" ||
+    mem === "cancelled" ||
+    mem === "canceled"
+  ) {
     return accessOk ? "cancellation_scheduled" : "expired";
   }
 
@@ -103,7 +149,9 @@ export function classifyMembershipUiState(
     return "expired";
   }
 
-  if (mem && mem !== "active") return "expired";
+  if (mem && mem !== "active") {
+    return accessOk ? "cancellation_scheduled" : "expired";
+  }
   if (pay && pay !== "paid") return "payment_problem";
 
   return "unknown";

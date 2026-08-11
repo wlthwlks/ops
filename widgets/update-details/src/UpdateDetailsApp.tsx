@@ -343,21 +343,38 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     if (isDirty) setSaveStatus("dirty");
   }, [isDirty]);
 
-  // Refresh billing when the user returns to this tab (e.g. after Stripe portal in another tab).
+  const refreshBilling = async (accessToken?: string | null) => {
+    const t = accessToken || token;
+    if (!t) return;
+    try {
+      const bill = await api(props.apiBase, "/api/member/billing-status", {
+        token: t,
+        // bust any intermediate caches
+        cache: "no-store",
+      });
+      setBilling((bill.billing || null) as typeof billing);
+    } catch {
+      /* ignore — billing refreshes on next mount */
+    }
+  };
+
+  // Refresh billing when the user returns to this tab (e.g. after Stripe portal).
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== "visible" || !token) return;
-      void (async () => {
-        try {
-          const bill = await api(props.apiBase, "/api/member/billing-status", { token });
-          setBilling((bill.billing || null) as typeof billing);
-        } catch {
-          /* ignore — billing refreshes on next mount */
-        }
-      })();
+      void refreshBilling(token);
+    };
+    const onFocus = () => {
+      if (!token) return;
+      void refreshBilling(token);
     };
     document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.apiBase, token]);
 
   useEffect(() => {
@@ -536,24 +553,94 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     [refData, rCountry]
   );
 
-  const needsReactivation = useMemo(() => {
-    if (!billing) return false;
-    // cancelAtPeriodEnd is the clearest signal — show banner when set
-    if (billing.cancelAtPeriodEnd) return true;
-    // Server uiState classifies all other states
-    if (billing.uiState) {
-      if (billing.uiState === "active") return false;
-      return true;
+  /**
+   * Display membership state for the top banner.
+   * Prefer server uiState, but never miss cancel-at-period-end even if uiState lags.
+   */
+  const membershipDisplay = useMemo(() => {
+    if (!billing) {
+      return {
+        showBanner: false,
+        kind: "none" as const,
+        endsOn: "",
+      };
     }
-    // Fallback — legacy Airtable-based heuristic
+
+    const endsOn =
+      (billing.accessUntilLabel || "").trim() ||
+      (billing.currentPeriodEnd || "").trim() ||
+      (billing.serviceAccessUntil
+        ? String(billing.serviceAccessUntil).slice(0, 10)
+        : "") ||
+      (billing.cancellationEffectiveAt
+        ? String(billing.cancellationEffectiveAt).slice(0, 10)
+        : "");
+
+    const ui = (billing.uiState || "").trim();
     const mem = (billing.membership || "").toLowerCase();
     const pay = (billing.payment || "").toLowerCase();
-    if (pay === "paid" && mem === "active") return false;
-    if (mem === "pending payment" || pay === "unpaid" || pay === "failed") return true;
-    if (mem && mem !== "active") return true;
-    if (pay && pay !== "paid") return true;
-    return false;
+    const sub = (billing.stripeSubscriptionStatus || "").toLowerCase();
+
+    // 1) Scheduled cancel — highest priority for this banner
+    if (
+      billing.cancelAtPeriodEnd ||
+      ui === "cancellation_scheduled"
+    ) {
+      return { showBanner: true, kind: "cancellation_scheduled" as const, endsOn };
+    }
+
+    // 2) Explicit server states
+    if (ui === "expired") {
+      return { showBanner: true, kind: "expired" as const, endsOn };
+    }
+    if (ui === "payment_problem") {
+      return { showBanner: true, kind: "payment_problem" as const, endsOn };
+    }
+    if (ui === "incomplete_onboarding") {
+      return { showBanner: true, kind: "other" as const, endsOn };
+    }
+    if (ui === "active") {
+      return { showBanner: false, kind: "none" as const, endsOn };
+    }
+
+    // 3) Fully canceled/expired without cancel_at_period_end
+    if (
+      sub === "canceled" ||
+      mem === "cancelled" ||
+      mem === "canceled"
+    ) {
+      // Still has paid-through date in the future → treat as scheduled end messaging
+      const futureAccess =
+        endsOn && !Number.isNaN(Date.parse(endsOn.length <= 10 ? `${endsOn}T23:59:59.999Z` : endsOn))
+          ? Date.parse(endsOn.length <= 10 ? `${endsOn}T23:59:59.999Z` : endsOn) >= Date.now()
+          : Boolean(billing.hasServiceAccess);
+      if (futureAccess) {
+        return { showBanner: true, kind: "cancellation_scheduled" as const, endsOn };
+      }
+      return { showBanner: true, kind: "expired" as const, endsOn };
+    }
+
+    // 4) Legacy Airtable heuristics
+    if (pay === "failed" || pay === "unpaid") {
+      return { showBanner: true, kind: "payment_problem" as const, endsOn };
+    }
+    if (mem === "pending payment" || pay === "pending") {
+      return { showBanner: true, kind: "other" as const, endsOn };
+    }
+    if (pay === "paid" && mem === "active") {
+      return { showBanner: false, kind: "none" as const, endsOn };
+    }
+    if (mem && mem !== "active") {
+      return { showBanner: true, kind: "expired" as const, endsOn };
+    }
+    if (pay && pay !== "paid") {
+      return { showBanner: true, kind: "payment_problem" as const, endsOn };
+    }
+
+    return { showBanner: false, kind: "none" as const, endsOn };
   }, [billing]);
+
+  const needsReactivation = membershipDisplay.showBanner;
 
   /** Payment inside progressive flow only for mid-signup who are not yet Paid+Active. */
   const refreshNeedsPaymentStep = useMemo(() => {
@@ -1243,19 +1330,23 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       setError("Stripe Customer Portal is not available on this page.");
       return;
     }
-    await w.$memberstackDom.launchStripeCustomerPortal({
-      returnUrl: window.location.href,
-    });
-    // Refresh billing after portal interaction (handles inline/modal flows
-    // where the page doesn't reload — and is harmless when it does).
-    if (token) {
-      try {
-        const bill = await api(props.apiBase, "/api/member/billing-status", { token });
-        setBilling((bill.billing || null) as typeof billing);
-      } catch {
-        /* portal state will update on next mount */
-      }
+    // Prefer a clean return to this page (drop transient query noise)
+    let returnUrl = window.location.href;
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.delete("reactivated");
+      u.searchParams.delete("refresh_paid");
+      // Hint for post-portal billing refresh
+      u.searchParams.set("billing_refresh", "1");
+      returnUrl = u.toString();
+    } catch {
+      /* use href as-is */
     }
+    await w.$memberstackDom.launchStripeCustomerPortal({
+      returnUrl,
+    });
+    // Refresh billing after portal interaction (inline/modal flows).
+    await refreshBilling(token);
   };
 
   const reactivateMembership = async () => {
@@ -1334,19 +1425,26 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     const p = new URLSearchParams(window.location.search);
     if (!token) return;
 
-    if (p.get("reactivated") === "1") {
+    if (p.get("reactivated") === "1" || p.get("billing_refresh") === "1") {
       void (async () => {
-        setOk("Welcome back — confirming your membership…");
-        await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-          method: "POST",
-          token,
-          body: JSON.stringify({}),
-        }).catch(() => undefined);
-        const bill = await api(props.apiBase, "/api/member/billing-status", { token });
-        setBilling((bill.billing || null) as typeof billing);
+        if (p.get("reactivated") === "1") {
+          setOk("Welcome back — confirming your membership…");
+          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+            method: "POST",
+            token,
+            body: JSON.stringify({}),
+          }).catch(() => undefined);
+        }
+        // Short delay so Stripe portal cancel is visible to API immediately after redirect
+        await new Promise((r) => setTimeout(r, 400));
+        await refreshBilling(token);
+        // One more pull shortly after — covers webhook/Stripe eventual consistency
+        await new Promise((r) => setTimeout(r, 1500));
+        await refreshBilling(token);
         try {
           const url = new URL(window.location.href);
           url.searchParams.delete("reactivated");
+          url.searchParams.delete("billing_refresh");
           window.history.replaceState({}, "", url.pathname + url.search);
         } catch {
           /* ignore */
@@ -1829,24 +1927,21 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
         {!token && <p>Log in to continue.</p>}
 
-        {billing && needsReactivation && (
-          <div className="wlth-reactivate">
-            {billing.uiState === "cancellation_scheduled" ? (
+        {billing && membershipDisplay.showBanner && (
+          <div className="wlth-reactivate" data-membership-state={membershipDisplay.kind}>
+            {membershipDisplay.kind === "cancellation_scheduled" ? (
               <>
-                <h3>Membership ends
-                  {billing.accessUntilLabel
-                    ? ` on ${billing.accessUntilLabel}`
-                    : billing.serviceAccessUntil
-                      ? ` on ${String(billing.serviceAccessUntil).slice(0, 10)}`
-                      : ""}
+                <h3>
+                  Membership ends
+                  {membershipDisplay.endsOn ? ` on ${membershipDisplay.endsOn}` : ""}
                 </h3>
                 <p className="wlth-muted" style={{ marginBottom: 12 }}>
-                  You still have access until this date. Your membership will not
-                  renew after it ends.
+                  {membershipDisplay.endsOn
+                    ? `You still have access until ${membershipDisplay.endsOn}. Your membership will not renew after this date.`
+                    : "You still have access until the end of your paid period. Your membership will not renew after it ends."}
                 </p>
                 <p className="wlth-muted" style={{ marginBottom: 12 }}>
-                  Reactivate now to continue without interruption —
-                  you will not be charged today.
+                  Reactivate now to continue without interruption — you will not be charged today.
                 </p>
                 <div className="wlth-actions">
                   <button
@@ -1866,12 +1961,12 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   </button>
                 </div>
               </>
-            ) : billing.uiState === "expired" ? (
+            ) : membershipDisplay.kind === "expired" ? (
               <>
                 <h3>Your membership has ended</h3>
                 <p className="wlth-muted" style={{ marginBottom: 12 }}>
-                  Your paid access has expired. Reactivate charges the card on file
-                  when available. Use Manage billing to add or change cards.
+                  Your paid access has expired. Resubscribe charges the card on file when
+                  available. Use Manage billing to add or change cards.
                 </p>
                 <div className="wlth-actions">
                   <button
@@ -1891,7 +1986,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   </button>
                 </div>
               </>
-            ) : billing.uiState === "payment_problem" ? (
+            ) : membershipDisplay.kind === "payment_problem" ? (
               <>
                 <h3>Payment issue</h3>
                 <p className="wlth-muted" style={{ marginBottom: 12 }}>
@@ -2308,28 +2403,38 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
         {billing && (
           <p className="wlth-muted" style={{ marginTop: 20 }}>
-            {billing.uiState === "active" ? (
+            {membershipDisplay.kind === "cancellation_scheduled" ? (
+              <>
+                Membership cancelled
+                {membershipDisplay.endsOn
+                  ? ` — access until ${membershipDisplay.endsOn}`
+                  : ""}
+              </>
+            ) : membershipDisplay.kind === "expired" ? (
+              <>Membership ended</>
+            ) : membershipDisplay.kind === "none" &&
+              (billing.uiState === "active" ||
+                ((billing.membership || "").toLowerCase() === "active" &&
+                  (billing.payment || "").toLowerCase() === "paid")) ? (
               <>
                 Membership active
                 {billing.currentPeriodEnd
                   ? ` — renews on ${billing.currentPeriodEnd}`
-                  : ""}
+                  : membershipDisplay.endsOn
+                    ? ` — access until ${membershipDisplay.endsOn}`
+                    : ""}
               </>
             ) : (
               <>
                 Membership: {billing.membership || "—"} · Payment: {billing.payment || "—"}
+                {membershipDisplay.endsOn
+                  ? ` · Access until ${membershipDisplay.endsOn}`
+                  : ""}
               </>
             )}
-            {billing.accessUntilLabel
-              ? ` · Access until ${billing.accessUntilLabel}`
-              : billing.serviceAccessUntil
-                ? ` · Access until ${String(billing.serviceAccessUntil).slice(0, 10)}`
-                : ""}
-            {billing.cancelAtPeriodEnd && billing.uiState !== "cancellation_scheduled"
-              ? " · Cancellation scheduled"
-              : ""}
           </p>
         )}
+
       </div>
     </div>
   );

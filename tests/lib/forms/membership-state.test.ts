@@ -3,8 +3,9 @@ import {
   classifyMembershipUiState,
   hasRemainingServiceAccess,
   formatMembershipAccessDate,
+  parseTruthyFlag,
+  resolveAccessUntilLabel,
 } from "@/lib/forms/billing/membership-state";
-import type { MembershipStateInput } from "@/lib/forms/billing/membership-state";
 
 const now = new Date("2026-08-11");
 
@@ -14,6 +15,29 @@ describe("classifyMembershipUiState", () => {
       stripeSubscriptionStatus: "active",
       cancelAtPeriodEnd: true,
       serviceAccessUntil: "2026-11-01",
+      membership: "Active",
+      payment: "Paid",
+      now,
+    });
+    expect(result).toBe("cancellation_scheduled");
+  });
+
+  it("active + cancel_at_period_end=true without serviceAccessUntil still schedules cancel", () => {
+    // Common right after portal cancel before webhook writes Airtable access date
+    const result = classifyMembershipUiState({
+      stripeSubscriptionStatus: "active",
+      cancelAtPeriodEnd: true,
+      currentPeriodEnd: "2026-11-01",
+      membership: "Active",
+      payment: "Paid",
+      now,
+    });
+    expect(result).toBe("cancellation_scheduled");
+  });
+
+  it("cancel_at_period_end=true with only Airtable Active+Paid (no Stripe status)", () => {
+    const result = classifyMembershipUiState({
+      cancelAtPeriodEnd: true,
       membership: "Active",
       payment: "Paid",
       now,
@@ -118,6 +142,46 @@ describe("classifyMembershipUiState", () => {
       now,
     });
     expect(result).toBe("incomplete_onboarding");
+  });
+});
+
+describe("parseTruthyFlag", () => {
+  it("parses common Airtable/boolean shapes", () => {
+    expect(parseTruthyFlag(true)).toBe(true);
+    expect(parseTruthyFlag("true")).toBe(true);
+    expect(parseTruthyFlag("TRUE")).toBe(true);
+    expect(parseTruthyFlag("1")).toBe(true);
+    expect(parseTruthyFlag(1)).toBe(true);
+    expect(parseTruthyFlag("yes")).toBe(true);
+    expect(parseTruthyFlag(false)).toBe(false);
+    expect(parseTruthyFlag("false")).toBe(false);
+    expect(parseTruthyFlag("")).toBe(false);
+    expect(parseTruthyFlag(null)).toBe(false);
+  });
+});
+
+describe("resolveAccessUntilLabel", () => {
+  it("prefers serviceAccessUntil, then period end, then cancellation effective", () => {
+    expect(
+      resolveAccessUntilLabel({
+        serviceAccessUntil: "2026-11-01",
+        currentPeriodEnd: "2026-10-01",
+        cancellationEffectiveAt: "2026-09-01",
+      })
+    ).toBe("2026-11-01");
+    expect(
+      resolveAccessUntilLabel({
+        serviceAccessUntil: "",
+        currentPeriodEnd: "2026-10-01",
+        cancellationEffectiveAt: "2026-09-01",
+      })
+    ).toBe("2026-10-01");
+    expect(
+      resolveAccessUntilLabel({
+        currentPeriodEnd: null,
+        cancellationEffectiveAt: "2026-09-15T00:00:00.000Z",
+      })
+    ).toBe("2026-09-15");
   });
 });
 

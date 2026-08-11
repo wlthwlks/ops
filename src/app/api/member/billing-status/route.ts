@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import Stripe from "stripe";
+import type Stripe from "stripe";
 import { optionsCors, withCors } from "@/lib/forms/cors";
 import {
   extractMemberstackToken,
@@ -13,8 +13,9 @@ import { FormsError } from "@/lib/forms/errors";
 import { customerHasPaymentMethod } from "@/lib/forms/billing/reactivate-membership";
 import {
   classifyMembershipUiState,
-  formatMembershipAccessDate,
   hasRemainingServiceAccess,
+  parseTruthyFlag,
+  resolveAccessUntilLabel,
 } from "@/lib/forms/billing/membership-state";
 import { getStripeClient } from "@/lib/integrations/stripe";
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
@@ -32,6 +33,28 @@ function fieldStr(fields: Record<string, unknown>, key: string): string {
   return String(v).trim();
 }
 
+function periodEndFromSub(sub: Stripe.Subscription): string | null {
+  const itemEnd = sub.items?.data?.[0]?.current_period_end;
+  const top = (sub as unknown as { current_period_end?: number }).current_period_end;
+  const unix =
+    typeof itemEnd === "number" ? itemEnd : typeof top === "number" ? top : null;
+  if (unix == null) return null;
+  return new Date(unix * 1000).toISOString().slice(0, 10);
+}
+
+function subscriptionToSnapshot(sub: Stripe.Subscription) {
+  return {
+    subscriptionStatus: sub.status,
+    cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end),
+    currentPeriodEnd: periodEndFromSub(sub),
+    subscriptionId: sub.id,
+  };
+}
+
+/**
+ * Live Stripe is source of truth for cancel_at_period_end.
+ * Prefer active/trialing cancel-scheduled subs, then any live sub, then stored id.
+ */
 async function loadLiveStripeSnapshot(
   stripeCustomerId: string,
   fallbackSubscriptionId?: string | null
@@ -41,39 +64,55 @@ async function loadLiveStripeSnapshot(
   currentPeriodEnd: string | null;
   subscriptionId: string | null;
 }> {
-  if (!stripeCustomerId.startsWith("cus_")) {
-    return { subscriptionStatus: null, cancelAtPeriodEnd: null, currentPeriodEnd: null, subscriptionId: null };
-  }
+  const empty = {
+    subscriptionStatus: null as string | null,
+    cancelAtPeriodEnd: null as boolean | null,
+    currentPeriodEnd: null as string | null,
+    subscriptionId: null as string | null,
+  };
+
+  if (!stripeCustomerId.startsWith("cus_")) return empty;
+
   try {
     const stripe = getStripeClient();
-    const subs = await stripe.subscriptions.list({
-      customer: stripeCustomerId,
-      status: "all",
-      limit: 10,
-    });
-    const prefer =
-      subs.data.find(
-        (s) => (s.status === "active" || s.status === "trialing") && s.cancel_at_period_end
-      ) ||
-      subs.data.find((s) => s.status === "active" || s.status === "trialing") ||
-      subs.data.find((s) => ["past_due", "unpaid", "incomplete"].includes(s.status)) ||
-      subs.data[0];
 
-    if (prefer) {
-      return subscriptionToSnapshot(prefer);
-    }
-
-    // If list returned nothing useful, try direct lookup by stored sub id.
+    // 1) Direct retrieve by stored sub id first (most precise after portal cancel)
     const stored = (fallbackSubscriptionId || "").trim();
     if (stored.startsWith("sub_")) {
       try {
         const direct = await stripe.subscriptions.retrieve(stored);
-        return subscriptionToSnapshot(direct);
+        if (direct && !("deleted" in direct && direct.deleted)) {
+          return subscriptionToSnapshot(direct);
+        }
       } catch {
-        /* direct lookup also failed — return nulls */
+        /* fall through to list */
       }
     }
-    return { subscriptionStatus: null, cancelAtPeriodEnd: null, currentPeriodEnd: null, subscriptionId: null };
+
+    // 2) List all recent subs for this customer
+    const subs = await stripe.subscriptions.list({
+      customer: stripeCustomerId,
+      status: "all",
+      limit: 20,
+    });
+
+    const prefer =
+      subs.data.find(
+        (s) =>
+          (s.status === "active" || s.status === "trialing") && s.cancel_at_period_end
+      ) ||
+      subs.data.find((s) => s.status === "active" || s.status === "trialing") ||
+      subs.data.find((s) =>
+        ["past_due", "unpaid", "incomplete"].includes(s.status)
+      ) ||
+      // Prefer most recently canceled over ancient ones
+      [...subs.data]
+        .filter((s) => s.status === "canceled")
+        .sort((a, b) => (b.canceled_at || 0) - (a.canceled_at || 0))[0] ||
+      subs.data[0];
+
+    if (prefer) return subscriptionToSnapshot(prefer);
+    return empty;
   } catch (err) {
     console.error(
       JSON.stringify({
@@ -81,20 +120,8 @@ async function loadLiveStripeSnapshot(
         error: err instanceof Error ? err.message : String(err),
       })
     );
-    return { subscriptionStatus: null, cancelAtPeriodEnd: null, currentPeriodEnd: null, subscriptionId: null };
+    return empty;
   }
-}
-
-function subscriptionToSnapshot(sub: Stripe.Subscription) {
-  const itemEnd = sub.items?.data?.[0]?.current_period_end;
-  const top = (sub as unknown as { current_period_end?: number }).current_period_end;
-  const unix = typeof itemEnd === "number" ? itemEnd : typeof top === "number" ? top : null;
-  return {
-    subscriptionStatus: sub.status,
-    cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end),
-    currentPeriodEnd: unix ? new Date(unix * 1000).toISOString().slice(0, 10) : null,
-    subscriptionId: sub.id,
-  };
 }
 
 export async function GET(request: Request) {
@@ -120,55 +147,72 @@ export async function GET(request: Request) {
     const row = rows[0];
     const profile = recordToProfileDto(row);
     const stripeCustomerId = profile.stripeCustomerId || "";
-    const hasPaymentMethod = stripeCustomerId.startsWith("cus_")
-      ? await customerHasPaymentMethod(stripeCustomerId)
-      : false;
 
-    const storedSubId = fieldStr(row.fields, MEMBER_FIELDS.stripeSubscriptionId) || null;
-    const live = await loadLiveStripeSnapshot(stripeCustomerId, storedSubId);
-    const airtableCancel = profile.cancelAtPeriodEnd === "true";
+    const storedSubId =
+      fieldStr(row.fields, MEMBER_FIELDS.stripeSubscriptionId) || null;
+
+    // Run Stripe lookups independently so a PM failure never hides cancel state
+    const [hasPaymentMethod, live] = await Promise.all([
+      stripeCustomerId.startsWith("cus_")
+        ? customerHasPaymentMethod(stripeCustomerId).catch(() => false)
+        : Promise.resolve(false),
+      loadLiveStripeSnapshot(stripeCustomerId, storedSubId),
+    ]);
+
+    // Stripe wins when known; otherwise robust Airtable flag parse
+    const airtableCancel = parseTruthyFlag(profile.cancelAtPeriodEnd);
     const cancelAtPeriodEnd =
       live.cancelAtPeriodEnd != null ? live.cancelAtPeriodEnd : airtableCancel;
+
     const stripeSubscriptionStatus =
       live.subscriptionStatus ||
       fieldStr(row.fields, MEMBER_FIELDS.stripeSubscriptionStatus) ||
       null;
 
+    const accessUntilLabel = resolveAccessUntilLabel({
+      serviceAccessUntil: profile.serviceAccessUntil,
+      currentPeriodEnd: live.currentPeriodEnd,
+      cancellationEffectiveAt: profile.cancellationEffectiveAt,
+    });
+
     const uiState = classifyMembershipUiState({
       membership: profile.membership,
       payment: profile.payment,
-      serviceAccessUntil: profile.serviceAccessUntil,
+      serviceAccessUntil: profile.serviceAccessUntil || accessUntilLabel,
       cancelAtPeriodEnd,
       stripeSubscriptionStatus,
       hasPaymentMethod,
       currentPeriodEnd: live.currentPeriodEnd,
+      cancellationEffectiveAt: profile.cancellationEffectiveAt,
     });
 
-    const accessUntil = formatMembershipAccessDate(profile.serviceAccessUntil);
-    const hasAccess = hasRemainingServiceAccess(profile.serviceAccessUntil);
-
-    return withCors(
-      NextResponse.json({
-        success: true,
-        billing: {
-          membership: profile.membership,
-          payment: profile.payment,
-          serviceAccessUntil: profile.serviceAccessUntil,
-          cancelAtPeriodEnd,
-          cancellationEffectiveAt: profile.cancellationEffectiveAt,
-          stripeCustomerId: stripeCustomerId || null,
-          hasPaymentMethod,
-          stripeSubscriptionStatus,
-          stripeSubscriptionId: live.subscriptionId,
-          currentPeriodEnd: live.currentPeriodEnd,
-          uiState,
-          hasServiceAccess: hasAccess,
-          accessUntilLabel: accessUntil,
-        },
-        profile,
-      }),
-      request
+    const hasAccess = hasRemainingServiceAccess(
+      profile.serviceAccessUntil || accessUntilLabel || live.currentPeriodEnd
     );
+
+    const res = NextResponse.json({
+      success: true,
+      billing: {
+        membership: profile.membership,
+        payment: profile.payment,
+        serviceAccessUntil:
+          profile.serviceAccessUntil || accessUntilLabel || live.currentPeriodEnd || "",
+        cancelAtPeriodEnd,
+        cancellationEffectiveAt: profile.cancellationEffectiveAt,
+        stripeCustomerId: stripeCustomerId || null,
+        hasPaymentMethod,
+        stripeSubscriptionStatus,
+        stripeSubscriptionId: live.subscriptionId || storedSubId,
+        currentPeriodEnd: live.currentPeriodEnd,
+        uiState,
+        hasServiceAccess: hasAccess,
+        accessUntilLabel,
+      },
+      profile,
+    });
+    // Never cache membership state — cancel_at_period_end must be live
+    res.headers.set("Cache-Control", "no-store, max-age=0");
+    return withCors(res, request);
   } catch (err) {
     if (err instanceof FormsError) {
       return withCors(
