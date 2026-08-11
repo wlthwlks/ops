@@ -161,8 +161,107 @@ function commerceIds(sub: Stripe.Subscription, fallbackPriceId: string) {
   return { subPrice, plan };
 }
 
+function isScheduledCancel(s: Stripe.Subscription): boolean {
+  if (s.cancel_at_period_end) return true;
+  if (typeof s.cancel_at === "number" && s.cancel_at * 1000 > Date.now()) return true;
+  return false;
+}
+
+/**
+ * Undo a scheduled end without charging.
+ * Stripe rejects setting cancel_at and cancel_at_period_end in the same request.
+ */
+async function reverseScheduledCancellation(
+  stripe: Stripe,
+  sub: Stripe.Subscription
+): Promise<Stripe.Subscription> {
+  // Path A — cancel_at_period_end (most common via Customer Portal)
+  if (sub.cancel_at_period_end) {
+    try {
+      return await stripe.subscriptions.update(sub.id, {
+        cancel_at_period_end: false,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(
+        JSON.stringify({
+          event: "reactivate_reverse_cancel_at_period_end_failed",
+          subscriptionId: sub.id,
+          error: msg,
+        })
+      );
+      throw new FormsError(
+        "STRIPE_API_FAILED",
+        "Stripe could not remove the scheduled cancellation. Please try Manage billing, or try again in a moment.",
+        { status: 502, retryable: true }
+      );
+    }
+  }
+
+  // Path B — fixed cancel_at timestamp (Memberstack / some portal configs)
+  if (typeof sub.cancel_at === "number" && sub.cancel_at * 1000 > Date.now()) {
+    try {
+      // Stripe clears cancel_at when cancel_at_period_end is set false on some API versions;
+      // empty-string clear is accepted by the REST API.
+      return await stripe.subscriptions.update(sub.id, {
+        cancel_at: "" as unknown as number,
+      });
+    } catch {
+      try {
+        return await stripe.subscriptions.update(sub.id, {
+          cancel_at_period_end: false,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(
+          JSON.stringify({
+            event: "reactivate_reverse_cancel_at_failed",
+            subscriptionId: sub.id,
+            error: msg,
+          })
+        );
+        throw new FormsError(
+          "STRIPE_API_FAILED",
+          "Stripe could not remove the scheduled cancellation. Please try Manage billing, or try again in a moment.",
+          { status: 502, retryable: true }
+        );
+      }
+    }
+  }
+
+  // Already not scheduled — return as-is
+  return sub;
+}
+
+async function syncReactivateBilling(input: {
+  memberstackId: string;
+  stripeCustomerId: string;
+  patch: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    await applyTrustedPaymentByMemberstackId({
+      memberstackId: input.memberstackId,
+      stripeCustomerId: input.stripeCustomerId,
+      patch: input.patch,
+    });
+  } catch (e) {
+    // Stripe already succeeded — do not fail the member-facing flow.
+    // Webhook / next billing-status pull will reconcile Airtable.
+    console.error(
+      JSON.stringify({
+        event: "reactivate_airtable_sync_failed",
+        memberstackId: input.memberstackId,
+        error: e instanceof Error ? e.message : String(e),
+      })
+    );
+  }
+}
+
 export async function reactivateMembershipForMember(input: {
   memberstackId: string;
+  /** Optional email / MS raw for customer resolution fallback */
+  email?: string;
+  memberstackRaw?: Record<string, unknown> | null;
 }): Promise<ReactivateResult> {
   const msId = input.memberstackId.trim();
   if (!msId) {
@@ -180,12 +279,41 @@ export async function reactivateMembershipForMember(input: {
   }
 
   const fields = rows[0].fields;
-  const stripeCustomerId = fieldStr(fields, MEMBER_FIELDS.stripeCustomerId);
+  let stripeCustomerId = fieldStr(fields, MEMBER_FIELDS.stripeCustomerId);
+
+  // Fallback: Memberstack raw → unique Stripe email (same idea as billing-status)
+  if (!stripeCustomerId.startsWith("cus_")) {
+    try {
+      const { extractStripeCustomerIdFromMemberstackRaw } = await import(
+        "@/lib/forms/billing/confirm-checkout"
+      );
+      if (input.memberstackRaw) {
+        const fromMs = extractStripeCustomerIdFromMemberstackRaw(input.memberstackRaw);
+        if (fromMs.startsWith("cus_")) stripeCustomerId = fromMs;
+      }
+      if (!stripeCustomerId.startsWith("cus_")) {
+        const email =
+          (input.email || "").trim().toLowerCase() ||
+          fieldStr(fields, MEMBER_FIELDS.email).toLowerCase();
+        if (email.includes("@")) {
+          const stripe = getStripeClient();
+          const found = await stripe.customers.list({ email, limit: 5 });
+          const live = found.data.filter((c) => !c.deleted);
+          if (live.length === 1 && live[0].id.startsWith("cus_")) {
+            stripeCustomerId = live[0].id;
+          }
+        }
+      }
+    } catch {
+      /* keep empty */
+    }
+  }
+
   if (!stripeCustomerId.startsWith("cus_")) {
     return failResult({
       status: "no_stripe_customer",
       reason:
-        "No Stripe customer on file yet. Complete checkout once to save a card, then you can reactivate with one click.",
+        "No Stripe customer on file yet. Use Manage billing or complete checkout once to save a card, then reactivate.",
       requiresPaymentMethod: true,
     });
   }
@@ -200,43 +328,68 @@ export async function reactivateMembershipForMember(input: {
     });
   }
 
-  const subs = await stripe.subscriptions.list({
-    customer: stripeCustomerId,
-    status: "all",
-    limit: 15,
-  });
+  // Prefer stored subscription id first (same as billing-status)
+  const storedSubId = fieldStr(fields, MEMBER_FIELDS.stripeSubscriptionId);
+  let subsList: Stripe.Subscription[] = [];
+  try {
+    if (storedSubId.startsWith("sub_")) {
+      try {
+        const direct = await stripe.subscriptions.retrieve(storedSubId);
+        if (direct && !("deleted" in direct && (direct as { deleted?: boolean }).deleted)) {
+          subsList = [direct];
+        }
+      } catch {
+        /* fall through */
+      }
+    }
+    const listed = await stripe.subscriptions.list({
+      customer: stripeCustomerId,
+      status: "all",
+      limit: 15,
+    });
+    for (const s of listed.data) {
+      if (!subsList.some((x) => x.id === s.id)) subsList.push(s);
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(
+      JSON.stringify({ event: "reactivate_list_subs_failed", error: msg })
+    );
+    throw new FormsError(
+      "STRIPE_API_FAILED",
+      "Could not load your Stripe subscription. Please try again in a moment.",
+      { status: 502, retryable: true }
+    );
+  }
 
   /**
    * Reactivation charge rules (do not double-bill):
-   * 1) active/trialing && !cancel_at_period_end → already live, no charge
-   * 2) active/trialing && cancel_at_period_end  → only clear cancel flag, no charge
-   *    (payment method not required to undo scheduled cancel)
-   * 3) past_due / unpaid / incomplete          → payment-method / portal path
-   * 4) canceled (ended)                        → new subscription (or portal if no card)
+   * 1) active/trialing && !scheduled cancel → already live, no charge
+   * 2) active/trialing && scheduled cancel  → reverse cancel only, no charge
+   * 3) past_due / unpaid / incomplete        → payment-method / portal path
+   * 4) canceled (ended)                      → new subscription (or portal if no card)
    */
-  const isScheduledCancel = (s: Stripe.Subscription) =>
-    Boolean(s.cancel_at_period_end) ||
-    (typeof s.cancel_at === "number" && s.cancel_at * 1000 > Date.now());
-
-  const live = subs.data.find(
+  const live = subsList.find(
     (s) =>
       (s.status === "active" || s.status === "trialing") && !isScheduledCancel(s)
   );
   if (live) {
     const { plan } = commerceIds(live, priceId);
     const next = periodEndIso(live);
-    await applyTrustedPaymentByMemberstackId({
+    await syncReactivateBilling({
       memberstackId: msId,
       stripeCustomerId,
       patch: {
         [MEMBER_FIELDS.stripeSubscriptionId]: live.id,
         [MEMBER_FIELDS.stripeSubscriptionStatus]: live.status,
+        [MEMBER_FIELDS.stripeCustomerId]: stripeCustomerId,
         [MEMBER_FIELDS.stripePriceId]: plan,
         [MEMBER_FIELDS.memberstackPlanId]:
           getConfiguredMemberstackPlanId() ||
           fieldStr(fields, MEMBER_FIELDS.memberstackPlanId),
         ["Paid Plans (price ids)"]: formatPaidPlansText([plan || priceId]),
         [MEMBER_FIELDS.cancelAtPeriodEnd]: false,
+        [MEMBER_FIELDS.cancellationEffectiveAt]: "",
         ...(next ? { [MEMBER_FIELDS.serviceAccessUntil]: next } : {}),
       },
     });
@@ -253,32 +406,28 @@ export async function reactivateMembershipForMember(input: {
   }
 
   // Still in paid period with cancel scheduled — reverse only, never new Checkout.
-  // Do not require a card: undoing cancel_at_period_end / cancel_at does not charge.
-  const pendingCancel = subs.data.find(
+  const pendingCancel = subsList.find(
     (s) =>
       (s.status === "active" || s.status === "trialing") && isScheduledCancel(s)
   );
   if (pendingCancel) {
-    const updated = await stripe.subscriptions.update(pendingCancel.id, {
-      cancel_at_period_end: false,
-      // Clear a fixed cancel_at timestamp if Memberstack/portal set one
-      cancel_at: null,
-    });
+    const updated = await reverseScheduledCancellation(stripe, pendingCancel);
     const { subPrice, plan } = commerceIds(updated, priceId);
     const next = periodEndIso(updated);
-    await applyTrustedPaymentByMemberstackId({
+    await syncReactivateBilling({
       memberstackId: msId,
       stripeCustomerId,
       patch: {
         [MEMBER_FIELDS.stripeSubscriptionId]: updated.id,
         [MEMBER_FIELDS.stripeSubscriptionStatus]: updated.status,
+        [MEMBER_FIELDS.stripeCustomerId]: stripeCustomerId,
         [MEMBER_FIELDS.stripePriceId]: plan || subPrice || priceId,
         [MEMBER_FIELDS.memberstackPlanId]: getConfiguredMemberstackPlanId() || "",
         ["Paid Plans (price ids)"]: formatPaidPlansText([
           getConfiguredMemberstackPlanId() || priceId,
         ]),
         [MEMBER_FIELDS.cancelAtPeriodEnd]: false,
-        // Preserve existing paid-through; only set when Stripe gives a period end.
+        [MEMBER_FIELDS.cancellationEffectiveAt]: "",
         ...(next ? { [MEMBER_FIELDS.serviceAccessUntil]: next } : {}),
       },
     });
@@ -297,7 +446,7 @@ export async function reactivateMembershipForMember(input: {
   }
 
   // Payment problems — do not create a second subscription; send to payment method flow.
-  const problem = subs.data.find((s) =>
+  const problem = subsList.find((s) =>
     ["past_due", "unpaid", "incomplete"].includes(s.status)
   );
   if (problem) {

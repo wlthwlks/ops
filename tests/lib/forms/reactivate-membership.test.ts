@@ -5,8 +5,10 @@ const applyTrustedPaymentByMemberstackId = vi.fn();
 const subscriptionsList = vi.fn();
 const subscriptionsUpdate = vi.fn();
 const subscriptionsCreate = vi.fn();
+const subscriptionsRetrieve = vi.fn();
 const customersRetrieve = vi.fn();
 const customersUpdate = vi.fn();
+const customersList = vi.fn();
 const paymentMethodsList = vi.fn();
 const pricesList = vi.fn();
 
@@ -22,10 +24,12 @@ vi.mock("@/lib/integrations/stripe", () => ({
       list: (...a: unknown[]) => subscriptionsList(...a),
       update: (...a: unknown[]) => subscriptionsUpdate(...a),
       create: (...a: unknown[]) => subscriptionsCreate(...a),
+      retrieve: (...a: unknown[]) => subscriptionsRetrieve(...a),
     },
     customers: {
       retrieve: (...a: unknown[]) => customersRetrieve(...a),
       update: (...a: unknown[]) => customersUpdate(...a),
+      list: (...a: unknown[]) => customersList(...a),
     },
     paymentMethods: {
       list: (...a: unknown[]) => paymentMethodsList(...a),
@@ -37,6 +41,7 @@ vi.mock("@/lib/integrations/stripe", () => ({
   getConfiguredMembershipPriceIds: () => new Set(["price_membership"]),
   getConfiguredMemberstackPlanId: () => "prc_plan",
 }));
+
 
 vi.mock("@/lib/billing/service-access-sync", () => ({
   formatPaidPlansText: (ids: string[]) => ids.filter(Boolean).join(", "),
@@ -66,9 +71,12 @@ describe("reactivateMembershipForMember", () => {
       id: "cus_test",
       invoice_settings: { default_payment_method: "pm_card" },
     });
+    customersList.mockResolvedValue({ data: [] });
     paymentMethodsList.mockResolvedValue({ data: [{ id: "pm_card" }] });
     customersUpdate.mockResolvedValue({});
+    subscriptionsRetrieve.mockRejectedValue(new Error("not found"));
   });
+
 
   it("active + cancel_at_period_end: reverses cancel only — no create/checkout charge", async () => {
     subscriptionsList.mockResolvedValue({
@@ -100,10 +108,47 @@ describe("reactivateMembershipForMember", () => {
     expect(result.nextRenewalDate).toBeTruthy();
     expect(subscriptionsUpdate).toHaveBeenCalledWith("sub_pending", {
       cancel_at_period_end: false,
-      cancel_at: null,
     });
     expect(subscriptionsCreate).not.toHaveBeenCalled();
     expect(applyTrustedPaymentByMemberstackId).toHaveBeenCalled();
+  });
+
+  it("active + cancel_at timestamp: clears cancel without combining cancel_at params", async () => {
+    const future = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30;
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_cancel_at",
+          status: "active",
+          cancel_at_period_end: false,
+          cancel_at: future,
+          items: { data: [{ price: { id: "price_membership" }, current_period_end: future }] },
+          current_period_end: future,
+        },
+      ],
+    });
+    subscriptionsUpdate.mockResolvedValue({
+      id: "sub_cancel_at",
+      status: "active",
+      cancel_at_period_end: false,
+      cancel_at: null,
+      items: { data: [{ price: { id: "price_membership" }, current_period_end: future }] },
+      current_period_end: future,
+    });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe("cancellation_reversed");
+    expect(result.charged).toBe(false);
+    expect(subscriptionsUpdate).toHaveBeenCalled();
+    const updateArg = subscriptionsUpdate.mock.calls[0][1] as Record<string, unknown>;
+    // Must not send both cancel_at and cancel_at_period_end together
+    expect(
+      Object.prototype.hasOwnProperty.call(updateArg, "cancel_at_period_end") &&
+        Object.prototype.hasOwnProperty.call(updateArg, "cancel_at")
+    ).toBe(false);
+    expect(subscriptionsCreate).not.toHaveBeenCalled();
   });
 
   it("active without cancel_at_period_end: no charge, already active", async () => {

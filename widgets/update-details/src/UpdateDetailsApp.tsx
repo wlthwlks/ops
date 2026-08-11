@@ -1582,18 +1582,13 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       applyBillingPayload(bill.billing);
     } catch (e) {
       const werr = e as WidgetApiError;
-      // API returns 402 with message now — surface it
-      const reason = werr.reason || werr.message || "";
-      if (
-        reason &&
-        !/cancel|closed|abort/i.test(reason)
-      ) {
-        if (werr.apiStatus === "no_payment_method" || werr.requiresPaymentMethod) {
-          setError(reason);
-        } else {
-          setError(reason);
-        }
-      } else if (!reason) {
+      // Do not treat "cancel" in error copy as user-aborted portal close
+      const reason = (werr.reason || werr.message || "").trim();
+      if (werr.apiStatus === "no_payment_method" || werr.requiresPaymentMethod) {
+        setError(reason || "Add a payment method to continue your membership.");
+      } else if (reason) {
+        setError(reason);
+      } else {
         setError("Could not reactivate membership. Please try again.");
       }
     } finally {

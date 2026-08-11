@@ -30,6 +30,8 @@ export async function POST(request: Request) {
 
     const result = await reactivateMembershipForMember({
       memberstackId: member.id,
+      email: member.email,
+      memberstackRaw: (member.raw || null) as Record<string, unknown> | null,
     });
 
     const httpStatus = result.success
