@@ -1229,7 +1229,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
   const openPortal = async () => {
     const w = window as unknown as {
-      $memberstackDom?: { launchStripeCustomerPortal?: () => Promise<unknown> };
+      $memberstackDom?: {
+        launchStripeCustomerPortal?: (params?: { returnUrl?: string }) => Promise<unknown>;
+      };
     };
     if (!w.$memberstackDom?.launchStripeCustomerPortal) {
       setError("Stripe Customer Portal is not available on this page.");
