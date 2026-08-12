@@ -722,6 +722,7 @@ export function recordToProfileDto(record: AirtableRecord) {
     name: fieldStr(f, MEMBER_FIELDS.name),
     firstName: fieldStr(f, MEMBER_FIELDS.firstName),
     lastName: fieldStr(f, MEMBER_FIELDS.lastName),
+    age: fieldStr(f, MEMBER_FIELDS.age),
     email: fieldStr(f, MEMBER_FIELDS.email),
     phone: phoneParts.phone,
     phonePrefix: phoneParts.phonePrefix,

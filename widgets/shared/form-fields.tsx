@@ -256,9 +256,14 @@ export function CommunityIntentionCard(props: {
   checked: boolean;
   onChange: (next: boolean) => void;
   error?: string;
+  termsChecked?: boolean;
+  onTermsChange?: (next: boolean) => void;
+  termsError?: string;
 }): ReactNode {
+  const hasTerms = typeof props.termsChecked === "boolean" && props.onTermsChange;
+  const isInvalid = props.error || props.termsError;
   return (
-    <div className={`wlth-intention${props.error ? " is-invalid" : ""}`}>
+    <div className={`wlth-intention${isInvalid ? " is-invalid" : ""}`}>
       <p className="wlth-intention__lead">
         WLTH WLKS is a community for meaningful relationships, shared experience and mutual
         growth. It is not a lead list or sales channel.
@@ -276,6 +281,29 @@ export function CommunityIntentionCard(props: {
         </span>
       </label>
       <FieldError message={props.error} />
+      {hasTerms && (
+        <>
+          <label className="wlth-intention__check">
+            <input
+              type="checkbox"
+              checked={props.termsChecked}
+              onChange={(e) => props.onTermsChange!(e.target.checked)}
+            />
+            <span>
+              I agree to the{" "}
+              <a
+                href="https://wlthwlks.com/termsandconditions"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Terms and Conditions
+              </a>
+              .
+            </span>
+          </label>
+          <FieldError message={props.termsError} />
+        </>
+      )}
     </div>
   );
 }

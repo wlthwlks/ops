@@ -65,6 +65,8 @@
   border: 1px solid var(--wlth-border);
   border-radius: var(--wlth-radius);
   padding: clamp(20px, 4vw, 28px);
+  max-width: 680px;
+  margin: 0 auto;
   box-shadow: var(--wlth-shadow);
 }
 

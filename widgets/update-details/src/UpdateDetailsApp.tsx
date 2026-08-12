@@ -31,6 +31,7 @@ import {
   helpFormSchema,
   expertiseFormSchema,
   connectionFormSchema,
+  AGE_RANGES,
   type ProfileForm,
 } from "../../shared/widget-schemas";
 import {
@@ -497,6 +498,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         const defaults: ProfileForm = {
           firstName: String(p.firstName || ""),
           lastName: String(p.lastName || ""),
+          age: String(p.age || ""),
           email: String(p.email || ""),
           phone: String(p.phone || ""),
           phonePrefix: phonePrefixDefault,
@@ -1390,6 +1392,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         body: JSON.stringify({
           firstName: values.firstName,
           lastName: values.lastName,
+          age: values.age ?? "",
           phone: values.phone ?? "",
           phonePrefix: values.phonePrefix ?? "",
           countryIso2: values.countryIso2 || undefined,
@@ -1422,6 +1425,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       form.reset({
         firstName: String(p.firstName ?? values.firstName),
         lastName: String(p.lastName ?? values.lastName),
+        age: String(p.age ?? values.age ?? ""),
         email: String(p.email ?? values.email),
         phone: String(p.phone ?? values.phone ?? ""),
         phonePrefix: String(p.phonePrefix ?? values.phonePrefix ?? ""),
@@ -2102,6 +2106,22 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   <input id="ln" {...form.register("lastName")} />
                   <FieldError message={form.formState.errors.lastName?.message} />
                 </div>
+              </div>
+              <div className="wlth-field">
+                <label htmlFor="upd-age">Age</label>
+                <select
+                  id="upd-age"
+                  aria-invalid={!!form.formState.errors.age}
+                  {...form.register("age")}
+                >
+                  <option value="">Select age range</option>
+                  {AGE_RANGES.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+                <FieldError message={form.formState.errors.age?.message} />
               </div>
               <div className="wlth-field">
                 <label htmlFor="em">Email</label>

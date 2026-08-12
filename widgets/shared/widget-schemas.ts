@@ -177,6 +177,7 @@ export const profileFormSchema = z
   .object({
     firstName: z.string().trim().min(1, "Required").max(80),
     lastName: z.string().trim().min(1, "Required").max(80),
+    age: z.string().optional(),
     email: z
       .string()
       .trim()

@@ -168,6 +168,10 @@ export async function PATCH(request: Request) {
       msFields.lastName = d.lastName;
     }
 
+    if (d.age !== undefined) {
+      patch[MEMBER_FIELDS.age] = d.age || "";
+    }
+
     if (d.phone != null || d.phonePrefix != null) {
       const prefix = (d.phonePrefix || "").trim();
       const phone = (d.phone || "").trim();

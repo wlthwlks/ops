@@ -1113,6 +1113,17 @@ export function SignupApp(props: { apiBase: string }) {
                   {...accountForm.register("firstName")}
                 />
                 <FieldError message={accountForm.formState.errors.firstName?.message} />
+              </div>
+              <div className="wlth-field">
+                <label htmlFor="ln">Last name</label>
+                <input
+                  id="ln"
+                  autoComplete="family-name"
+                  aria-invalid={!!accountForm.formState.errors.lastName}
+                  {...accountForm.register("lastName")}
+                />
+                <FieldError message={accountForm.formState.errors.lastName?.message} />
+              </div>
             </div>
             <div className="wlth-field">
               <label htmlFor="age">Age</label>
@@ -1129,17 +1140,6 @@ export function SignupApp(props: { apiBase: string }) {
                 ))}
               </select>
               <FieldError message={accountForm.formState.errors.age?.message} />
-            </div>
-            <div className="wlth-field">
-                <label htmlFor="ln">Last name</label>
-                <input
-                  id="ln"
-                  autoComplete="family-name"
-                  aria-invalid={!!accountForm.formState.errors.lastName}
-                  {...accountForm.register("lastName")}
-                />
-                <FieldError message={accountForm.formState.errors.lastName?.message} />
-              </div>
             </div>
             <div className="wlth-field">
               <label htmlFor="em">Email</label>
@@ -1298,37 +1298,13 @@ export function SignupApp(props: { apiBase: string }) {
                 if (v) setCommunityError(undefined);
               }}
               error={communityError}
+              termsChecked={termsOk}
+              onTermsChange={(v) => {
+                setTermsOk(v);
+                if (v) setTermsError(undefined);
+              }}
+              termsError={termsError}
             />
-
-            <div className="wlth-field wlth-terms">
-              <label className="wlth-check-label">
-                <input
-                  type="checkbox"
-                  checked={termsOk}
-                  onChange={(e) => {
-                    setTermsOk(e.target.checked);
-                    if (e.target.checked) setTermsError(undefined);
-                  }}
-                  aria-invalid={!!termsError}
-                />
-                <span>
-                  I agree to the{" "}
-                  <a
-                    href="https://wlthwlks.com/termsandconditions"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Terms and Conditions
-                  </a>
-                  .
-                </span>
-              </label>
-              {termsError && (
-                <span className="wlth-error" role="alert">
-                  {termsError}
-                </span>
-              )}
-            </div>
 
             <div className="wlth-actions">
               <button

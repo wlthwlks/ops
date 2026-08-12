@@ -231,6 +231,9 @@ export const updateProfileSchema = withPhoneValidation(
     .object({
       firstName: z.string().trim().min(1).max(80).optional(),
       lastName: z.string().trim().min(1).max(80).optional(),
+      age: z.string().refine((v) => !v || ["18-24", "25-34", "35-44", "45-54", "55+"].includes(v), {
+        message: "Select your age range",
+      }).optional(),
       phone: z.string().trim().max(40).optional(),
       phonePrefix: z
         .string()
