@@ -575,20 +575,20 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           setNeedsRefresh(true);
           // Compute reactivation-needed inline from billing so cancelled/expired
           // members who previously paid still land on the Payment step.
-          const bill = (bill.billing || {}) as {
+          const billPayload = (bill.billing || {}) as {
             uiState?: string;
             cancelAtPeriodEnd?: boolean;
             membership?: string;
             payment?: string;
           };
-          const billUi = String(bill.uiState || "").trim();
+          const billUi = String(billPayload.uiState || "").trim();
           const billNeedsReactivation =
-            bill.cancelAtPeriodEnd === true ||
+            billPayload.cancelAtPeriodEnd === true ||
             billUi === "cancellation_scheduled" ||
             billUi === "expired" ||
             billUi === "payment_problem" ||
             (billUi === "" &&
-              (bill.payment || "").toLowerCase() !== "paid");
+              (billPayload.payment || "").toLowerCase() !== "paid");
           const resume = resumeStageToRefreshStep(
             String(status.resumeStage || "LOCATION"),
             paidOk,
