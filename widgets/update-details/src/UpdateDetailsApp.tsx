@@ -1794,7 +1794,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
             </div>
           )}
           {ok && <div className="wlth-banner-success">{ok}</div>}
-          {membershipBannerEl}
+          {refreshStep === "payment" && membershipBannerEl}
 
           {refreshStep === "location" && (
             <form onSubmit={onRefreshLocation} noValidate>
@@ -2083,8 +2083,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         {ok && <div className="wlth-banner-success">{ok}</div>}
 
         {!token && <p>Log in to continue.</p>}
-
-        {membershipBannerEl}
 
         {token && refData && (
           <>
