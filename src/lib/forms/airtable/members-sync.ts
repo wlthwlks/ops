@@ -14,7 +14,10 @@ import {
   sanitizeMembersWriteFields,
   toAirtableSchemaError,
 } from "@/lib/ops/airtable-fields";
-import { normalizeEmailStrict } from "@/lib/billing/reconcile-stripe-customers";
+import {
+  normalizeEmailStrict,
+  maskEmail,
+} from "@/lib/billing/reconcile-stripe-customers";
 import {
   availabilityCodesToLegacyString,
   findCatalogCityByCode,
@@ -29,6 +32,17 @@ import { stripComputedMemberWriteFields } from "@/lib/forms/airtable/write-guard
 import {
   parseSocialMediaField,
 } from "@/lib/forms/validation/profile-urls";
+import {
+  acquireSignupCreation,
+  markSignupCreationComplete,
+  markSignupCreationFailed,
+  waitForSignupCreation,
+  BOOTSTRAP_WAIT_TIMEOUT_MS,
+  BOOTSTRAP_POLL_INTERVAL_MS,
+  WEBHOOK_WAIT_TIMEOUT_MS,
+  WEBHOOK_POLL_INTERVAL_MS,
+  type SignupCaller,
+} from "@/lib/forms/airtable/signup-creation-lock";
 
 function fieldStr(fields: Record<string, unknown>, key: string): string {
   const v = fields[key];
@@ -157,6 +171,453 @@ async function writeMembers(
   return updated;
 }
 
+export type UpsertMinimalSignupOptions = {
+  /**
+   * Identifies which flow initiated the upsert. Bootstrap is the canonical
+   * initial creator and is allowed to perform the Airtable create. The
+   * memberstack_webhook caller is non-canonical and will defer to bootstrap
+   * (returning `deferred: true`) when bootstrap is still processing, instead
+   * of racing to create a duplicate Airtable row.
+   */
+  caller?: SignupCaller;
+};
+
+export type UpsertMinimalSignupResult = {
+  record: AirtableRecord | null;
+  created: boolean;
+  shadowed: boolean;
+  /** Webhook-only: bootstrap still owns the creation lock; do not create. */
+  deferred?: boolean;
+};
+
+/**
+ * Build the write payload for a minimal signup member. Pure — no I/O.
+ * Shared between bootstrap and webhook paths so the field set is identical.
+ */
+function buildMinimalSignupFields(
+  input: MinimalSignupInput,
+  email: string,
+  existing: AirtableRecord | null
+): Record<string, unknown> {
+  const fields: Record<string, unknown> = {
+    [MEMBER_FIELDS.email]: email,
+    [MEMBER_FIELDS.memberstackId]: input.memberstackId,
+    [MEMBER_FIELDS.firstName]: input.firstName,
+    [MEMBER_FIELDS.lastName]: input.lastName,
+    ...(input.age ? { [MEMBER_FIELDS.age]: input.age } : {}),
+    [MEMBER_FIELDS.onboardingStatus]: existing
+      ? fieldStr(existing.fields, MEMBER_FIELDS.onboardingStatus) || "ACCOUNT_CREATED"
+      : "ACCOUNT_CREATED",
+    [MEMBER_FIELDS.lastCompletedSignupStep]: "ACCOUNT",
+  };
+
+  // New accounts only — never promote to Active/Paid from signup alone.
+  // Airtable default Membership is Active when blank; always set Pending Payment on create.
+  if (!existing) {
+    fields[MEMBER_FIELDS.membership] = "Pending Payment";
+    fields[MEMBER_FIELDS.payment] = "Unpaid";
+  }
+
+  if (input.attribution) {
+    const a = input.attribution;
+    const src = existing?.fields || {};
+    const setIfBlank = (field: string, value: string | undefined) => {
+      if (!value) return;
+      if (existing && fieldStr(src, field)) return;
+      fields[field] = value;
+    };
+    setIfBlank(MEMBER_FIELDS.utmSource, a.utm_source);
+    setIfBlank(MEMBER_FIELDS.utmMedium, a.utm_medium);
+    setIfBlank(MEMBER_FIELDS.utmCampaign, a.utm_campaign);
+    setIfBlank(MEMBER_FIELDS.utmContent, a.utm_content);
+    setIfBlank(MEMBER_FIELDS.utmTerm, a.utm_term);
+    setIfBlank(MEMBER_FIELDS.googleClickId, a.gclid);
+    setIfBlank(MEMBER_FIELDS.facebookClickId, a.fbclid);
+    setIfBlank(MEMBER_FIELDS.initialLandingPage, a.initialLandingPage);
+    setIfBlank(MEMBER_FIELDS.initialReferrer, a.initialReferrer);
+    setIfBlank(MEMBER_FIELDS.firstAttributionAt, a.firstAttributionAt);
+  }
+  return fields;
+}
+
+async function writeMinimalSignup(
+  input: MinimalSignupInput,
+  email: string,
+  existing: AirtableRecord | null,
+  airtable: AirtableClient
+): Promise<{ record: AirtableRecord; created: boolean; shadowed: boolean }> {
+  const fields = buildMinimalSignupFields(input, email, existing);
+
+  if (!canWriteAirtableFromForms()) {
+    return {
+      record: existing || { id: "shadow", fields },
+      created: !existing,
+      shadowed: true,
+    };
+  }
+
+  try {
+    if (existing) {
+      const updated = await writeMembers(airtable, "update", fields, existing.id);
+      return { record: updated, created: false, shadowed: false };
+    }
+    const created = await writeMembers(airtable, "create", fields);
+    return { record: created, created: true, shadowed: false };
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("Unsupported Airtable field")) {
+      throw new FormsError("AIRTABLE_VALIDATION_FAILED", e.message, { status: 422 });
+    }
+    const schema = toAirtableSchemaError(MEMBERS_TABLE, e);
+    if (schema) {
+      throw new FormsError("AIRTABLE_VALIDATION_FAILED", schema.message, {
+        status: 422,
+        details: { field: schema.field },
+      });
+    }
+    throw new FormsError(
+      "AIRTABLE_WRITE_FAILED",
+      e instanceof Error ? e.message : "Airtable write failed",
+      { status: 502, retryable: true }
+    );
+  }
+}
+
+/**
+ * Resolve an existing Airtable Member for this signup, surfacing identity
+ * conflicts and duplicate rows consistently for both bootstrap and webhook.
+ *
+ * Returns one of:
+ *   - {kind:"found", record}     — exactly one match (by ms id OR email) that
+ *                                  is safe to update.
+ *   - {kind:"none"}              — no rows matched either identity.
+ *   - {kind:"duplicate"}         — multiple rows matched an identity; the
+ *                                  caller MUST NOT create or arbitrarily
+ *                                  update. Existing `requireUnique` behaviour.
+ *   - {kind:"identity_conflict"} — a record matched on email but owns a
+ *                                  *different* non-empty Memberstack ID.
+ *                                  Caller must surface MEMBER_IDENTITY_CONFLICT.
+ */
+async function resolveExistingAirtableForSignup(
+  input: MinimalSignupInput,
+  email: string,
+  airtable: AirtableClient
+): Promise<
+  | { kind: "found"; record: AirtableRecord }
+  | { kind: "none" }
+  | { kind: "duplicate"; ids: string[] }
+  | {
+      kind: "identity_conflict";
+      recordId: string;
+      currentMemberstackId: string;
+      incomingMemberstackId: string;
+    }
+> {
+  const byMs = await findMemberByMemberstackId(input.memberstackId, airtable);
+  if (byMs.length > 1) {
+    return { kind: "duplicate", ids: byMs.map((r) => r.id) };
+  }
+  if (byMs.length === 1) {
+    return { kind: "found", record: byMs[0] };
+  }
+
+  // No match by Memberstack ID — try email recovery. This is the "blank
+  // Memberstack ID" recovery path. A record with the same email but a
+  // *different non-empty* Memberstack ID is an identity conflict, NOT a
+  // recovery opportunity.
+  const byEmail = await findMemberByNormalizedEmailForSignupRecovery(email, airtable);
+  if (byEmail.length > 1) {
+    return { kind: "duplicate", ids: byEmail.map((r) => r.id) };
+  }
+  if (byEmail.length === 1) {
+    const existingMsId = fieldStr(byEmail[0].fields, MEMBER_FIELDS.memberstackId);
+    if (existingMsId && existingMsId !== input.memberstackId.trim()) {
+      return {
+        kind: "identity_conflict",
+        recordId: byEmail[0].id,
+        currentMemberstackId: existingMsId,
+        incomingMemberstackId: input.memberstackId,
+      };
+    }
+    return { kind: "found", record: byEmail[0] };
+  }
+  return { kind: "none" };
+}
+
+export async function upsertMinimalSignupMember(
+  input: MinimalSignupInput,
+  airtable: AirtableClient = getFormsAirtableClient(),
+  options?: UpsertMinimalSignupOptions
+): Promise<UpsertMinimalSignupResult> {
+  return upsertMinimalSignupMemberImpl(input, airtable, options, 0);
+}
+
+async function upsertMinimalSignupMemberImpl(
+  input: MinimalSignupInput,
+  airtable: AirtableClient,
+  options: UpsertMinimalSignupOptions | undefined,
+  attempt: number
+): Promise<UpsertMinimalSignupResult> {
+  if (attempt > 2) {
+    throw new FormsError(
+      "SIGNUP_CREATION_FAILED",
+      "Signup creation exceeded retry attempts while waiting for a concurrent creator",
+      { status: 503, retryable: true }
+    );
+  }
+  const caller: SignupCaller = options?.caller ?? "bootstrap";
+  const email = normalizeEmailStrict(input.email);
+
+  // Step 1: existing record / conflict resolution — happens BEFORE the lock
+  // so already-enrolled members never touch the mutex and existing duplicate
+  // detection is preserved.
+  const existing = await resolveExistingAirtableForSignup(input, email, airtable);
+  if (existing.kind === "duplicate") {
+    throw new FormsError(
+      "AIRTABLE_DUPLICATE_MEMBER",
+      "Duplicate Airtable members for Memberstack ID or email",
+      { status: 409, details: { ids: existing.ids } }
+    );
+  }
+  if (existing.kind === "identity_conflict") {
+    throw conflictError(input, email, existing);
+  }
+  if (existing.kind === "found") {
+    // Update + reconcile existing record. No new row is created; no lock needed.
+    return await writeMinimalSignup(input, email, existing.record, airtable);
+  }
+
+  // Step 2: no existing Airtable record. Acquire the per-member creation lock.
+  const lock = await acquireSignupCreation({
+    memberstackId: input.memberstackId,
+    email,
+    source: caller,
+  });
+
+  if (lock.kind === "unavailable") {
+    // DB not reachable — degrade to legacy direct Airtable create. Same
+    // behaviour as before this module existed. Acceptable because Airtable
+    // duplicates are an edge case (Svix redelivery + bootstrap racing)
+    // and we never want to hard-block signup on a missing DB.
+    return await writeMinimalSignup(input, email, null, airtable);
+  }
+
+  if (lock.kind === "already_created") {
+    // Another caller *claimed* to finish the initial create. Re-resolve
+    // Airtable and reconcile. If the record has vanished (manual delete),
+    // delete the stale lock row and retry once so we become the creator.
+    const resolved = await resolveExistingAirtableForSignup(input, email, airtable);
+    if (resolved.kind === "found") {
+      return await writeMinimalSignup(input, email, resolved.record, airtable);
+    }
+    if (resolved.kind === "duplicate") {
+      throw new FormsError(
+        "AIRTABLE_DUPLICATE_MEMBER",
+        "Duplicate Airtable members for Memberstack ID or email",
+        { status: 409, details: { ids: resolved.ids } }
+      );
+    }
+    if (resolved.kind === "identity_conflict") {
+      throw conflictError(input, email, resolved);
+    }
+    // resolved.kind === "none" — lock said CREATED but Airtable is empty.
+    // This is an inconsistent state; delete the lock row so the next
+    // attempt can re-acquire from scratch. We bound the retry count to
+    // prevent infinite loops if the inconsistency persists.
+    await deleteSignupCreationLockRow(input.memberstackId);
+    return upsertMinimalSignupMemberImpl(input, airtable, options, attempt + 1);
+  }
+
+  if (lock.kind === "acquired") {
+    return await createAsOwner(input, email, airtable);
+  }
+
+  // lock.kind === "pending" — another caller owns the CREATING row.
+  const timeoutMs =
+    caller === "bootstrap" ? BOOTSTRAP_WAIT_TIMEOUT_MS : WEBHOOK_WAIT_TIMEOUT_MS;
+  const pollMs =
+    caller === "bootstrap"
+      ? BOOTSTRAP_POLL_INTERVAL_MS
+      : WEBHOOK_POLL_INTERVAL_MS;
+
+  const airtableRecordId = await waitForSignupCreation({
+    memberstackId: input.memberstackId,
+    timeoutMs,
+    pollIntervalMs: pollMs,
+  });
+
+  if (airtableRecordId) {
+    // The winning creator finished while we waited. Re-resolve Airtable and
+    // reconcile. Under Svix redelivery this is the idempotent success path.
+    const resolved = await resolveExistingAirtableForSignup(input, email, airtable);
+    if (resolved.kind === "found") {
+      return await writeMinimalSignup(input, email, resolved.record, airtable);
+    }
+    if (resolved.kind === "duplicate") {
+      throw new FormsError(
+        "AIRTABLE_DUPLICATE_MEMBER",
+        "Duplicate Airtable members for Memberstack ID or email",
+        { status: 409, details: { ids: resolved.ids } }
+      );
+    }
+    if (resolved.kind === "identity_conflict") {
+      throw conflictError(input, email, resolved);
+    }
+    // Lock said CREATED but Airtable has no record — delete + retry.
+    await deleteSignupCreationLockRow(input.memberstackId);
+    return upsertMinimalSignupMemberImpl(input, airtable, options, attempt + 1);
+  }
+
+  // Timed out waiting for the canonical creator.
+  if (caller === "bootstrap") {
+    // Bootstrap is synchronous and the user is waiting. Re-attempt acquire;
+    // `acquireSignupCreation` will steal a *stale* (>= 120s) lock if the
+    // competitor has crashed, otherwise we surface a retryable 503 so the
+    // user can re-submit (the webhook or a retry will eventually create the
+    // record). We NEVER call Airtable create from the loser path — this is
+    // the core guarantee against duplicate rows.
+    const retry = await acquireSignupCreation({
+      memberstackId: input.memberstackId,
+      email,
+      source: caller,
+    });
+    if (retry.kind === "acquired") {
+      return await createAsOwner(input, email, airtable);
+    }
+    if (retry.kind === "already_created") {
+      // Caller finished just after our poll timed out.
+      const resolved = await resolveExistingAirtableForSignup(input, email, airtable);
+      if (resolved.kind === "found") {
+        return await writeMinimalSignup(input, email, resolved.record, airtable);
+      }
+    }
+    throw new FormsError(
+      "SIGNUP_CREATION_IN_PROGRESS",
+      "Signup creation is still in progress by another request — please retry",
+      { status: 503, retryable: true }
+    );
+  }
+
+  // caller === "memberstack_webhook"
+  // Defer — do NOT race-create. The webhook layer surfaces this as
+  // pending_dependency so Memberstack / Svix redelivery (or bootstrap in
+  // the next milliseconds) reconciles. This is the key guarantee: two
+  // concurrent requests for the same Memberstack member can never produce
+  // two Airtable rows.
+  return {
+    record: null,
+    created: false,
+    shadowed: false,
+    deferred: true,
+  };
+}
+
+async function createAsOwner(
+  input: MinimalSignupInput,
+  email: string,
+  airtable: AirtableClient
+): Promise<UpsertMinimalSignupResult> {
+  // Re-check Airtable one more time inside the lock — covers the tiny
+  // window between Step 1's read and Step 2's INSERT for callers that lost
+  // the lock to a creator who has since finished.
+  const recheck = await resolveExistingAirtableForSignup(input, email, airtable);
+  if (recheck.kind === "found") {
+    await markSignupCreationComplete({
+      memberstackId: input.memberstackId,
+      airtableRecordId: recheck.record.id,
+    });
+    return await writeMinimalSignup(input, email, recheck.record, airtable);
+  }
+  if (recheck.kind === "duplicate") {
+    await markSignupCreationFailed({
+      memberstackId: input.memberstackId,
+      reason: "AIRTABLE_DUPLICATE_MEMBER",
+    });
+    throw new FormsError(
+      "AIRTABLE_DUPLICATE_MEMBER",
+      "Duplicate Airtable members for Memberstack ID or email",
+      { status: 409, details: { ids: recheck.ids } }
+    );
+  }
+  if (recheck.kind === "identity_conflict") {
+    await markSignupCreationFailed({
+      memberstackId: input.memberstackId,
+      reason: "MEMBER_IDENTITY_CONFLICT",
+    });
+    throw conflictError(input, email, recheck);
+  }
+
+  // recheck.kind === "none": we are the sole creator. Create now.
+  try {
+    const created = await writeMinimalSignup(input, email, null, airtable);
+    if (created.record?.id && created.record.id !== "shadow") {
+      await markSignupCreationComplete({
+        memberstackId: input.memberstackId,
+        airtableRecordId: created.record.id,
+      });
+    } else if (created.shadowed) {
+      await markSignupCreationComplete({
+        memberstackId: input.memberstackId,
+        airtableRecordId: created.record?.id ?? "shadow",
+      });
+    }
+    return created;
+  } catch (e) {
+    await markSignupCreationFailed({
+      memberstackId: input.memberstackId,
+      reason: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
+}
+
+function conflictError(
+  input: MinimalSignupInput,
+  email: string,
+  c: {
+    kind: "identity_conflict";
+    recordId: string;
+    currentMemberstackId: string;
+    incomingMemberstackId: string;
+  }
+): FormsError {
+  return new FormsError(
+    "MEMBER_IDENTITY_CONFLICT",
+    "Email matches a member already owned by a different Memberstack ID",
+    {
+      status: 409,
+      retryable: false,
+      details: {
+        airtableRecordId: c.recordId,
+        currentMemberstackIdPrefix: c.currentMemberstackId.slice(0, 6),
+        incomingMemberstackIdPrefix: c.incomingMemberstackId.slice(0, 6),
+        emailMasked: maskEmail(email),
+      },
+    }
+  );
+}
+
+/**
+ * Internal helper: hard-deletes a lock row so the next attempt can re-acquire
+ * via fresh INSERT. Used ONLY to recover from inconsistent states where the
+ * lock said CREATED but Airtable has no record, or after a bootstrap wait
+ * timeout to give a stuck lock a clean slate. Cannot lose a real Airtable
+ * record — the caller already re-verified Airtable is empty.
+ */
+async function deleteSignupCreationLockRow(memberstackId: string): Promise<void> {
+  try {
+    const { db } = await import("@/db");
+    const { signupMemberCreations } = await import(
+      "@/db/schema/signup-member-creations"
+    );
+    const { eq } = await import("drizzle-orm");
+    await db
+      .delete(signupMemberCreations)
+      .where(eq(signupMemberCreations.memberstackId, memberstackId.trim()));
+  } catch {
+    /* DB unavailable — degrade gracefully */
+  }
+}
+
 /** Resolve form cityCode (ALL CITIES record id) → City text + City relation + Timezone. */
 async function applyLocationPatch(
   fields: Record<string, unknown>,
@@ -253,96 +714,6 @@ function applyMatchingLinkedPatch(
       .filter(Boolean);
     delete fields.expertiseOffered;
     delete fields.expertise;
-  }
-}
-
-export async function upsertMinimalSignupMember(
-  input: MinimalSignupInput,
-  airtable: AirtableClient = getFormsAirtableClient()
-): Promise<{ record: AirtableRecord; created: boolean; shadowed: boolean }> {
-  const email = normalizeEmailStrict(input.email);
-
-  const existing =
-    requireUnique(
-      await findMemberByMemberstackId(input.memberstackId, airtable),
-      "Memberstack ID"
-    ) ||
-    requireUnique(
-      await findMemberByNormalizedEmailForSignupRecovery(email, airtable),
-      "email"
-    );
-
-  const fields: Record<string, unknown> = {
-    [MEMBER_FIELDS.email]: email,
-    [MEMBER_FIELDS.memberstackId]: input.memberstackId,
-    [MEMBER_FIELDS.firstName]: input.firstName,
-    [MEMBER_FIELDS.lastName]: input.lastName,
-    ...(input.age ? { [MEMBER_FIELDS.age]: input.age } : {}),
-    [MEMBER_FIELDS.onboardingStatus]: existing
-      ? fieldStr(existing.fields, MEMBER_FIELDS.onboardingStatus) || "ACCOUNT_CREATED"
-      : "ACCOUNT_CREATED",
-    [MEMBER_FIELDS.lastCompletedSignupStep]: "ACCOUNT",
-  };
-
-  // New accounts only — never promote to Active/Paid from signup alone.
-  // Airtable default Membership is Active when blank; always set Pending Payment on create.
-  if (!existing) {
-    fields[MEMBER_FIELDS.membership] = "Pending Payment";
-    fields[MEMBER_FIELDS.payment] = "Unpaid";
-  }
-
-  // First-touch attribution: fill only blank first-touch fields (never overwrite).
-  if (input.attribution) {
-    const a = input.attribution;
-    const src = existing?.fields || {};
-    const setIfBlank = (field: string, value: string | undefined) => {
-      if (!value) return;
-      if (existing && fieldStr(src, field)) return;
-      fields[field] = value;
-    };
-    setIfBlank(MEMBER_FIELDS.utmSource, a.utm_source);
-    setIfBlank(MEMBER_FIELDS.utmMedium, a.utm_medium);
-    setIfBlank(MEMBER_FIELDS.utmCampaign, a.utm_campaign);
-    setIfBlank(MEMBER_FIELDS.utmContent, a.utm_content);
-    setIfBlank(MEMBER_FIELDS.utmTerm, a.utm_term);
-    setIfBlank(MEMBER_FIELDS.googleClickId, a.gclid);
-    setIfBlank(MEMBER_FIELDS.facebookClickId, a.fbclid);
-    setIfBlank(MEMBER_FIELDS.initialLandingPage, a.initialLandingPage);
-    setIfBlank(MEMBER_FIELDS.initialReferrer, a.initialReferrer);
-    setIfBlank(MEMBER_FIELDS.firstAttributionAt, a.firstAttributionAt);
-  }
-
-  if (!canWriteAirtableFromForms()) {
-    return {
-      record: existing || { id: "shadow", fields },
-      created: !existing,
-      shadowed: true,
-    };
-  }
-
-  try {
-    if (existing) {
-      const updated = await writeMembers(airtable, "update", fields, existing.id);
-      return { record: updated, created: false, shadowed: false };
-    }
-    const created = await writeMembers(airtable, "create", fields);
-    return { record: created, created: true, shadowed: false };
-  } catch (e) {
-    if (e instanceof Error && e.message.includes("Unsupported Airtable field")) {
-      throw new FormsError("AIRTABLE_VALIDATION_FAILED", e.message, { status: 422 });
-    }
-    const schema = toAirtableSchemaError(MEMBERS_TABLE, e);
-    if (schema) {
-      throw new FormsError("AIRTABLE_VALIDATION_FAILED", schema.message, {
-        status: 422,
-        details: { field: schema.field },
-      });
-    }
-    throw new FormsError(
-      "AIRTABLE_WRITE_FAILED",
-      e instanceof Error ? e.message : "Airtable write failed",
-      { status: 502, retryable: true }
-    );
   }
 }
 

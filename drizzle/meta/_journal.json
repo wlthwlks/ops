@@ -43,6 +43,13 @@
       "when": 1785456538836,
       "tag": "0005_closed_thing",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785460000000,
+      "tag": "0006_signup_member_creations",
+      "breakpoints": true
     }
   ]
 }

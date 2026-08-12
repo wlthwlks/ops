@@ -13,3 +13,4 @@ export * from "./slack-access-actions";
 export * from "./webhook-events";
 export * from "./integration-errors";
 export * from "./form-analytics-events";
+export * from "./signup-member-creations";

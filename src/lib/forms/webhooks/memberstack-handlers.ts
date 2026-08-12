@@ -127,13 +127,33 @@ export async function handleMemberstackEvent(input: {
     if (!m.id || !m.email) {
       throw new FormsError("WEBHOOK_PAYLOAD_INVALID", "member.created missing id/email");
     }
-    await upsertMinimalSignupMember({
-      memberstackId: m.id,
-      email: m.email,
-      firstName: m.firstName || "Member",
-      lastName: m.lastName || "",
-      source: "memberstack_webhook",
-    });
+    // Webhook path is non-canonical: it must not race-create a duplicate Airtable
+    // row if bootstrap may still be processing. `upsertMinimalSignupMember`
+    // searches Airtable by Memberstack ID then normalized email; if neither
+    // matches and bootstrap holds the creation lock, it returns `deferred`
+    // and we surface a retryable `pending_dependency` so Svix/Memberstack
+    // redelivery or the synchronous bootstrap completes the initial create
+    // instead. Identity conflicts (existing email owned by a different
+    // non-empty Memberstack ID) bubble up as `MEMBER_IDENTITY_CONFLICT`.
+    const result = await upsertMinimalSignupMember(
+      {
+        memberstackId: m.id,
+        email: m.email,
+        firstName: m.firstName || "Member",
+        lastName: m.lastName || "",
+        source: "memberstack_webhook",
+      },
+      undefined,
+      { caller: "memberstack_webhook" }
+    );
+    if (result.deferred) {
+      return {
+        processed: true,
+        status: "pending_dependency",
+        reason:
+          "Bootstrap owns signup creation lock; deferring to retry / bootstrap",
+      };
+    }
     return { processed: true, status: "succeeded", reason: "Minimal member ensured" };
   }
 

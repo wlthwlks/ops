@@ -15,7 +15,7 @@ import type { AppDb } from "@/db";
  * (members, match_events, match_event_matches, email_deliveries).
  * The opt-in keeps the existing op_runs-only tests fast.
  */
-export async function createTestDb(options?: { matchmake?: boolean; introduction?: boolean }) {
+export async function createTestDb(options?: { matchmake?: boolean; introduction?: boolean; signupCreations?: boolean }) {
   const client = new PGlite();
   const db = drizzle(client, { schema });
 
@@ -210,6 +210,26 @@ export async function createTestDb(options?: { matchmake?: boolean; introduction
       ALTER TABLE introduction_reservations
         ADD CONSTRAINT intro_reservations_group_id_fk
         FOREIGN KEY (group_id) REFERENCES introduction_groups (id);
+    `);
+  }
+
+  if (options?.signupCreations) {
+    await client.exec(`
+      CREATE TABLE signup_member_creations (
+        memberstack_id TEXT PRIMARY KEY NOT NULL,
+        email_normalized TEXT NOT NULL,
+        status TEXT DEFAULT 'CREATING' NOT NULL,
+        created_by TEXT NOT NULL,
+        airtable_record_id TEXT,
+        attempt_count INTEGER DEFAULT 1 NOT NULL,
+        last_error TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMPTZ
+      );
+      CREATE UNIQUE INDEX signup_member_creations_ms_id_uidx ON signup_member_creations (memberstack_id);
+      CREATE INDEX signup_member_creations_email_idx ON signup_member_creations (email_normalized);
+      CREATE INDEX signup_member_creations_status_idx ON signup_member_creations (status);
     `);
   }
 

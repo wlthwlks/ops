@@ -4,6 +4,7 @@ const upsert = vi.fn(async () => ({
   record: { id: "rec1", fields: {} },
   created: true,
   shadowed: false,
+  deferred: false,
 }));
 const findByMs = vi.fn(async () => []);
 const updateProfile = vi.fn(async () => ({
@@ -74,7 +75,9 @@ describe("handleMemberstackEvent", () => {
       expect.objectContaining({
         memberstackId: "ms_1",
         email: "ada@ex.com",
-      })
+      }),
+      undefined,
+      expect.objectContaining({ caller: "memberstack_webhook" })
     );
   });
 
@@ -107,7 +110,9 @@ describe("handleMemberstackEvent", () => {
     });
     expect(r.status).toBe("succeeded");
     expect(upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ memberstackId: "mem_nested", email: "nested@ex.com" })
+      expect.objectContaining({ memberstackId: "mem_nested", email: "nested@ex.com" }),
+      undefined,
+      expect.objectContaining({ caller: "memberstack_webhook" })
     );
   });
 

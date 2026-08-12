@@ -65,15 +65,40 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await upsertMinimalSignupMember({
-      memberstackId: member.id,
-      email: parsed.data.email,
-      firstName: parsed.data.firstName,
-      lastName: parsed.data.lastName,
-      age: parsed.data.age,
-      attribution: parsed.data.attribution as Record<string, string | undefined>,
-      source: "signup_widget",
-    });
+    const result = await upsertMinimalSignupMember(
+      {
+        memberstackId: member.id,
+        email: parsed.data.email,
+        firstName: parsed.data.firstName,
+        lastName: parsed.data.lastName,
+        age: parsed.data.age,
+        attribution: parsed.data.attribution as Record<string, string | undefined>,
+        source: "signup_widget",
+      },
+      undefined,
+      { caller: "bootstrap" }
+    );
+
+    // bootstrap is the canonical creator. In normal operation the result is
+    // never deferred and `record` is non-null — but defensively, if a race
+    // caused a transient deferral (e.g. webhook owner crashed mid-create),
+    // surface a retryable 503 so the user re-submits and we never fabricate
+    // a fake Airtable id.
+    if (result.deferred || !result.record) {
+      return withCors(
+        NextResponse.json(
+          {
+            success: false,
+            code: "SIGNUP_CREATION_IN_PROGRESS",
+            message:
+              "Signup is being processed by another request — please retry",
+            retryable: true,
+          },
+          { status: 503 }
+        ),
+        request
+      );
+    }
 
     // Best-effort MS custom fields (never account email). Airtable already saved.
     const msSync = await syncMemberstackCustomFields({
