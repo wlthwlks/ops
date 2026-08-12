@@ -122,11 +122,15 @@ function isClientInProgressOnboarding(status: string): boolean {
 /** resumeStage from API is already the *next* step to show. */
 function resumeStageToRefreshStep(
   resumeStage: string,
-  paymentConfirmed: boolean
+  paymentConfirmed: boolean,
+  needsReactivation: boolean
 ): RefreshStep | "done" {
   const s = (resumeStage || "").toUpperCase();
   if (s === "COMPLETE") return "done";
-  if (paymentConfirmed && (s === "PAYMENT_PENDING" || s === "PAYMENT_CONFIRMED")) {
+  // Skip payment ONLY for already-confirmed members who DON'T need reactivation.
+  // Cancelled/expired members who previously paid still land on "payment" so
+  // they see the reactivation banner.
+  if (paymentConfirmed && !needsReactivation && (s === "PAYMENT_PENDING" || s === "PAYMENT_CONFIRMED")) {
     return "goal";
   }
   const map: Record<string, RefreshStep> = {
@@ -569,9 +573,26 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         // Mid new-widget signup only — cancelled legacy members skip straight to full form.
         if (midSignup) {
           setNeedsRefresh(true);
+          // Compute reactivation-needed inline from billing so cancelled/expired
+          // members who previously paid still land on the Payment step.
+          const bill = (bill.billing || {}) as {
+            uiState?: string;
+            cancelAtPeriodEnd?: boolean;
+            membership?: string;
+            payment?: string;
+          };
+          const billUi = String(bill.uiState || "").trim();
+          const billNeedsReactivation =
+            bill.cancelAtPeriodEnd === true ||
+            billUi === "cancellation_scheduled" ||
+            billUi === "expired" ||
+            billUi === "payment_problem" ||
+            (billUi === "" &&
+              (bill.payment || "").toLowerCase() !== "paid");
           const resume = resumeStageToRefreshStep(
             String(status.resumeStage || "LOCATION"),
-            paidOk
+            paidOk,
+            billNeedsReactivation
           );
           setRefreshStep(resume === "done" ? "location" : resume);
         } else {
@@ -822,12 +843,15 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       </div>
     ) : null;
 
-  /** Payment inside progressive flow only for mid-signup who are not yet Paid+Active. */
+  /** Payment inside progressive flow — for mid-signup who haven't paid yet,
+   *  OR for cancelled/expired members who need to reactivate. */
   const refreshNeedsPaymentStep = useMemo(() => {
     if (!onboardingIncomplete) return false;
-    if (paymentConfirmed) return false;
-    return true;
-  }, [onboardingIncomplete, paymentConfirmed]);
+    if (!paymentConfirmed) return true;
+    // Already paid before, but membership is cancelled/expired → show Payment
+    // step so the reactivation banner can appear there.
+    return membershipDisplay.showBanner;
+  }, [onboardingIncomplete, paymentConfirmed, membershipDisplay.showBanner]);
 
   /** Top-level dots: Location → Business → [Payment] → Matching */
   const refreshTopPhases = useMemo(() => {
@@ -1229,8 +1253,11 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         form.setValue("businessStage", values.businessStage);
         form.setValue("annualRevenue", values.annualRevenue);
         form.setValue("businessDescription", values.businessDescription);
-        // Payment before matching when still unpaid
+        // Payment step before matching: for unpaid newcomers, or for cancelled/
+        // expired members who need to reactivate (even if they paid before).
         if (refreshNeedsPaymentStep && !paymentConfirmed) {
+          setRefreshStep("payment");
+        } else if (refreshNeedsPaymentStep && paymentConfirmed && membershipDisplay.showBanner) {
           setRefreshStep("payment");
         } else {
           setRefreshStep("goal");
@@ -1879,7 +1906,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   Back
                 </button>
                 <button type="submit" className="wlth-btn-primary" disabled={refreshBusy}>
-                  {refreshNeedsPaymentStep && !paymentConfirmed
+                  {refreshNeedsPaymentStep && (!paymentConfirmed || membershipDisplay.showBanner)
                     ? "Continue to payment"
                     : "Continue"}
                 </button>
@@ -1952,7 +1979,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   className="wlth-btn-secondary"
                   onClick={() =>
                     setRefreshStep(
-                      refreshNeedsPaymentStep && !paymentConfirmed ? "payment" : "business"
+                      refreshNeedsPaymentStep && (!paymentConfirmed || membershipDisplay.showBanner) ? "payment" : "business"
                     )
                   }
                 >
@@ -2083,6 +2110,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         {ok && <div className="wlth-banner-success">{ok}</div>}
 
         {!token && <p>Log in to continue.</p>}
+
+        {membershipBannerEl}
 
         {token && refData && (
           <>
