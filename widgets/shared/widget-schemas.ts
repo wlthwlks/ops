@@ -91,13 +91,22 @@ const postCodeField = z
   .optional()
   .or(z.literal(""))
   .refine((v) => !v || /^[A-Za-z0-9][A-Za-z0-9 \-]*$/.test(v), {
-    message: "Enter a valid post code",
+    message: "Enter a valid Zip code",
   });
 
-/** Account step: name / email / password only (no phone). */
+const AGE_RANGES = ["18-24", "25-34", "35-44", "45-54", "55+"] as const;
+
+const ageSchema = z.string().refine((v) => AGE_RANGES.includes(v as (typeof AGE_RANGES)[number]), {
+  message: "Select your age range",
+});
+
+export { AGE_RANGES };
+
+/** Account step: name / email / password only (no phone). Age is personal info, placed before email. */
 export const accountFormSchema = z.object({
   firstName: z.string().trim().min(1, "First name is required").max(80),
   lastName: z.string().trim().min(1, "Last name is required").max(80),
+  age: ageSchema,
   email: z
     .string()
     .trim()
@@ -118,7 +127,7 @@ export const locationFormSchema = z
       .string()
       .trim()
       .regex(/^\+\d{1,4}$/, "Select a country so we can add the correct calling code"),
-    availability: z.array(z.string()).min(1, "Select at least one availability slot"),
+    availability: z.array(z.string()).max(21).optional(),
   })
   .superRefine((d, ctx) => validatePhonePair(d, ctx, true));
 
@@ -160,7 +169,7 @@ export const connectionFormSchema = z.object({
 
 export const communityIntentionSchema = z.object({
   communityIntention: z.literal(true, {
-    message: "Please confirm you’re joining to connect and grow — not to cold-sell",
+    message: "Please confirm you're joining to connect and grow; not to cold-sell",
   }),
 });
 

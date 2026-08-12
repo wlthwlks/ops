@@ -195,7 +195,7 @@ export function MatchingMultiSelectFields(props: {
         <>
           <MultiSelectDropdown
             label="Where would support make the biggest difference?"
-            helperText="Choose up to three areas — we’ll use these to shape introductions."
+            helperText="Choose up to three areas; we'll use these to shape introductions."
             options={props.helpOptions}
             value={props.helpWanted}
             onChange={props.onHelpChange}
@@ -270,8 +270,8 @@ export function CommunityIntentionCard(props: {
           onChange={(e) => props.onChange(e.target.checked)}
         />
         <span>
-          I confirm that I’m a woman building, leading, or growing a business, and that I’m
-          joining WLTH WLKS to connect, contribute and grow — not to cold-sell or promote
+          I confirm that I'm a woman building, leading, or growing a business, and that I'm
+          joining WLTH WLKS to connect, contribute and grow; not to cold-sell or promote
           products to other members.
         </span>
       </label>

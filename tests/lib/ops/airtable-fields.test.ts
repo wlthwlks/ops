@@ -48,6 +48,7 @@ describe("airtable field maps", () => {
     expect(MEMBER_FIELDS.phonePrefix).toBe("Phone prefix");
     expect(MEMBER_FIELDS.phone).toBe("phone number");
     expect(MEMBER_FIELDS.postCode).toBe("post code");
+    expect(MEMBER_FIELDS.age).toBe("Age");
     // Must not expose nonexistent columns
     expect(MEMBER_FIELDS).not.toHaveProperty("lastFormSource");
     expect(MEMBER_FIELDS).not.toHaveProperty("countryCode");

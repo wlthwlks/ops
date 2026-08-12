@@ -3,6 +3,7 @@ import {
   accountFormSchema,
   businessFormSchema,
   locationFormSchema,
+  AGE_RANGES,
 } from "../../../widgets/shared/widget-schemas";
 
 const COUNTRY_ID = "reccnnjiVkL28NBgV";
@@ -13,6 +14,7 @@ describe("widget schemas", () => {
     const r = accountFormSchema.parse({
       firstName: "Ada",
       lastName: "Lovelace",
+      age: "25-34",
       email: " Ada@WLTH.COM ",
       password: "password1",
     });
@@ -24,8 +26,46 @@ describe("widget schemas", () => {
       accountFormSchema.safeParse({
         firstName: "A",
         lastName: "B",
+        age: "18-24",
         email: "a@b.com",
         password: "short",
+      }).success
+    ).toBe(false);
+  });
+
+  it("requires age in account form", () => {
+    expect(
+      accountFormSchema.safeParse({
+        firstName: "Ada",
+        lastName: "Lovelace",
+        age: "",
+        email: "a@b.com",
+        password: "password1",
+      }).success
+    ).toBe(false);
+  });
+
+  it("accepts all five age ranges", () => {
+    for (const age of AGE_RANGES) {
+      const r = accountFormSchema.safeParse({
+        firstName: "A",
+        lastName: "B",
+        age,
+        email: "a@b.com",
+        password: "password1",
+      });
+      expect(r.success).toBe(true);
+    }
+  });
+
+  it("rejects arbitrary age values", () => {
+    expect(
+      accountFormSchema.safeParse({
+        firstName: "A",
+        lastName: "B",
+        age: "under-18",
+        email: "a@b.com",
+        password: "password1",
       }).success
     ).toBe(false);
   });
@@ -65,16 +105,16 @@ describe("widget schemas", () => {
     ).toBe(false);
   });
 
-  it("requires availability", () => {
-    expect(
-      locationFormSchema.safeParse({
-        countryCode: COUNTRY_ID,
-        cityCode: CITY_ID,
-        phone: "211234567",
-        phonePrefix: "+64",
-        availability: [],
-      }).success
-    ).toBe(false);
+  it("requires availability (now optional — no longer required)", () => {
+    // Availability is no longer required; location form succeeds without it.
+    const r = locationFormSchema.safeParse({
+      countryCode: COUNTRY_ID,
+      cityCode: CITY_ID,
+      phone: "211234567",
+      phonePrefix: "+64",
+      availability: [],
+    });
+    expect(r.success).toBe(true);
   });
 
   it("requires business description length", () => {

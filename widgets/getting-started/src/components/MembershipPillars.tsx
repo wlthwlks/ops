@@ -53,7 +53,7 @@ const pillars: Pillar[] = [
         <p>No name badges. No formal networking. No sitting through presentations.</p>
         <p>
           It&apos;s a chance to have real conversations with other female founders in your
-          city and turn introductions into genuine business relationships — and sometimes
+          city and turn introductions into genuine business relationships; and sometimes
           friendships too.
         </p>
         <p>

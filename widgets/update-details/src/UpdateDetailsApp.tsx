@@ -16,7 +16,6 @@ import {
   iso2ForCountryCode,
 } from "../../shared/PhoneField";
 import {
-  AvailabilityFields,
   BusinessFields,
   ConnectionTypeField,
   FieldError,
@@ -261,7 +260,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       otherIndustry: "",
       businessStage: "",
       annualRevenue: "",
-      businessDescription: "Profile refresh — business context will be refined in full details.",
+      businessDescription: "Profile refresh; business context will be refined in full details.",
     },
   });
   // Matching refresh uses looser lengths for existing members
@@ -292,12 +291,11 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const primaryIndustry = form.watch("primaryIndustry") || "";
   const helpWanted = form.watch("helpWanted") || [];
   const expertiseOffered = form.watch("expertiseOffered") || [];
-  const availability = form.watch("availability") || [];
+  // const availability = form.watch("availability") || []; // Availability UI hidden
   const isDirty = form.formState.isDirty;
 
   const rCountry = refreshLocation.watch("countryCode");
   const rPhonePrefix = refreshLocation.watch("phonePrefix") || "";
-  const rAvailability = refreshLocation.watch("availability") || [];
   const rIndustry = refreshBusiness.watch("primaryIndustry") || "";
   const rHelp = refreshHelp.watch("helpWanted") || [];
   const rExpertise = refreshExpertise.watch("expertiseOffered") || [];
@@ -725,7 +723,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 : "You still have access until the end of your paid period. Your membership will not renew after it ends."}
             </p>
             <p className="wlth-muted" style={{ marginBottom: 12 }}>
-              Reactivate now to continue without interruption — you will not be charged today.
+              Reactivate now to continue without interruption; you will not be charged today.
             </p>
             <div className="wlth-actions">
               <button
@@ -1061,7 +1059,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     setNeedsRefresh(false);
     setOk(
       message ||
-        "Your profile is refreshed — your future introductions can now reflect where you are and what you need today."
+        "Your profile is refreshed; your future introductions can now reflect where you are and what you need today."
     );
     setSaveStatus("saved");
     scrollDetailsToTop();
@@ -1174,13 +1172,12 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       setRefreshBusy(true);
       scrollDetailsToTop();
       try {
-        if (onboardingIncomplete) {
+        	if (onboardingIncomplete) {
           await saveOnboardingStep("LOCATION", values);
         } else {
           await patchProfile({
             countryCode: values.countryCode,
             cityCode: values.cityCode,
-            availability: values.availability,
             postCode: values.postCode ?? "",
             phone: values.phone,
             phonePrefix: values.phonePrefix,
@@ -1189,7 +1186,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         }
         form.setValue("countryCode", values.countryCode);
         form.setValue("cityCode", values.cityCode);
-        form.setValue("availability", values.availability);
         form.setValue("postCode", values.postCode ?? "");
         form.setValue("phone", values.phone);
         form.setValue("phonePrefix", values.phonePrefix);
@@ -1359,7 +1355,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           connectionType: values.connectionType,
         });
         finishRefreshSession(
-          "You’re all set — your profile is complete and ready for stronger introductions."
+          "You're all set; your profile is complete and ready for stronger introductions."
         );
       } catch (e) {
         if (!applyServerFieldErrors(e)) {
@@ -1400,7 +1396,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           postCode: values.postCode ?? "",
           countryCode: values.countryCode || undefined,
           cityCode: values.cityCode || undefined,
-          availability: values.availability ?? [],
           primaryIndustry: values.primaryIndustry || undefined,
           otherIndustry: values.otherIndustry ?? "",
           businessStage: values.businessStage || undefined,
@@ -1603,7 +1598,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     if (p.get("reactivated") === "1" || p.get("billing_refresh") === "1") {
       void (async () => {
         if (p.get("reactivated") === "1") {
-          setOk("Welcome back — confirming your membership…");
+          setOk("Welcome back; confirming your membership…");
           await api(props.apiBase, "/api/onboarding/confirm-checkout", {
             method: "POST",
             token,
@@ -1672,7 +1667,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           setOnboardingIncomplete(true);
           setNeedsRefresh(true);
           setRefreshStep("goal");
-          setOk("Payment confirmed — a few matching questions and you’re fully set.");
+          setOk("Payment confirmed; a few matching questions and you're fully set.");
         } else {
           setRefreshStep("payment");
           setError(
@@ -1708,7 +1703,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         <div className="wlth-card wlth-overlay-load">
           <AnimatedLoader
             variant="profile-loading"
-            title="Welcome back — loading your profile…"
+            title="Welcome back; loading your profile…"
             description="Gathering your details and matching preferences."
             size="large"
             fullScreen
@@ -1761,7 +1756,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           </h1>
           <p>
             {onboardingIncomplete
-              ? "Your progress is saved as you go — you can leave and pick up from the last step you completed."
+              ? "          Your progress is saved as you go; you can leave and pick up from the last step you completed."
               : "A short refresh helps your introductions reflect your current location, business and goals."}
           </p>
           <div className="wlth-refresh-steps" aria-label="Progress">
@@ -1815,7 +1810,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 previousCityLabel={previousCityLabel}
               />
               <div className="wlth-field">
-                <label htmlFor="refresh-postcode">Post code</label>
+                <label htmlFor="refresh-postcode">Zip code</label>
                 <input
                   id="refresh-postcode"
                   autoComplete="postal-code"
@@ -1835,25 +1830,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               />
               <input type="hidden" {...refreshLocation.register("phonePrefix")} />
               <input type="hidden" {...refreshLocation.register("countryIso2")} />
-              <AvailabilityFields
-                options={refData.availabilityOptions}
-                selected={rAvailability}
-                onToggle={(code) => {
-                  const cur = refreshLocation.getValues("availability") || [];
-                  if (cur.includes(code)) {
-                    refreshLocation.setValue(
-                      "availability",
-                      cur.filter((c) => c !== code),
-                      { shouldValidate: true }
-                    );
-                  } else {
-                    refreshLocation.setValue("availability", [...cur, code], {
-                      shouldValidate: true,
-                    });
-                  }
-                }}
-                error={refreshLocation.formState.errors.availability?.message as string}
-              />
+              {/* Availability temporarily disabled. Keep component for possible future reactivation. */}
               <div className="wlth-actions">
                 <button type="submit" className="wlth-btn-primary" disabled={refreshBusy}>
                   Continue
@@ -2153,7 +2130,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 <FieldError message={form.formState.errors.profileBio?.message} />
               </div>
 
-              <p className="wlth-section-title">Location & availability</p>
+              <p className="wlth-section-title">Location</p>
               <LocationFields
                 countries={refData.countries}
                 cities={cities}
@@ -2167,7 +2144,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 previousCityLabel={previousCityLabel}
               />
               <div className="wlth-field">
-                <label htmlFor="upd-postcode">Post code</label>
+                <label htmlFor="upd-postcode">Zip code</label>
                 <input
                   id="upd-postcode"
                   autoComplete="postal-code"
@@ -2185,22 +2162,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               />
               <input type="hidden" {...form.register("phonePrefix")} />
               <input type="hidden" {...form.register("countryIso2")} />
-              <AvailabilityFields
-                options={refData.availabilityOptions}
-                selected={availability}
-                onToggle={(code) => {
-                  const cur = form.getValues("availability") || [];
-                  if (cur.includes(code)) {
-                    form.setValue(
-                      "availability",
-                      cur.filter((c) => c !== code),
-                      { shouldDirty: true }
-                    );
-                  } else if (cur.length < 21) {
-                    form.setValue("availability", [...cur, code], { shouldDirty: true });
-                  }
-                }}
-              />
+              {/* Availability temporarily disabled. Keep component for possible future reactivation. */}
 
               <p className="wlth-section-title">Business</p>
               <div className="wlth-field">

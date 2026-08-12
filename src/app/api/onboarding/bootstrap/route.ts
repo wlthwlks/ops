@@ -48,6 +48,7 @@ export async function POST(request: Request) {
       email: body.email || member.email,
       firstName: body.firstName || member.firstName,
       lastName: body.lastName || member.lastName,
+      age: body.age,
     });
     if (!parsed.success) {
       return withCors(
@@ -69,6 +70,7 @@ export async function POST(request: Request) {
       email: parsed.data.email,
       firstName: parsed.data.firstName,
       lastName: parsed.data.lastName,
+      age: parsed.data.age,
       attribution: parsed.data.attribution as Record<string, string | undefined>,
       source: "signup_widget",
     });

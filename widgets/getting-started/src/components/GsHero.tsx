@@ -28,7 +28,7 @@ export function GsHero() {
           </strong>
         </p>
         <p className="gs-hero__cta-line gs-fade-up" style={{ animationDelay: "0.28s" }}>
-          There&apos;s always a reason to connect — and getting started is simple.
+          There's always a reason to connect; and getting started is simple.
         </p>
       </div>
     </section>

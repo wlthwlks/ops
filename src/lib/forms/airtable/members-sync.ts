@@ -124,6 +124,7 @@ export type MinimalSignupInput = {
   email: string;
   firstName: string;
   lastName: string;
+  age?: string;
   attribution?: Record<string, string | undefined>;
   source?: string;
 };
@@ -276,6 +277,7 @@ export async function upsertMinimalSignupMember(
     [MEMBER_FIELDS.memberstackId]: input.memberstackId,
     [MEMBER_FIELDS.firstName]: input.firstName,
     [MEMBER_FIELDS.lastName]: input.lastName,
+    ...(input.age ? { [MEMBER_FIELDS.age]: input.age } : {}),
     [MEMBER_FIELDS.onboardingStatus]: existing
       ? fieldStr(existing.fields, MEMBER_FIELDS.onboardingStatus) || "ACCOUNT_CREATED"
       : "ACCOUNT_CREATED",

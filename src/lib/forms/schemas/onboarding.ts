@@ -113,6 +113,9 @@ const otherIndustryRefine = (
 const accountObjectSchema = z.object({
   firstName: z.string().trim().min(1).max(80),
   lastName: z.string().trim().min(1).max(80),
+  age: z.string().refine((v) => ["18-24", "25-34", "35-44", "45-54", "55+"].includes(v), {
+    message: "Select your age range",
+  }),
   email: z
     .string()
     .trim()
@@ -132,7 +135,7 @@ const locationObjectSchema = z.object({
   postCode: postCodeSchema.optional().or(z.literal("")),
   phone: nationalPhoneSchema,
   phonePrefix: phonePrefixSchema,
-  availability: z.array(z.enum(availCodes)).min(1).max(21),
+  availability: z.array(z.enum(availCodes)).max(21).optional(),
 });
 
 export const locationSchema = withPhoneValidation(locationObjectSchema, {
@@ -207,6 +210,9 @@ export const onboardingStepSchema = z.discriminatedUnion("stage", [
 export const bootstrapSchema = z.object({
   firstName: z.string().trim().min(1).max(80),
   lastName: z.string().trim().min(1).max(80),
+  age: z.string().refine((v) => ["18-24", "25-34", "35-44", "45-54", "55+"].includes(v), {
+    message: "Select your age range",
+  }),
   email: z
     .string()
     .trim()

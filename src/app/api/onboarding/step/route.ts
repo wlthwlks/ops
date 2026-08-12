@@ -177,7 +177,7 @@ async function stepDataToAirtablePatch(
         patch: {
           _appCityCode: data.cityCode,
           _appCountryCode: data.countryCode,
-          [MEMBER_FIELDS.availabilityV2]: data.availability,
+          ...(data.availability ? { [MEMBER_FIELDS.availabilityV2]: data.availability } : {}),
           [MEMBER_FIELDS.phone]: phoneResult.national,
           [MEMBER_FIELDS.phonePrefix]: phoneResult.prefix,
           [MEMBER_FIELDS.postCode]: postCode,

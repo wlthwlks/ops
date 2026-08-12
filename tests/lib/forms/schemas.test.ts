@@ -4,6 +4,7 @@ import {
   locationSchema,
   businessSchema,
   goalSchema,
+  bootstrapSchema,
 } from "@/lib/forms/schemas/onboarding";
 
 const COUNTRY_ID = "reccnnjiVkL28NBgV";
@@ -14,9 +15,42 @@ describe("onboarding schemas", () => {
     const r = accountSchema.parse({
       firstName: "Ada",
       lastName: "Lovelace",
+      age: "25-34",
       email: "  Ada@Ex.COM ",
     });
     expect(r.email).toBe("ada@ex.com");
+  });
+
+  it("rejects account without age", () => {
+    const r = accountSchema.safeParse({
+      firstName: "Ada",
+      lastName: "Lovelace",
+      email: "a@b.com",
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it("accepts all five age ranges on bootstrap", () => {
+    for (const age of ["18-24", "25-34", "35-44", "45-54", "55+"] as const) {
+      const r = bootstrapSchema.safeParse({
+        firstName: "A",
+        lastName: "B",
+        age,
+        email: "a@b.com",
+      });
+      expect(r.success).toBe(true);
+    }
+  });
+
+  it("bootstrap rejects invalid age", () => {
+    expect(
+      bootstrapSchema.safeParse({
+        firstName: "A",
+        lastName: "B",
+        age: "invalid",
+        email: "a@b.com",
+      }).success
+    ).toBe(false);
   });
 
   it("accepts coaching industry", () => {
@@ -36,7 +70,6 @@ describe("onboarding schemas", () => {
       cityCode: "GB-LON",
       phone: "211234567",
       phonePrefix: "+64",
-      availability: ["mon_morning"],
     });
     expect(r.success).toBe(false);
   });
@@ -48,7 +81,6 @@ describe("onboarding schemas", () => {
       phone: "211234567",
       phonePrefix: "+64",
       postCode: "EC1V 9HX",
-      availability: ["mon_morning", "tue_evening"],
     });
     expect(r.cityCode).toBe(CITY_ID);
     expect(r.countryCode).toBe(COUNTRY_ID);
@@ -56,13 +88,34 @@ describe("onboarding schemas", () => {
     expect(r.postCode).toBe("EC1V 9HX");
   });
 
+  it("accepts location with availability when supplied (backward compat)", () => {
+    const r = locationSchema.safeParse({
+      countryCode: COUNTRY_ID,
+      cityCode: CITY_ID,
+      phone: "211234567",
+      phonePrefix: "+64",
+      availability: ["mon_morning", "tue_evening"],
+    });
+    expect(r.success).toBe(true);
+  });
+
   it("rejects location without phone", () => {
     const r = locationSchema.safeParse({
       countryCode: COUNTRY_ID,
       cityCode: CITY_ID,
-      availability: ["mon_morning"],
     });
     expect(r.success).toBe(false);
+  });
+
+  it("accepts location without availability", () => {
+    // Availability is no longer mandatory
+    const r = locationSchema.safeParse({
+      countryCode: COUNTRY_ID,
+      cityCode: CITY_ID,
+      phone: "211234567",
+      phonePrefix: "+64",
+    });
+    expect(r.success).toBe(true);
   });
 
   it("enforces business description length", () => {

@@ -45,6 +45,7 @@ export const MEMBER_FIELDS = {
   memberstackId: "Memberstack ID",
   firstName: "First Name",
   lastName: "Last Name",
+  age: "Age",
   phone: "phone number",
   phonePrefix: "Phone prefix",
   /** Exact Airtable column used by Pinecone sync and forms */

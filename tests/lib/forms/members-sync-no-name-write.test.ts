@@ -104,19 +104,21 @@ describe("Airtable member writes never include computed Name", () => {
     expect(stripped[MEMBER_FIELDS.email]).toBe("a@b.com");
   });
 
-  it("upsertMinimalSignupMember create payload has First/Last but not Name", async () => {
+  it("upsertMinimalSignupMember create payload has First/Last/Age but not Name", async () => {
     const { upsertMinimalSignupMember } = await loadMembersSync();
     await upsertMinimalSignupMember({
       memberstackId: "mem_1",
       email: "ada@ex.com",
       firstName: "Ada",
       lastName: "Lovelace",
+      age: "25-34",
     });
 
     expect(createRecords).toHaveBeenCalledTimes(1);
     const fields = createRecords.mock.calls[0][1][0].fields as Record<string, unknown>;
     expect(fields[MEMBER_FIELDS.firstName]).toBe("Ada");
     expect(fields[MEMBER_FIELDS.lastName]).toBe("Lovelace");
+    expect(fields[MEMBER_FIELDS.age]).toBe("25-34");
     expect(fields[MEMBER_FIELDS.email]).toBe("ada@ex.com");
     expect(fields[MEMBER_FIELDS.memberstackId]).toBe("mem_1");
     expect(fields[MEMBER_FIELDS.membership]).toBe("Pending Payment");
@@ -275,6 +277,32 @@ describe("Airtable member writes never include computed Name", () => {
     expect(fields[MEMBER_FIELDS.availabilityLegacy]).toEqual(expect.any(String));
     expect(String(fields[MEMBER_FIELDS.availabilityLegacy])).toContain("Monday");
     expect(fields._appCityCode).toBeUndefined();
+  });
+
+  it("updateOnboardingStep location without availability still works", async () => {
+    listRecords.mockResolvedValue([
+      {
+        id: "rec_existing",
+        fields: { [MEMBER_FIELDS.memberstackId]: "mem_2" },
+      },
+    ]);
+
+    const { updateOnboardingStep } = await loadMembersSync();
+    await updateOnboardingStep({
+      memberstackId: "mem_2",
+      stage: "LOCATION",
+      patch: {
+        _appCityCode: LONDON_ID,
+        _appCountryCode: UK_ID,
+      },
+    });
+
+    const fields = updateRecords.mock.calls[0][1][0].fields as Record<string, unknown>;
+    expect(fields[MEMBER_FIELDS.city]).toBe("London");
+    expect(fields[MEMBER_FIELDS.cityRelation]).toEqual([LONDON_ID]);
+    expect(fields[MEMBER_FIELDS.availabilityV2]).toBeUndefined();
+    // Existing Airtable availability data must not be cleared
+    expect(fields[MEMBER_FIELDS.availabilityLegacy]).toBeUndefined();
   });
 
   it("upsert with attribution uses canonical UTM field names", async () => {

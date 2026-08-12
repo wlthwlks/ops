@@ -10,6 +10,7 @@ import {
   goalFormSchema,
   helpFormSchema,
   locationFormSchema,
+  AGE_RANGES,
   type AccountForm,
   type BusinessForm,
   type LocationForm,
@@ -32,7 +33,6 @@ import {
   iso2ForCountryCode,
 } from "../../shared/PhoneField";
 import {
-  AvailabilityFields,
   BusinessFields,
   CommunityIntentionCard,
   ConnectionTypeField,
@@ -240,6 +240,8 @@ export function SignupApp(props: { apiBase: string }) {
   const [token, setToken] = useState<string | null>(null);
   const [communityOk, setCommunityOk] = useState(false);
   const [communityError, setCommunityError] = useState<string | undefined>();
+  const [termsOk, setTermsOk] = useState(false);
+  const [termsError, setTermsError] = useState<string | undefined>();
   const mountedRef = useRef(true);
   const attribution = useMemo(() => captureAttribution(), []);
   const busy = asyncState.kind === "busy" || asyncState.kind === "loading-form";
@@ -365,17 +367,17 @@ export function SignupApp(props: { apiBase: string }) {
       setAsyncState({ kind: "idle" });
       const configHint =
         lastConfirmStatus === "membership_price_config_missing"
-          ? " Membership price configuration is incomplete — contact support if this continues."
+          ?       " Membership price configuration is incomplete; contact support if this continues."
           : lastConfirmStatus === "stripe_customer_ambiguous"
-            ? " We found multiple billing profiles for this email — contact support."
+            ?       " We found multiple billing profiles for this email; contact support."
             : lastConfirmStatus === "session_ownership_mismatch" ||
                 lastConfirmStatus === "stripe_customer_conflict"
-              ? " We couldn’t securely match this checkout to your account — contact support."
+               ? " We couldn't securely match this checkout to your account; contact support."
               : "";
       setError(
         (lastConfirmReason && lastConfirmReason.length < 180
           ? lastConfirmReason
-          : "We’re still confirming your payment with Stripe. Your progress is saved — refresh this page in a moment, or continue when you’re ready.") +
+          : "We're still confirming your payment with Stripe. Your progress is saved; refresh this page in a moment, or continue when you're ready.") +
           configHint
       );
       await stepper.goTo("payment");
@@ -441,6 +443,7 @@ export function SignupApp(props: { apiBase: string }) {
     defaultValues: {
       firstName: "",
       lastName: "",
+      age: "",
       email: "",
       password: "",
     },
@@ -492,7 +495,6 @@ export function SignupApp(props: { apiBase: string }) {
   const primaryIndustry = businessForm.watch("primaryIndustry");
   const helpWanted = helpForm.watch("helpWanted") || [];
   const expertiseOffered = expertiseForm.watch("expertiseOffered") || [];
-  const availability = locationForm.watch("availability") || [];
 
   const cities = useMemo(
     () => (refData?.cities || []).filter((c) => c.countryCode === countryCode),
@@ -743,6 +745,7 @@ export function SignupApp(props: { apiBase: string }) {
           firstName: values.firstName,
           lastName: values.lastName,
           email: values.email,
+          age: values.age,
           attribution,
         }),
       });
@@ -843,7 +846,7 @@ export function SignupApp(props: { apiBase: string }) {
     setError(null);
     if (!communityOk) {
       setCommunityError(
-        "Please confirm you’re joining to connect and grow — not to cold-sell"
+        "Please confirm you're joining to connect and grow; not to cold-sell"
       );
       requestAnimationFrame(() => {
         const el = document.querySelector(".wlth-intention");
@@ -854,6 +857,17 @@ export function SignupApp(props: { apiBase: string }) {
       return;
     }
     setCommunityError(undefined);
+    if (!termsOk) {
+      setTermsError("Please agree to the Terms and Conditions before continuing.");
+      requestAnimationFrame(() => {
+        const el = document.querySelector(".wlth-terms");
+        if (el && el instanceof HTMLElement) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+      return;
+    }
+    setTermsError(undefined);
     // Outbound path: payment-verification only — never payment-confirmed
     setAsyncState(BUSY.checkout);
     scrollSignupToTop();
@@ -961,6 +975,7 @@ export function SignupApp(props: { apiBase: string }) {
     }
   };
 
+  /* Availability toggle retained for possible future reactivation
   const toggleAvail = (code: string) => {
     const cur = locationForm.getValues("availability") || [];
     if (cur.includes(code)) {
@@ -973,6 +988,7 @@ export function SignupApp(props: { apiBase: string }) {
       locationForm.setValue("availability", [...cur, code], { shouldValidate: true });
     }
   };
+  */
 
   if (asyncState.kind === "loading-form") {
     return (
@@ -1097,8 +1113,24 @@ export function SignupApp(props: { apiBase: string }) {
                   {...accountForm.register("firstName")}
                 />
                 <FieldError message={accountForm.formState.errors.firstName?.message} />
-              </div>
-              <div className="wlth-field">
+            </div>
+            <div className="wlth-field">
+              <label htmlFor="age">Age</label>
+              <select
+                id="age"
+                aria-invalid={!!accountForm.formState.errors.age}
+                {...accountForm.register("age")}
+              >
+                <option value="">Select age range</option>
+                {AGE_RANGES.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+              <FieldError message={accountForm.formState.errors.age?.message} />
+            </div>
+            <div className="wlth-field">
                 <label htmlFor="ln">Last name</label>
                 <input
                   id="ln"
@@ -1143,7 +1175,7 @@ export function SignupApp(props: { apiBase: string }) {
           <form className="wlth-step-panel" key="location" onSubmit={onLocation} noValidate>
             <h2>Where would you like your community to begin?</h2>
             <p className="wlth-muted">
-              We’ll prioritise introductions near you — only cities currently open for
+              We&apos;ll prioritise introductions near you; only cities currently open for
               matching are listed.
             </p>
             <LocationFields
@@ -1161,7 +1193,7 @@ export function SignupApp(props: { apiBase: string }) {
               cityError={locationForm.formState.errors.cityCode?.message}
             />
             <div className="wlth-field">
-              <label htmlFor="signup-postcode">Post code</label>
+              <label htmlFor="signup-postcode">Zip code</label>
               <input
                 id="signup-postcode"
                 autoComplete="postal-code"
@@ -1180,12 +1212,7 @@ export function SignupApp(props: { apiBase: string }) {
             />
             <input type="hidden" {...locationForm.register("phonePrefix")} />
             <input type="hidden" {...locationForm.register("countryIso2")} />
-            <AvailabilityFields
-              options={refData.availabilityOptions}
-              selected={availability}
-              onToggle={toggleAvail}
-              error={locationForm.formState.errors.availability?.message}
-            />
+            {/* Availability temporarily disabled. Keep component for possible future reactivation. */}
             <div className="wlth-actions">
               <button
                 type="button"
@@ -1248,7 +1275,7 @@ export function SignupApp(props: { apiBase: string }) {
             <div className="wlth-benefits">
               <p className="wlth-benefit">
                 <strong>Curated introductions</strong>
-                Shaped by your goals, business stage, and availability.
+                Shaped by your goals and business stage.
               </p>
               <p className="wlth-benefit">
                 <strong>Relevant connections</strong>
@@ -1273,11 +1300,41 @@ export function SignupApp(props: { apiBase: string }) {
               error={communityError}
             />
 
+            <div className="wlth-field wlth-terms">
+              <label className="wlth-check-label">
+                <input
+                  type="checkbox"
+                  checked={termsOk}
+                  onChange={(e) => {
+                    setTermsOk(e.target.checked);
+                    if (e.target.checked) setTermsError(undefined);
+                  }}
+                  aria-invalid={!!termsError}
+                />
+                <span>
+                  I agree to the{" "}
+                  <a
+                    href="https://wlthwlks.com/termsandconditions"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Terms and Conditions
+                  </a>
+                  .
+                </span>
+              </label>
+              {termsError && (
+                <span className="wlth-error" role="alert">
+                  {termsError}
+                </span>
+              )}
+            </div>
+
             <div className="wlth-actions">
               <button
                 type="button"
                 className="wlth-btn-primary"
-                disabled={busy || !communityOk}
+                disabled={busy || !communityOk || !termsOk}
                 onClick={() => void startCheckout()}
               >
                 Continue to secure checkout

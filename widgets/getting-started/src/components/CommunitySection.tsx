@@ -26,7 +26,7 @@ export function CommunitySection() {
               </p>
               <p>
                 You don&apos;t need to constantly monitor another platform to get value from
-                your membership — your introductions and activities will keep coming.
+                your membership; your introductions and activities will keep coming.
               </p>
               <p className="gs-emphasis">
                 But when you want to go deeper, the community is there.
