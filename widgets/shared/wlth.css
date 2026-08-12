@@ -29,8 +29,12 @@
   width: 100%;
   min-height: 100vh;
   margin: 0;
-  padding: clamp(16px, 2vw, 32px);
-  background: var(--wlth-background);
+  padding: clamp(32px, 4vw, 56px) clamp(16px, 2vw, 32px) clamp(16px, 2vw, 32px);
+  background:
+    radial-gradient(circle at 1px 1px, oklch(1 0 0 / 4%) 1px, transparent 0),
+    radial-gradient(ellipse 100% 60% at 50% 35%, oklch(0.16 0.008 30 / 50%), transparent 80%),
+    var(--wlth-background);
+  background-size: 6px 6px, 100% 100%, 100% 100%;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -783,6 +787,16 @@
   margin: 2px 0 0;
   padding: 0;
   accent-color: var(--wlth-button);
+}
+
+.wlth-widget .wlth-intention__check a {
+  color: oklch(0.65 0.17 260);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.wlth-widget .wlth-intention__check a:hover {
+  color: oklch(0.72 0.18 260);
 }
 
 /* —— Sticky save bar —— */

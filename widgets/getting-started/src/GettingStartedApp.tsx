@@ -8,13 +8,13 @@ import { MembershipPillars } from "./components/MembershipPillars";
 import { MonthlyRhythm } from "./components/MonthlyRhythm";
 import { CommunitySection } from "./components/CommunitySection";
 import { MembershipTips } from "./components/MembershipTips";
-import { MemberDirectory } from "./components/MemberDirectory";
+import { MemberDirectory } from "./components/MemberDirectory"; // Temporarily hidden
 import { ClosingCta } from "./components/ClosingCta";
 import { SiteFooter } from "./components/SiteFooter";
 
 type Props = {
-  /** Optional Member Directory CTA URL from data-directory-url */
-  directoryUrl?: string;
+  /** Optional Member Directory CTA URL from data-directory-url — Temporarily hidden */
+  // directoryUrl?: string;
   /** When true, skip Memberstack gate (for local preview only). */
   allowAnonymous?: boolean;
 };
@@ -86,7 +86,7 @@ export function GettingStartedApp(props: Props) {
         <MonthlyRhythm />
         <CommunitySection />
         <MembershipTips />
-        <MemberDirectory directoryUrl={props.directoryUrl} />
+        {/* <MemberDirectory directoryUrl={props.directoryUrl} /> Temporarily hidden */}
         <ClosingCta />
       </div>
       <SiteFooter />

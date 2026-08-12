@@ -579,7 +579,7 @@
   margin: 0.5rem 0 0;
 }
 
-/* Directory */
+/* Directory — Temporarily hidden
 .gs-directory {
   overflow: hidden;
   border-radius: 2rem;
@@ -688,6 +688,7 @@
   font-weight: 300;
   color: var(--gs-fg);
 }
+*/
 
 .gs-btn {
   display: inline-flex;

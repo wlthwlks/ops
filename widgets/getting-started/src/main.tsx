@@ -5,11 +5,11 @@ import "./getting-started.css";
 function mount() {
   const el = document.getElementById("wlth-getting-started-root");
   if (!el) return;
-  const directoryUrl = el.dataset.directoryUrl || "";
+  // const directoryUrl = el.dataset.directoryUrl || ""; // Temporarily hidden
   const allowAnonymous =
     (el.dataset.allowAnonymous || "").trim().toLowerCase() === "true";
   createRoot(el).render(
-    <GettingStartedApp directoryUrl={directoryUrl} allowAnonymous={allowAnonymous} />
+    <GettingStartedApp allowAnonymous={allowAnonymous} />
   );
 }
 
