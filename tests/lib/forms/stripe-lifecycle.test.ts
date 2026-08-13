@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+const updateMemberBilling = vi.fn();
+const recordIntegrationError = vi.fn();
+
 vi.mock("@/lib/forms/airtable/members-sync", () => ({
-  updateMemberBilling: vi.fn(async () => ({ record: null, status: "STRIPE_MEMBER_NOT_FOUND" })),
+  updateMemberBilling: (...a: unknown[]) => updateMemberBilling(...a),
 }));
 
 vi.mock("@/lib/forms/webhooks/store", () => ({
-  recordIntegrationError: vi.fn(async () => "e1"),
+  recordIntegrationError: (...a: unknown[]) => recordIntegrationError(...a),
 }));
 
 describe("handleExpandedStripeEvent", () => {
@@ -13,8 +16,14 @@ describe("handleExpandedStripeEvent", () => {
   const shadow = process.env.MAKE_SHADOW_MODE;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     process.env.NEW_STRIPE_WEBHOOKS_ENABLED = "true";
     process.env.MAKE_SHADOW_MODE = "false";
+    updateMemberBilling.mockResolvedValue({
+      record: { id: "rec1", fields: {} },
+      status: "updated",
+    });
+    recordIntegrationError.mockResolvedValue("e1");
     vi.resetModules();
   });
 
@@ -38,11 +47,13 @@ describe("handleExpandedStripeEvent", () => {
   });
 
   it("records STRIPE_MEMBER_NOT_FOUND without creating members", async () => {
+    updateMemberBilling.mockResolvedValue({
+      record: null,
+      status: "STRIPE_MEMBER_NOT_FOUND",
+    });
     const { handleExpandedStripeEvent } = await import(
       "@/lib/forms/webhooks/stripe-lifecycle"
     );
-    const { recordIntegrationError } = await import("@/lib/forms/webhooks/store");
-    const { updateMemberBilling } = await import("@/lib/forms/airtable/members-sync");
     const r = await handleExpandedStripeEvent({
       type: "checkout.session.completed",
       data: {
@@ -63,5 +74,58 @@ describe("handleExpandedStripeEvent", () => {
       data: { object: { id: "ch_1", customer: "cus_1" } },
     } as never);
     expect(r.status).toBe("manual_review");
+  });
+
+  it("scheduled-cancel subscription.updated does not write Service access until", async () => {
+    const { handleExpandedStripeEvent } = await import(
+      "@/lib/forms/webhooks/stripe-lifecycle"
+    );
+    const future = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30;
+    await handleExpandedStripeEvent({
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_sched",
+          customer: "cus_x",
+          status: "active",
+          cancel_at_period_end: true,
+          cancel_at: future,
+          current_period_end: future,
+          items: { data: [{ current_period_end: future }] },
+        },
+      },
+    } as never);
+
+    const patch = updateMemberBilling.mock.calls[0][0].patch as Record<string, unknown>;
+    expect(patch["Cancel at period end"]).toBe("true");
+    expect(patch["Cancellation effective at"]).toBeTruthy();
+    expect(patch["Membership"]).toBe("Active");
+    expect(patch["Service access until"]).toBeUndefined();
+  });
+
+  it("active subscription.created does not write Service access until", async () => {
+    const { handleExpandedStripeEvent } = await import(
+      "@/lib/forms/webhooks/stripe-lifecycle"
+    );
+    const future = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30;
+    await handleExpandedStripeEvent({
+      type: "customer.subscription.created",
+      data: {
+        object: {
+          id: "sub_new",
+          customer: "cus_x",
+          status: "active",
+          cancel_at_period_end: false,
+          current_period_end: future,
+          items: { data: [{ current_period_end: future }] },
+        },
+      },
+    } as never);
+
+    const patch = updateMemberBilling.mock.calls[0][0].patch as Record<string, unknown>;
+    expect(patch["Cancel at period end"]).toBe("false");
+    expect(patch["Payment"]).toBe("Paid");
+    expect(patch["Membership"]).toBe("Active");
+    expect(patch["Service access until"]).toBeUndefined();
   });
 });

@@ -77,10 +77,8 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
             : accessUntil;
         if (cancelAtIso) {
           patch[MEMBER_FIELDS.cancellationEffectiveAt] = cancelAtIso;
-          patch[MEMBER_FIELDS.serviceAccessUntil] = cancelAtIso;
         } else if (accessUntil) {
           patch[MEMBER_FIELDS.cancellationEffectiveAt] = accessUntil;
-          patch[MEMBER_FIELDS.serviceAccessUntil] = accessUntil;
         }
         // Membership remains Active during grace
         patch[MEMBER_FIELDS.membership] = "Active";
@@ -89,7 +87,6 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
         patch[MEMBER_FIELDS.cancellationEffectiveAt] = "";
         patch[MEMBER_FIELDS.membership] = "Active";
         patch[MEMBER_FIELDS.payment] = "Paid";
-        if (accessUntil) patch[MEMBER_FIELDS.serviceAccessUntil] = accessUntil;
       }
 
       const result = await updateMemberBilling({
