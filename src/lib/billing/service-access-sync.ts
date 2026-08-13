@@ -384,19 +384,11 @@ export async function updateServiceAccessUntilForCustomer(input: {
         : comparison.shouldUpdate && !comparison.invalidCurrent;
 
     // Authoritative paid state + billing snapshot (even if access date unchanged).
+    // "Stripe Price ID" must hold a native Stripe price_…; the Memberstack commerce
+    // id (prc_…) is a different kind of id and belongs only in "Memberstack Plan ID".
     const configuredPlan = getConfiguredMemberstackPlanId();
-    const priceIds = dedupePriceIds([
-      ...(billing?.qualifyingPriceIds || []),
-      // Prefer configured commerce id (prc_wlth-wlks-…) as canonical membership price
-      ...(configuredPlan ? [configuredPlan] : []),
-    ]);
-    // Prefer prc_/pln_ configured id for "Stripe Price ID" when that is the membership product id
-    const primaryPriceId =
-      priceIds.find((id) => id.startsWith("prc_") || id.startsWith("pln_")) ||
-      configuredPlan ||
-      priceIds.find((id) => id.startsWith("price_")) ||
-      priceIds[0] ||
-      "";
+    const nativePriceIds = dedupePriceIds(billing?.qualifyingPriceIds || []);
+    const primaryStripePriceId = nativePriceIds[0] || "";
 
     const fields: Record<string, unknown> = {
       [PAYMENT_FIELD]: "Paid",
@@ -407,11 +399,11 @@ export async function updateServiceAccessUntilForCustomer(input: {
       [BILLING_LAST_SYNCED_AT_FIELD]: new Date().toISOString(),
     };
     if (stripeEventId) fields[LAST_STRIPE_EVENT_ID_FIELD] = stripeEventId;
-    if (primaryPriceId) {
-      fields[STRIPE_PRICE_ID_FIELD] = primaryPriceId;
-      fields[PAID_PLANS_FIELD] = formatPaidPlansText(
-        dedupePriceIds([primaryPriceId, ...priceIds])
-      );
+    if (primaryStripePriceId) {
+      fields[STRIPE_PRICE_ID_FIELD] = primaryStripePriceId;
+    }
+    if (nativePriceIds.length > 0) {
+      fields[PAID_PLANS_FIELD] = formatPaidPlansText(nativePriceIds);
     }
     if (billing?.stripeSubscriptionId) {
       fields[STRIPE_SUBSCRIPTION_ID_FIELD] = billing.stripeSubscriptionId;
@@ -422,9 +414,9 @@ export async function updateServiceAccessUntilForCustomer(input: {
     } else if (billing?.stripeSubscriptionId) {
       fields[STRIPE_SUBSCRIPTION_STATUS_FIELD] = "active";
     }
-    // Same commerce id on Memberstack Plan ID column
-    if (configuredPlan || primaryPriceId) {
-      fields["Memberstack Plan ID"] = configuredPlan || primaryPriceId;
+    // Commerce id on the Memberstack Plan ID column — never in "Stripe Price ID".
+    if (configuredPlan) {
+      fields["Memberstack Plan ID"] = configuredPlan;
     }
 
     if (comparison.invalidCurrent) {

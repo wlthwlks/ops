@@ -177,8 +177,8 @@ describe("POST /api/webhooks/stripe", () => {
       string,
       unknown
     >;
-    // Configured commerce id (prc_…) is preferred for Stripe Price ID column
-    expect(fields["Stripe Price ID"]).toBe("prc_wlth-wlks-45-quarter-pdpa0cyx");
+    // Native Stripe price_ goes in "Stripe Price ID" — never the Memberstack commerce id.
+    expect(fields["Stripe Price ID"]).toBe("price_membership");
     expect(fields["Stripe subscription status"]).toBe("active");
     expect(fields["Memberstack Plan ID"]).toBe("prc_wlth-wlks-45-quarter-pdpa0cyx");
     expect(fields["Stripe Subscription ID"]).toBe("sub_paid1");

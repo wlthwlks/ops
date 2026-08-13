@@ -220,6 +220,46 @@ describe("updateServiceAccessUntilForCustomer", () => {
     expect(call[0].fields["Last invoice ID"]).toBe("in_1");
   });
 
+  it("writes native price_ to Stripe Price ID and commerce id to Memberstack Plan ID", async () => {
+    const prevMs = process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID;
+    const prevStripe = process.env.STRIPE_MEMBERSHIP_PRICE_IDS;
+    const prevPlan = process.env.MEMBERSTACK_PLAN_ID;
+    process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID = "prc_test_plan";
+    delete process.env.STRIPE_MEMBERSHIP_PRICE_IDS;
+    delete process.env.MEMBERSTACK_PLAN_ID;
+    try {
+      const at = mockAirtable([
+        { id: "rec1", fields: { "Stripe Customer ID": "cus_x" } },
+      ]);
+      await updateServiceAccessUntilForCustomer({
+        airtable: at,
+        stripeCustomerId: "cus_x",
+        paidThrough,
+        stripeInvoiceId: "in_1",
+        billing: {
+          qualifyingPriceIds: ["price_1RDLh9Bwwz36JKiyttM3jSeZ"],
+          stripeSubscriptionId: "sub_x",
+          stripeSubscriptionStatus: "active",
+        },
+      });
+      const call = at.updateRecordsBatched.mock.calls[0][1] as Array<{
+        fields: Record<string, unknown>;
+      }>;
+      expect(call[0].fields["Stripe Price ID"]).toBe("price_1RDLh9Bwwz36JKiyttM3jSeZ");
+      expect(call[0].fields["Memberstack Plan ID"]).toBe("prc_test_plan");
+      expect(call[0].fields["Paid Plans (price ids)"]).toBe(
+        "price_1RDLh9Bwwz36JKiyttM3jSeZ"
+      );
+    } finally {
+      if (prevMs === undefined) delete process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID;
+      else process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID = prevMs;
+      if (prevStripe === undefined) delete process.env.STRIPE_MEMBERSHIP_PRICE_IDS;
+      else process.env.STRIPE_MEMBERSHIP_PRICE_IDS = prevStripe;
+      if (prevPlan === undefined) delete process.env.MEMBERSTACK_PLAN_ID;
+      else process.env.MEMBERSTACK_PLAN_ID = prevPlan;
+    }
+  });
+
   it("updates all duplicate records", async () => {
     const at = mockAirtable([
       { id: "rec1", fields: { "Stripe Customer ID": "cus_x" } },
