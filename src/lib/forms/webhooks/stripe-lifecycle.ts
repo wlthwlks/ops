@@ -121,13 +121,14 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
       const sub = event.data.object as Stripe.Subscription;
       const cus = customerId(sub.customer);
       if (!cus) return { processed: false, status: "ignored", reason: "No customer" };
+      const effectiveAt = new Date().toISOString();
       const result = await updateMemberBilling({
         stripeCustomerId: cus,
         patch: {
           [MEMBER_FIELDS.membership]: "Cancelled",
-          [MEMBER_FIELDS.cancellationEffectiveAt]: new Date().toISOString(),
+          [MEMBER_FIELDS.cancellationEffectiveAt]: effectiveAt,
+          [MEMBER_FIELDS.serviceAccessUntil]: effectiveAt,
           [MEMBER_FIELDS.cancelAtPeriodEnd]: "false",
-          // Preserve Service access until — do not clear
         },
       });
       if (result.status === "STRIPE_MEMBER_NOT_FOUND") {
