@@ -191,6 +191,10 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
           ...(sub ? { [MEMBER_FIELDS.stripeSubscriptionId]: sub } : {}),
           [MEMBER_FIELDS.payment]: "Paid",
           [MEMBER_FIELDS.membership]: "Active",
+          // Do not invent Service access until here — invoice.paid owns that.
+          // Clear stale cancel so resubscribe UI can return to normal active.
+          [MEMBER_FIELDS.cancelAtPeriodEnd]: false,
+          [MEMBER_FIELDS.cancellationEffectiveAt]: "",
         },
       });
       if (result.status === "STRIPE_MEMBER_NOT_FOUND") {

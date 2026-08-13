@@ -218,6 +218,36 @@ describe("updateServiceAccessUntilForCustomer", () => {
     expect(call[0].fields[SERVICE_ACCESS_FIELD]).toBe("2026-09-01T00:00:00.000Z");
     expect(call[0].fields["Stripe Customer ID"]).toBe("cus_x");
     expect(call[0].fields["Last invoice ID"]).toBe("in_1");
+    // Resubscribe must clear stale cancel so UI returns to normal active.
+    expect(call[0].fields["Cancel at period end"]).toBe(false);
+    expect(call[0].fields["Cancellation effective at"]).toBe("");
+  });
+
+  it("clears cancel flags on paid invoice even when access already later", async () => {
+    const at = mockAirtable([
+      {
+        id: "rec1",
+        fields: {
+          [SERVICE_ACCESS_FIELD]: "2026-10-01T00:00:00.000Z",
+          "Cancel at period end": true,
+          "Cancellation effective at": "2026-08-01",
+        },
+      },
+    ]);
+    await updateServiceAccessUntilForCustomer({
+      airtable: at,
+      stripeCustomerId: "cus_x",
+      paidThrough,
+      stripeInvoiceId: "in_1",
+    });
+    const call = at.updateRecordsBatched.mock.calls[0][1] as Array<{
+      fields: Record<string, unknown>;
+    }>;
+    expect(call[0].fields.Payment).toBe("Paid");
+    expect(call[0].fields.Membership).toBe("Active");
+    expect(call[0].fields["Cancel at period end"]).toBe(false);
+    expect(call[0].fields["Cancellation effective at"]).toBe("");
+    expect(call[0].fields[SERVICE_ACCESS_FIELD]).toBeUndefined();
   });
 
   it("writes native price_ to Stripe Price ID and commerce id to Memberstack Plan ID", async () => {

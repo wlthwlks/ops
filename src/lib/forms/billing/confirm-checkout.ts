@@ -294,14 +294,19 @@ export function passesPriceGate(input: {
 async function loadSubscriptionBilling(
   stripe: Stripe,
   subscriptionId: string
-): Promise<{ status: string; priceIds: string[] }> {
+): Promise<{ status: string; priceIds: string[]; periodEnd: Date | null }> {
   const sub = await stripe.subscriptions.retrieve(subscriptionId);
   const priceIds = dedupePriceIds(
     sub.items.data
       .map((it) => it.price?.id)
       .filter((id): id is string => Boolean(id) && id.startsWith("price_"))
   );
-  return { status: sub.status, priceIds };
+  const itemEnd = sub.items?.data?.[0]?.current_period_end;
+  const top = (sub as unknown as { current_period_end?: number }).current_period_end;
+  const unix = typeof itemEnd === "number" ? itemEnd : typeof top === "number" ? top : null;
+  const periodEnd =
+    typeof unix === "number" && unix > 0 ? new Date(unix * 1000) : null;
+  return { status: sub.status, priceIds, periodEnd };
 }
 
 async function listSessionPriceIds(
@@ -512,11 +517,15 @@ export async function confirmCheckoutForMember(input: {
       subscriptionId = sessionSubscriptionId(session);
       priceIds = await listSessionPriceIds(stripe, sessionId, session);
 
-      if (priceIds.length === 0 && subscriptionId) {
+      if (subscriptionId) {
         try {
           const live = await loadSubscriptionBilling(stripe, subscriptionId);
-          priceIds = live.priceIds;
-          subscriptionStatus = live.status;
+          if (priceIds.length === 0) priceIds = live.priceIds;
+          subscriptionStatus = live.status || subscriptionStatus;
+          if (live.periodEnd) {
+            // Session path has not set paidThrough yet; take sub period end.
+            paidThrough = live.periodEnd;
+          }
         } catch {
           /* keep */
         }
@@ -674,6 +683,19 @@ export async function confirmCheckoutForMember(input: {
             verifiedPaid = true;
             priceIds = dedupePriceIds([...priceIds, ...gate.qualifying]);
             qualificationMode = gate.mode;
+            const itemEnd = pick.items?.data?.[0]?.current_period_end;
+            const top = (pick as unknown as { current_period_end?: number })
+              .current_period_end;
+            const unix =
+              typeof itemEnd === "number"
+                ? itemEnd
+                : typeof top === "number"
+                  ? top
+                  : null;
+            if (typeof unix === "number" && unix > 0) {
+              const end = new Date(unix * 1000);
+              if (!paidThrough || end > paidThrough) paidThrough = end;
+            }
           }
         }
       }
@@ -684,6 +706,9 @@ export async function confirmCheckoutForMember(input: {
     try {
       const live = await loadSubscriptionBilling(stripe, subscriptionId);
       subscriptionStatus = live.status || subscriptionStatus;
+      if (live.periodEnd && (!paidThrough || live.periodEnd > paidThrough)) {
+        paidThrough = live.periodEnd;
+      }
       if (live.priceIds.length > 0) {
         const gate = passesPriceGate({
           priceIds: live.priceIds,
@@ -802,6 +827,9 @@ export async function confirmCheckoutForMember(input: {
   if (configuredPlan || primaryPriceId) {
     patch[MEMBER_FIELDS.memberstackPlanId] = configuredPlan || primaryPriceId;
   }
+  // Only on verified paid: extend access + clear stale cancel so resubscribe UI heals.
+  patch[MEMBER_FIELDS.cancelAtPeriodEnd] = false;
+  patch[MEMBER_FIELDS.cancellationEffectiveAt] = "";
   if (paidThrough) {
     patch[MEMBER_FIELDS.serviceAccessUntil] = paidThrough.toISOString().slice(0, 10);
   }

@@ -20,6 +20,8 @@ export const LAST_INVOICE_ID_FIELD = "Last invoice ID";
 export const LAST_INVOICE_STATUS_FIELD = "Last invoice status";
 export const BILLING_LAST_SYNCED_AT_FIELD = "Billing last synced at";
 export const LAST_STRIPE_EVENT_ID_FIELD = "Last Stripe event ID";
+export const CANCEL_AT_PERIOD_END_FIELD = "Cancel at period end";
+export const CANCELLATION_EFFECTIVE_AT_FIELD = "Cancellation effective at";
 export const MEMBERS_TABLE = AIRTABLE_MEMBERS_TABLE;
 
 /** Deduplicate qualifying membership price ids (stable order). */
@@ -397,6 +399,9 @@ export async function updateServiceAccessUntilForCustomer(input: {
       [LAST_INVOICE_ID_FIELD]: stripeInvoiceId,
       [LAST_INVOICE_STATUS_FIELD]: billing?.invoiceStatus || "paid",
       [BILLING_LAST_SYNCED_AT_FIELD]: new Date().toISOString(),
+      // Resubscribe / rejoin after cancel: drop stale cancel signals so UI returns to active.
+      [CANCEL_AT_PERIOD_END_FIELD]: false,
+      [CANCELLATION_EFFECTIVE_AT_FIELD]: "",
     };
     if (stripeEventId) fields[LAST_STRIPE_EVENT_ID_FIELD] = stripeEventId;
     if (primaryStripePriceId) {
