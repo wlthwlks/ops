@@ -211,6 +211,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const [webError, setWebError] = useState("");
   const [addingSocialPlatform, setAddingSocialPlatform] = useState(false);
   const mountedRef = useRef(true);
+  /** Server-derived mid-signup state (blank/COMPLETE = established). Never forced. */
+  const midSignupRef = useRef(false);
 
   const form = useForm<ProfileForm>({
     resolver: zodResolver(profileFormSchema),
@@ -492,6 +494,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           status.onboardingIncomplete === true ||
           isClientInProgressOnboarding(onboardingStatus);
         setOnboardingIncomplete(midSignup);
+        midSignupRef.current = midSignup;
 
         const cityUnavailable = Boolean(p.previousCityUnavailable);
         setPreviousCityUnavailable(cityUnavailable);
@@ -1668,7 +1671,11 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
-    if (!token) return;
+    // Wait for the initial profile/status load so midSignupRef reflects the
+    // member's real onboarding state before deciding where to land after a
+    // Stripe return. Otherwise a mid-signup member returning from checkout can
+    // be misread as established (or vice-versa) during the async load.
+    if (!token || loading) return;
 
     if (p.get("reactivated") === "1" || p.get("billing_refresh") === "1") {
       void (async () => {
@@ -1700,68 +1707,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     const refreshPaid = p.get("refresh_paid");
     const awaiting = memberId ? isAwaitingPostPaymentMatching(memberId) : false;
 
-    if (refreshPaid === "1" || (awaiting && refreshPaid !== "0")) {
-      void (async () => {
-        setRefreshBusy(true);
-        setNeedsRefresh(true);
-        setOnboardingIncomplete(true);
-        scrollDetailsToTop();
-        await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-          method: "POST",
-          token,
-          body: JSON.stringify({}),
-        }).catch(() => undefined);
-        // Poll briefly for Paid/Active like signup
-        let confirmed = false;
-        for (let i = 0; i < 15; i++) {
-          try {
-            if (i > 0 && i % 3 === 0) {
-              await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-                method: "POST",
-                token,
-                body: JSON.stringify({}),
-              }).catch(() => undefined);
-            }
-            const st = await api(props.apiBase, "/api/onboarding/payment-status", {
-              token,
-            });
-            if (st.paymentConfirmed) {
-              confirmed = true;
-              break;
-            }
-          } catch {
-            /* retry */
-          }
-          await new Promise((r) => setTimeout(r, 2000));
-        }
-        const bill = await api(props.apiBase, "/api/member/billing-status", { token });
-        applyBillingPayload(bill.billing);
-        if (confirmed) {
-          clearAwaitingPostPaymentMatching();
-          setPaymentConfirmed(true);
-          setOnboardingIncomplete(true);
-          setNeedsRefresh(true);
-          setRefreshStep("goal");
-          setOk("Payment confirmed; a few matching questions and you're fully set.");
-        } else {
-          setRefreshStep("payment");
-          setError(
-            "We’re still confirming your payment with Stripe. Stay on this page a moment, then continue."
-          );
-        }
-        try {
-          const url = new URL(window.location.href);
-          url.searchParams.delete("refresh_paid");
-          window.history.replaceState({}, "", url.pathname + url.search);
-        } catch {
-          /* ignore */
-        }
-        if (mountedRef.current) setRefreshBusy(false);
-      })();
-    } else if (refreshPaid === "0") {
-      setNeedsRefresh(true);
-      setOnboardingIncomplete(true);
-      setRefreshStep("payment");
+    const clearRefreshParam = () => {
       try {
         const url = new URL(window.location.href);
         url.searchParams.delete("refresh_paid");
@@ -1769,8 +1715,91 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       } catch {
         /* ignore */
       }
+    };
+
+    // Post-checkout return. The progressive "matching" flow is ONLY for members
+    // who were genuinely mid-signup. Established members returning from a payment
+    // attempt (paid or not) go back to the normal update-details form and must
+    // never be pushed into the signup / matching steps.
+    if (refreshPaid === "1" || (awaiting && refreshPaid !== "0")) {
+      if (!midSignupRef.current) {
+        clearAwaitingPostPaymentMatching();
+        clearRefreshParam();
+        void (async () => {
+          // Verify the payment server-side (safe for established members — it never
+          // advances onboarding), then reflect billing. No matching step.
+          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+            method: "POST",
+            token,
+            body: JSON.stringify({}),
+          }).catch(() => undefined);
+          await refreshBilling(token);
+        })();
+      } else {
+        void (async () => {
+          setRefreshBusy(true);
+          setNeedsRefresh(true);
+          setOnboardingIncomplete(true);
+          scrollDetailsToTop();
+          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+            method: "POST",
+            token,
+            body: JSON.stringify({}),
+          }).catch(() => undefined);
+          // Poll briefly for Paid/Active like signup
+          let confirmed = false;
+          for (let i = 0; i < 15; i++) {
+            try {
+              if (i > 0 && i % 3 === 0) {
+                await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+                  method: "POST",
+                  token,
+                  body: JSON.stringify({}),
+                }).catch(() => undefined);
+              }
+              const st = await api(props.apiBase, "/api/onboarding/payment-status", {
+                token,
+              });
+              if (st.paymentConfirmed) {
+                confirmed = true;
+                break;
+              }
+            } catch {
+              /* retry */
+            }
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+          const bill = await api(props.apiBase, "/api/member/billing-status", { token });
+          applyBillingPayload(bill.billing);
+          if (confirmed) {
+            clearAwaitingPostPaymentMatching();
+            setPaymentConfirmed(true);
+            setOnboardingIncomplete(true);
+            setNeedsRefresh(true);
+            setRefreshStep("goal");
+            setOk("Payment confirmed; a few matching questions and you're fully set.");
+          } else {
+            setRefreshStep("payment");
+            setError(
+              "We’re still confirming your payment with Stripe. Stay on this page a moment, then continue."
+            );
+          }
+          clearRefreshParam();
+          if (mountedRef.current) setRefreshBusy(false);
+        })();
+      }
+    } else if (refreshPaid === "0") {
+      // Cancelled checkout — never force the progressive flow for established members.
+      clearAwaitingPostPaymentMatching();
+      clearRefreshParam();
+      if (midSignupRef.current) {
+        setNeedsRefresh(true);
+        setRefreshStep("payment");
+      } else {
+        void refreshBilling(token);
+      }
     }
-  }, [token, props.apiBase, memberId, sessionId]);
+  }, [token, loading, props.apiBase, memberId, sessionId]);
 
   if (loading) {
     return (
