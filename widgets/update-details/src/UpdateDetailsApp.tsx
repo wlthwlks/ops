@@ -1163,9 +1163,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         successUrl: `${base}?refresh_paid=1`,
         cancelUrl: `${base}?refresh_paid=0`,
       });
-      // Popup closed without navigation. confirm-checkout only writes when Stripe
-      // proves a real recent payment — safe for established resubscribe + mid-signup.
-      // Cancel/no-pay returns leave access unchanged (verifiedPaid=false path).
+      // Popup closed without navigation.
+      // Mid-signup: confirm-checkout may advance payment when Stripe proves pay.
+      // Established resubscribe: NEVER call confirm-checkout here — back/cancel must
+      // not extend Service access until. Real pay is applied by invoice.paid webhook.
       if (onboardingIncomplete) {
         await api(props.apiBase, "/api/onboarding/confirm-checkout", {
           method: "POST",
@@ -1181,13 +1182,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           goAfterPaymentToMatching();
         }
       } else {
-        // Established resubscribe: try confirm once (access + cancel clear on verified pay),
-        // then poll webhook/billing until active or give up and keep Subscribe again.
-        await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-          method: "POST",
-          token,
-          body: JSON.stringify({}),
-        }).catch(() => undefined);
         for (let i = 0; i < 8; i++) {
           const b = await refreshBilling(token);
           const ui = String(b?.uiState ?? "").trim();
@@ -1755,31 +1749,20 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       (memberstackReturned && msStripePriceId.startsWith("price_"));
 
     // Post-checkout return. Progressive "matching" is ONLY for mid-signup.
-    // Established members stay on the normal update-details form.
-    // Paid signal → confirm-checkout (writes access only when Stripe verifies pay).
-    // Cancel/ambiguous → never confirm-checkout; poll only; keep Subscribe again.
+    // Established members stay on the normal form and NEVER call confirm-checkout
+    // (it can re-apply historical invoices / sub period ends and extend access
+    // without a new payment — e.g. Back from Stripe Checkout/Portal).
+    // Real pay for established members is applied only by invoice.paid webhook.
     if (paidReturn) {
       clearAwaitingPostPaymentMatching();
       clearCheckoutParams();
       if (!midSignupRef.current) {
         void (async () => {
-          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-            method: "POST",
-            token,
-            body: JSON.stringify({}),
-          }).catch(() => undefined);
           for (let i = 0; i < 8; i++) {
             const b = await refreshBilling(token);
             const ui = String(b?.uiState ?? "").trim();
             const pay = String(b?.payment ?? "").toLowerCase();
             if (ui === "active" || pay === "paid") break;
-            if (i > 0 && i % 3 === 0) {
-              await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-                method: "POST",
-                token,
-                body: JSON.stringify({}),
-              }).catch(() => undefined);
-            }
             await new Promise((r) => setTimeout(r, 2000));
           }
         })();

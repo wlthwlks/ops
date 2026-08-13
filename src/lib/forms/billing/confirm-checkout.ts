@@ -39,8 +39,11 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  * previously-cancelled member with an old paid invoice / stale active
  * subscription would be incorrectly revived and have "Service access until"
  * extended.
+ *
+ * Keep this tight: Back from Checkout/Portal often re-triggers confirm-checkout
+ * without a new charge. A multi-hour window re-applies the last period invoice.
  */
-const RECENT_PAYMENT_WINDOW_SEC = 2 * 60 * 60; // 2 hours
+const RECENT_PAYMENT_WINDOW_SEC = 15 * 60; // 15 minutes
 
 export function isRecentStripeTimestamp(
   unixSeconds: number | null | undefined,
@@ -54,6 +57,20 @@ function invoicePaidAtUnix(inv: Stripe.Invoice): number | null {
   const t = inv.status_transitions;
   if (t && typeof t.paid_at === "number") return t.paid_at;
   return null;
+}
+
+/** True when the invoice actually collected money (or is $0 trial with paid status). */
+function invoiceLooksLikeRealCharge(inv: Stripe.Invoice): boolean {
+  // amount_paid can be 0 for 100% off / trial — still a completed invoice.paid.
+  // Reject drafts / open / void that somehow appear in list.
+  if (inv.status !== "paid") return false;
+  const paid = typeof inv.amount_paid === "number" ? inv.amount_paid : null;
+  // Prefer positive charge; allow 0 only when total is also 0 (free/trial).
+  if (paid != null && paid > 0) return true;
+  const total = typeof inv.total === "number" ? inv.total : null;
+  if (paid === 0 && total === 0) return true;
+  // amount_paid missing — require paid_at in window (caller already checks recent).
+  return paid == null;
 }
 
 /**
@@ -445,6 +462,8 @@ export async function confirmCheckoutForMember(input: {
   let subscriptionStatus = "";
   let priceIds: string[] = [];
   let paidThrough: Date | null = null;
+  /** Only invoice-derived paid-through may extend Service access until. */
+  let paidThroughFromRecentInvoice = false;
   let verifiedPaid = false;
   let ownershipMethod = "";
   let qualificationMode = "";
@@ -606,6 +625,7 @@ export async function confirmCheckoutForMember(input: {
         // Only treat a paid invoice as evidence of a NEW payment when it was paid
         // recently. Historical paid invoices must not revive an expired member.
         if (!isRecentStripeTimestamp(invoicePaidAtUnix(inv))) continue;
+        if (!invoiceLooksLikeRealCharge(inv)) continue;
         const lines = await listAllInvoiceLines(stripe, inv.id);
 
         const rawPrices: string[] = [];
@@ -635,6 +655,7 @@ export async function confirmCheckoutForMember(input: {
           if (through && q.length > 0) {
             verifiedPaid = true;
             paidThrough = through;
+            paidThroughFromRecentInvoice = true;
             priceIds = q;
             qualificationMode = "native_allowlist";
             break;
@@ -647,7 +668,10 @@ export async function confirmCheckoutForMember(input: {
               maxEnd = end;
             }
           }
-          if (maxEnd != null) paidThrough = new Date(maxEnd * 1000);
+          if (maxEnd != null) {
+            paidThrough = new Date(maxEnd * 1000);
+            paidThroughFromRecentInvoice = true;
+          }
           verifiedPaid = true;
           priceIds = gate.qualifying;
           qualificationMode = gate.mode;
@@ -655,7 +679,10 @@ export async function confirmCheckoutForMember(input: {
         }
       }
 
-      // Active subscription
+      // Recently created active subscription can confirm payment status for signup
+      // progress, but must NOT set Service access until (that needs a paid invoice
+      // or a paid Checkout Session). Prevents Back-from-portal from extending access
+      // using an old sub's current_period_end.
       if (!verifiedPaid || priceIds.length === 0) {
         const subs = await stripe.subscriptions.list({
           customer: stripeCustomerId,
@@ -683,19 +710,7 @@ export async function confirmCheckoutForMember(input: {
             verifiedPaid = true;
             priceIds = dedupePriceIds([...priceIds, ...gate.qualifying]);
             qualificationMode = gate.mode;
-            const itemEnd = pick.items?.data?.[0]?.current_period_end;
-            const top = (pick as unknown as { current_period_end?: number })
-              .current_period_end;
-            const unix =
-              typeof itemEnd === "number"
-                ? itemEnd
-                : typeof top === "number"
-                  ? top
-                  : null;
-            if (typeof unix === "number" && unix > 0) {
-              const end = new Date(unix * 1000);
-              if (!paidThrough || end > paidThrough) paidThrough = end;
-            }
+            // Intentionally do not set paidThrough from sub period end here.
           }
         }
       }
@@ -706,7 +721,13 @@ export async function confirmCheckoutForMember(input: {
     try {
       const live = await loadSubscriptionBilling(stripe, subscriptionId);
       subscriptionStatus = live.status || subscriptionStatus;
-      if (live.periodEnd && (!paidThrough || live.periodEnd > paidThrough)) {
+      // Session path may use sub period end only when Checkout Session was paid
+      // (sessionId path already set verifiedPaid from payment_status=paid).
+      if (
+        sessionId.startsWith("cs_") &&
+        live.periodEnd &&
+        (!paidThrough || live.periodEnd > paidThrough)
+      ) {
         paidThrough = live.periodEnd;
       }
       if (live.priceIds.length > 0) {
@@ -718,7 +739,10 @@ export async function confirmCheckoutForMember(input: {
         if (gate.ok) {
           priceIds = dedupePriceIds([...priceIds, ...gate.qualifying]);
           qualificationMode = qualificationMode || gate.mode;
-          if (["active", "trialing", "past_due"].includes(live.status)) {
+          if (
+            sessionId.startsWith("cs_") &&
+            ["active", "trialing", "past_due"].includes(live.status)
+          ) {
             verifiedPaid = true;
           }
         }
@@ -827,10 +851,16 @@ export async function confirmCheckoutForMember(input: {
   if (configuredPlan || primaryPriceId) {
     patch[MEMBER_FIELDS.memberstackPlanId] = configuredPlan || primaryPriceId;
   }
-  // Only on verified paid: extend access + clear stale cancel so resubscribe UI heals.
+  // Clear cancel only when we proved a real payment (session paid or recent invoice/sub).
   patch[MEMBER_FIELDS.cancelAtPeriodEnd] = false;
   patch[MEMBER_FIELDS.cancellationEffectiveAt] = "";
-  if (paidThrough) {
+  // Extend Service access until only from a recent paid invoice, or from a paid
+  // Checkout Session's subscription period. Never from bare sub period end on
+  // recovery (Back from portal must not push access forward).
+  const mayWriteAccess =
+    paidThrough != null &&
+    (paidThroughFromRecentInvoice || sessionId.startsWith("cs_"));
+  if (mayWriteAccess && paidThrough) {
     patch[MEMBER_FIELDS.serviceAccessUntil] = paidThrough.toISOString().slice(0, 10);
   }
 
