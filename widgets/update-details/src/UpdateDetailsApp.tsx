@@ -1916,53 +1916,71 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
           {refreshStep === "payment" && (
             <div className="wlth-pay-hero">
-              <h2>Activate your membership</h2>
-              <p>
-                {billing?.hasPaymentMethod
-                  ? "Confirm membership with the card already on file, then we’ll finish your matching preferences."
-                  : "Complete a secure Stripe checkout, then a few matching questions so introductions stay relevant."}
-              </p>
-              <div className="wlth-benefits">
-                <p className="wlth-benefit">
-                  <strong>Secure payment</strong>
-                  Powered by Stripe. We never store your full card details on WLTH WLKS.
-                </p>
-                <p className="wlth-benefit">
-                  <strong>Then matching</strong>
-                  After payment you’ll shape the introductions that can move you forward.
-                </p>
-              </div>
-              <div className="wlth-actions">
-                <button
-                  type="button"
-                  className="wlth-btn-secondary"
-                  onClick={() => setRefreshStep("business")}
-                >
-                  Back
-                </button>
-                {billing?.hasPaymentMethod ? (
-                  <button
-                    type="button"
-                    className="wlth-btn-primary"
-                    disabled={refreshBusy}
-                    onClick={() => void reactivateFromRefreshPayment()}
-                  >
-                    Activate with card on file
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="wlth-btn-primary"
-                    disabled={refreshBusy}
-                    onClick={() => void startRefreshCheckout()}
-                  >
-                    Continue to secure checkout
-                  </button>
-                )}
-              </div>
-              <p className="wlth-trust">
-                You can manage or cancel anytime from membership settings.
-              </p>
+              {membershipDisplay.showBanner ? (
+                <>
+                  {/* Reactivation banner (membershipBannerEl above) already shows
+                      the reactivation + Manage billing buttons. Only keep Back. */}
+                  <div className="wlth-actions" style={{ marginTop: 16 }}>
+                    <button
+                      type="button"
+                      className="wlth-btn-secondary"
+                      onClick={() => setRefreshStep("business")}
+                    >
+                      Back
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h2>Activate your membership</h2>
+                  <p>
+                    {billing?.hasPaymentMethod
+                      ? "Confirm membership with the card already on file, then we’ll finish your matching preferences."
+                      : "Complete a secure Stripe checkout, then a few matching questions so introductions stay relevant."}
+                  </p>
+                  <div className="wlth-benefits">
+                    <p className="wlth-benefit">
+                      <strong>Secure payment</strong>
+                      Powered by Stripe. We never store your full card details on WLTH WLKS.
+                    </p>
+                    <p className="wlth-benefit">
+                      <strong>Then matching</strong>
+                      After payment you’ll shape the introductions that can move you forward.
+                    </p>
+                  </div>
+                  <div className="wlth-actions">
+                    <button
+                      type="button"
+                      className="wlth-btn-secondary"
+                      onClick={() => setRefreshStep("business")}
+                    >
+                      Back
+                    </button>
+                    {billing?.hasPaymentMethod ? (
+                      <button
+                        type="button"
+                        className="wlth-btn-primary"
+                        disabled={refreshBusy}
+                        onClick={() => void reactivateFromRefreshPayment()}
+                      >
+                        Activate with card on file
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="wlth-btn-primary"
+                        disabled={refreshBusy}
+                        onClick={() => void startRefreshCheckout()}
+                      >
+                        Continue to secure checkout
+                      </button>
+                    )}
+                  </div>
+                  <p className="wlth-trust">
+                    You can manage or cancel anytime from membership settings.
+                  </p>
+                </>
+              )}
             </div>
           )}
 
