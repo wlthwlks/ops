@@ -1156,19 +1156,25 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         successUrl: `${base}?refresh_paid=1`,
         cancelUrl: `${base}?refresh_paid=0`,
       });
-      // Popup closed without navigation — try confirm, then matching if paid
-      await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-        method: "POST",
-        token,
-        body: JSON.stringify({}),
-      }).catch(() => undefined);
-      const st = await api(props.apiBase, "/api/onboarding/status", { token }).catch(
-        () => null
-      );
-      const bill = await api(props.apiBase, "/api/member/billing-status", { token });
-      applyBillingPayload(bill.billing);
-      if (st && st.paymentConfirmed) {
-        goAfterPaymentToMatching();
+      // Popup closed without navigation. Only confirm-checkout for genuinely
+      // mid-signup members (it advances payment state). Established members must
+      // not be revived — just reflect billing via the webhook reconciliation.
+      if (onboardingIncomplete) {
+        await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+          method: "POST",
+          token,
+          body: JSON.stringify({}),
+        }).catch(() => undefined);
+        const st = await api(props.apiBase, "/api/onboarding/status", { token }).catch(
+          () => null
+        );
+        const bill = await api(props.apiBase, "/api/member/billing-status", { token });
+        applyBillingPayload(bill.billing);
+        if (st && st.paymentConfirmed) {
+          goAfterPaymentToMatching();
+        }
+      } else {
+        await refreshBilling(token);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
@@ -1723,18 +1729,12 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     // never be pushed into the signup / matching steps.
     if (refreshPaid === "1" || (awaiting && refreshPaid !== "0")) {
       if (!midSignupRef.current) {
+        // Established member: do NOT re-confirm checkout. confirm-checkout has
+        // write side-effects (revives Paid/Active from historical invoices), and
+        // the Stripe webhook already reconciles real payments. Just refresh.
         clearAwaitingPostPaymentMatching();
         clearRefreshParam();
-        void (async () => {
-          // Verify the payment server-side (safe for established members — it never
-          // advances onboarding), then reflect billing. No matching step.
-          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-            method: "POST",
-            token,
-            body: JSON.stringify({}),
-          }).catch(() => undefined);
-          await refreshBilling(token);
-        })();
+        void refreshBilling(token);
       } else {
         void (async () => {
           setRefreshBusy(true);
