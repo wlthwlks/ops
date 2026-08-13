@@ -161,97 +161,6 @@ describe("normalizeSocialUrl", () => {
       if (r.ok) expect(r.url).toBe("https://www.instagram.com/person");
     });
   });
-
-  describe("x / twitter", () => {
-    it("accepts x.com/username", () => {
-      const r = normalizeSocialUrl("x", "x.com/user123");
-      expect(r.ok).toBe(true);
-      if (r.ok) expect(r.url).toBe("https://x.com/user123");
-    });
-
-    it("accepts twitter.com/username", () => {
-      const r = normalizeSocialUrl("x", "twitter.com/user123");
-      expect(r.ok).toBe(true);
-      if (r.ok) expect(r.url).toBe("https://x.com/user123");
-    });
-  });
-
-  describe("threads", () => {
-    it("accepts threads.net/@username", () => {
-      const r = normalizeSocialUrl("threads", "threads.net/@username");
-      expect(r.ok).toBe(true);
-      if (r.ok) expect(r.url).toBe("https://www.threads.net/@username");
-    });
-
-    it("adds @ prefix when missing", () => {
-      const r = normalizeSocialUrl("threads", "https://threads.net/username");
-      expect(r.ok).toBe(true);
-      if (r.ok) expect(r.url).toContain("/@username");
-    });
-  });
-
-  describe("facebook", () => {
-    it("accepts facebook.com/username", () => {
-      const r = normalizeSocialUrl("facebook", "facebook.com/profile.name");
-      expect(r.ok).toBe(true);
-      if (r.ok) expect(r.url).toBe("https://www.facebook.com/profile.name");
-    });
-  });
-
-  describe("youtube", () => {
-    it("accepts @channel", () => {
-      const r = normalizeSocialUrl("youtube", "youtube.com/@mychannel");
-      expect(r.ok).toBe(true);
-      if (r.ok) expect(r.url).toContain("@mychannel");
-    });
-
-    it("accepts channel/ID form", () => {
-      const r = normalizeSocialUrl("youtube", "youtube.com/channel/UC123");
-      expect(r.ok).toBe(true);
-    });
-
-    it("accepts c/ form", () => {
-      const r = normalizeSocialUrl("youtube", "youtube.com/c/mycompany");
-      expect(r.ok).toBe(true);
-    });
-
-    it("accepts user/ form", () => {
-      const r = normalizeSocialUrl("youtube", "youtube.com/user/myuser");
-      expect(r.ok).toBe(true);
-    });
-
-    it("accepts youtu.be short URL", () => {
-      const r = normalizeSocialUrl("youtube", "https://youtu.be/mychannel");
-      expect(r.ok).toBe(true);
-    });
-  });
-
-  describe("tiktok", () => {
-    it("accepts tiktok.com/@username", () => {
-      const r = normalizeSocialUrl("tiktok", "tiktok.com/@username");
-      expect(r.ok).toBe(true);
-      if (r.ok) expect(r.url).toBe("https://www.tiktok.com/@username");
-    });
-
-    it("adds @ when missing", () => {
-      const r = normalizeSocialUrl("tiktok", "https://tiktok.com/username");
-      expect(r.ok).toBe(true);
-      if (r.ok) expect(r.url).toContain("/@username");
-    });
-  });
-
-  describe("other", () => {
-    it("accepts any valid URL", () => {
-      const r = normalizeSocialUrl("other", "https://myblog.com/about");
-      expect(r.ok).toBe(true);
-      if (r.ok) expect(r.url).toBe("https://myblog.com/about");
-    });
-
-    it("rejects unsafe protocols", () => {
-      const r = normalizeSocialUrl("other", "javascript:void(0)");
-      expect(r.ok).toBe(false);
-    });
-  });
 });
 
 describe("serializeSocialMediaField / parseSocialMediaField", () => {
@@ -335,10 +244,11 @@ describe("isSocialPlatform", () => {
   it("returns true for valid platforms", () => {
     expect(isSocialPlatform("linkedin")).toBe(true);
     expect(isSocialPlatform("instagram")).toBe(true);
-    expect(isSocialPlatform("other")).toBe(true);
   });
 
   it("returns false for invalid platforms", () => {
+    expect(isSocialPlatform("other")).toBe(false);
+    expect(isSocialPlatform("x")).toBe(false);
     expect(isSocialPlatform("myspace")).toBe(false);
     expect(isSocialPlatform("")).toBe(false);
   });

@@ -168,8 +168,14 @@ export const expertiseSchema = z.object({
   expertiseContext: z.string().trim().max(400).optional(),
 });
 
+export const socialLinkSchema = z.object({
+  platform: z.string().trim().min(1).max(20),
+  url: z.string().trim().max(500),
+});
+
 export const connectionSchema = z.object({
   connectionType: z.enum(connectionCodes),
+  socialLinks: z.array(socialLinkSchema).optional(),
 });
 
 export const attributionSchema = z.object({
@@ -219,11 +225,6 @@ export const bootstrapSchema = z.object({
     .email()
     .transform((e) => e.toLowerCase()),
   attribution: attributionSchema.optional(),
-});
-
-export const socialLinkSchema = z.object({
-  platform: z.string().trim().min(1).max(20),
-  url: z.string().trim().max(500),
 });
 
 export const updateProfileSchema = withPhoneValidation(

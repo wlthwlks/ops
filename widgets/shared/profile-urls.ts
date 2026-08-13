@@ -5,12 +5,6 @@
 export const SOCIAL_PLATFORMS = [
   "linkedin",
   "instagram",
-  "x",
-  "threads",
-  "facebook",
-  "youtube",
-  "tiktok",
-  "other",
 ] as const;
 
 export type SocialPlatform = (typeof SOCIAL_PLATFORMS)[number];
@@ -23,24 +17,12 @@ export type SocialLink = {
 export const SOCIAL_PLATFORM_LABELS: Record<SocialPlatform, string> = {
   linkedin: "LinkedIn",
   instagram: "Instagram",
-  x: "X / Twitter",
-  threads: "Threads",
-  facebook: "Facebook",
-  youtube: "YouTube",
-  tiktok: "TikTok",
-  other: "Other link",
 };
 
 /** Platforms shown in the "+ Add another" picker (LinkedIn first). */
 export const ADDABLE_SOCIAL_PLATFORMS: SocialPlatform[] = [
   "linkedin",
   "instagram",
-  "x",
-  "threads",
-  "facebook",
-  "youtube",
-  "tiktok",
-  "other",
 ];
 
 const BLOCKED_PROTOCOLS = /^(javascript|data|file|vbscript|blob):/i;
@@ -119,7 +101,7 @@ type PlatformRule = {
   ensureAtUser?: boolean;
 };
 
-const PLATFORM_RULES: Record<Exclude<SocialPlatform, "other">, PlatformRule> = {
+const PLATFORM_RULES: Record<SocialPlatform, PlatformRule> = {
   linkedin: {
     hosts: ["linkedin.com", "www.linkedin.com"],
     pathPatterns: [/^\/in\/[^/]+/i, /^\/company\/[^/]+/i, /^\/school\/[^/]+/i],
@@ -129,44 +111,6 @@ const PLATFORM_RULES: Record<Exclude<SocialPlatform, "other">, PlatformRule> = {
     hosts: ["instagram.com", "www.instagram.com"],
     pathPatterns: [/^\/[A-Za-z0-9._]+\/?$/],
     canonicalHost: "www.instagram.com",
-  },
-  x: {
-    hosts: ["x.com", "www.x.com", "twitter.com", "www.twitter.com"],
-    pathPatterns: [/^\/[A-Za-z0-9_]+\/?$/],
-    canonicalHost: "x.com",
-  },
-  threads: {
-    hosts: ["threads.net", "www.threads.net"],
-    pathPatterns: [/^\/@?[A-Za-z0-9._]+\/?$/],
-    canonicalHost: "www.threads.net",
-    ensureAtUser: true,
-  },
-  facebook: {
-    hosts: ["facebook.com", "www.facebook.com", "fb.com", "www.fb.com", "m.facebook.com"],
-    pathPatterns: [
-      /^\/[A-Za-z0-9.]+\/?$/,
-      /^\/profile\.php/i,
-      /^\/pages\//i,
-      /^\/groups\//i,
-    ],
-    canonicalHost: "www.facebook.com",
-  },
-  youtube: {
-    hosts: ["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"],
-    pathPatterns: [
-      /^\/@[A-Za-z0-9._-]+/i,
-      /^\/channel\/[A-Za-z0-9_-]+/i,
-      /^\/c\/[A-Za-z0-9._-]+/i,
-      /^\/user\/[A-Za-z0-9._-]+/i,
-      /^\/[A-Za-z0-9._-]+\/?$/,
-    ],
-    canonicalHost: "www.youtube.com",
-  },
-  tiktok: {
-    hosts: ["tiktok.com", "www.tiktok.com", "vm.tiktok.com"],
-    pathPatterns: [/^\/@?[A-Za-z0-9._]+/i],
-    canonicalHost: "www.tiktok.com",
-    ensureAtUser: true,
   },
 };
 
@@ -189,10 +133,6 @@ export function normalizeSocialUrl(
   const input = trimInput(raw);
   if (!input) return { ok: true, url: "" };
 
-  if (platform === "other") {
-    return normalizeHttpUrl(input, { fieldLabel: "profile link", maxLength: 500 });
-  }
-
   const rule = PLATFORM_RULES[platform];
   const base = normalizeHttpUrl(input, {
     fieldLabel: SOCIAL_PLATFORM_LABELS[platform],
@@ -212,7 +152,7 @@ export function normalizeSocialUrl(
     return { ok: false, message: friendlyPlatformError(platform) };
   }
 
-  if (platform === "instagram" || platform === "facebook") {
+  if (platform === "instagram") {
     parsed.search = "";
     parsed.hash = "";
   }

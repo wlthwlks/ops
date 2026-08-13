@@ -165,6 +165,14 @@ export const expertiseFormSchema = z.object({
 
 export const connectionFormSchema = z.object({
   connectionType: z.string().min(1, "Select a connection type"),
+  socialLinks: z
+    .array(
+      z.object({
+        platform: z.string().trim().min(1).max(20),
+        url: z.string().trim().max(500),
+      })
+    )
+    .optional(),
 });
 
 export const communityIntentionSchema = z.object({

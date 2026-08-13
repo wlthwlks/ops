@@ -1606,6 +1606,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       }
       const bill = await api(props.apiBase, "/api/member/billing-status", { token });
       applyBillingPayload(bill.billing);
+      // If we're in the progressive signup flow, move forward to matching.
+      if (needsRefresh && refreshStep === "payment") {
+        goAfterPaymentToMatching();
+      }
     } catch (e) {
       const werr = e as WidgetApiError;
       // Do not treat "cancel" in error copy as user-aborted portal close

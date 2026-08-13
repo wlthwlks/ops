@@ -19,6 +19,11 @@ import {
 } from "@/lib/forms/reference-data";
 import { normalizePostCode } from "@/lib/forms/reference-data/country-phone";
 import { syncMemberstackCustomFields } from "@/lib/forms/memberstack/custom-fields";
+import {
+  normalizeSocialUrl,
+  findDuplicateSocialPlatforms,
+  serializeSocialMediaField,
+} from "@/lib/forms/validation/profile-urls";
 
 export const runtime = "nodejs";
 
@@ -241,13 +246,35 @@ async function stepDataToAirtablePatch(
         },
         msFields: {},
       };
-    case "CONNECTION":
-      return {
-        patch: {
-          [MEMBER_FIELDS.connectionType]: data.connectionType,
-        },
-        msFields: {},
+    case "CONNECTION": {
+      const patch: Record<string, unknown> = {
+        [MEMBER_FIELDS.connectionType]: data.connectionType,
       };
+      if (Array.isArray(data.socialLinks)) {
+        const dupe = findDuplicateSocialPlatforms(data.socialLinks);
+        if (dupe) {
+          throw new FormsError(
+            "PROFILE_VALIDATION_FAILED",
+            `Duplicate social platform: ${dupe}`,
+            { status: 400, details: { fieldErrors: { socialLinks: [`Duplicate social platform: ${dupe}`] }, formErrors: [] } }
+          );
+        }
+        const validLinks: Array<{ platform: string; url: string }> = [];
+        for (const link of data.socialLinks) {
+          const result = normalizeSocialUrl(link.platform, link.url);
+          if (!result.ok) {
+            throw new FormsError(
+              "PROFILE_VALIDATION_FAILED",
+              result.message,
+              { status: 400, details: { fieldErrors: { socialLinks: [result.message] }, formErrors: [] } }
+            );
+          }
+          if (result.url) validLinks.push({ platform: link.platform, url: result.url });
+        }
+        patch[MEMBER_FIELDS.socialMedia] = serializeSocialMediaField(validLinks as never);
+      }
+      return { patch, msFields: {} };
+    }
     default:
       return { patch: {}, msFields: {} };
   }
