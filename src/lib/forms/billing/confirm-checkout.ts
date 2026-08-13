@@ -299,6 +299,16 @@ function subscriptionPeriodEnd(sub: Stripe.Subscription): Date | null {
   return new Date(unix * 1000);
 }
 
+/** Prefer later of current paidThrough vs candidate (avoids TS never on null narrow). */
+function preferLaterPaidThrough(
+  current: Date | null,
+  candidate: Date | null
+): Date | null {
+  if (!candidate) return current;
+  if (!current) return candidate;
+  return candidate.getTime() > current.getTime() ? candidate : current;
+}
+
 async function loadSubscriptionBilling(
   stripe: Stripe,
   subscriptionId: string
@@ -538,9 +548,7 @@ export async function confirmCheckoutForMember(input: {
           if (priceIds.length === 0) priceIds = live.priceIds;
           subscriptionStatus = live.status || subscriptionStatus;
           // Paid Checkout Session → period end is the new Service access until.
-          if (live.periodEnd && (!paidThrough || live.periodEnd > paidThrough)) {
-            paidThrough = live.periodEnd;
-          }
+          paidThrough = preferLaterPaidThrough(paidThrough, live.periodEnd);
         } catch {
           /* keep */
         }
@@ -699,8 +707,10 @@ export async function confirmCheckoutForMember(input: {
             priceIds = dedupePriceIds([...priceIds, ...gate.qualifying]);
             qualificationMode = gate.mode;
             // New resubscribe charge: write Service access until from period end.
-            const end = subscriptionPeriodEnd(pick);
-            if (end && (!paidThrough || end > paidThrough)) paidThrough = end;
+            paidThrough = preferLaterPaidThrough(
+              paidThrough,
+              subscriptionPeriodEnd(pick)
+            );
           }
         }
       }
@@ -711,11 +721,9 @@ export async function confirmCheckoutForMember(input: {
     try {
       const live = await loadSubscriptionBilling(stripe, subscriptionId);
       subscriptionStatus = live.status || subscriptionStatus;
-      if (live.periodEnd && (!paidThrough || live.periodEnd > paidThrough)) {
-        // Only attach period end when this path already verified a payment
-        // (session paid / recent invoice / recent sub) — filled after verifiedPaid below too.
-        paidThrough = live.periodEnd;
-      }
+      // Attach period end when this path already verified a payment
+      // (session paid / recent invoice / recent sub).
+      paidThrough = preferLaterPaidThrough(paidThrough, live.periodEnd);
       if (live.priceIds.length > 0) {
         const gate = passesPriceGate({
           priceIds: live.priceIds,
