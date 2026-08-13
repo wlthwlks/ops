@@ -646,6 +646,24 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         ? String(billing.cancellationEffectiveAt).slice(0, 10)
         : "");
 
+    // Full datetime for precise expiry check (serviceAccessUntil may include time).
+    const accessUntilRaw = (billing.serviceAccessUntil || "").trim();
+    const accessUntilFullIso =
+      accessUntilRaw &&
+      !Number.isNaN(
+        Date.parse(
+          accessUntilRaw.length <= 10
+            ? `${accessUntilRaw}T23:59:59.999Z`
+            : accessUntilRaw
+        )
+      )
+        ? Date.parse(
+            accessUntilRaw.length <= 10
+              ? `${accessUntilRaw}T23:59:59.999Z`
+              : accessUntilRaw
+          )
+        : null;
+
     const ui = (billing.uiState || "").trim();
     const mem = (billing.membership || "").toLowerCase();
     const pay = (billing.payment || "").toLowerCase();
@@ -660,6 +678,11 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       ) &&
       Date.parse(endsOn.length <= 10 ? `${endsOn}T23:59:59.999Z` : endsOn) >= Date.now();
 
+    // If serviceAccessUntil (with time) has already passed, treat as expired
+    // regardless of cancelAtPeriodEnd flag — access is gone.
+    const accessHasPassed =
+      accessUntilFullIso != null && accessUntilFullIso <= Date.now();
+
     if (
       billing.cancelAtPeriodEnd ||
       ui === "cancellation_scheduled" ||
@@ -667,6 +690,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         (mem === "active" || mem === "cancelled" || mem === "canceled") &&
         Boolean(billing.cancellationEffectiveAt || billing.accessUntilLabel))
     ) {
+      // If access has already expired (datetime <= now), show expired — not scheduled.
+      if (accessHasPassed) {
+        return { showBanner: true, kind: "expired" as const, endsOn };
+      }
       // Only treat future-end Active as scheduled cancel when we also have a cancel signal
       // (cancel flag OR cancellationEffectiveAt OR uiState). Avoid false positives on normal renewals.
       if (
@@ -770,18 +797,29 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           <>
             <h3>Your membership has ended</h3>
             <p className="wlth-muted" style={{ marginBottom: 12 }}>
-              Your paid access has expired. Resubscribe charges the card on file when available.
+              Your paid access has expired. Subscribe again to restore full membership.
               Use Manage billing to add or change cards.
             </p>
             <div className="wlth-actions">
-              <button
-                type="button"
-                className="wlth-btn-primary"
-                disabled={reactivating}
-                onClick={() => void reactivateMembership()}
-              >
-                {reactivating ? "Resubscribing…" : "Resubscribe"}
-              </button>
+              {billing?.hasPaymentMethod ? (
+                <button
+                  type="button"
+                  className="wlth-btn-primary"
+                  disabled={reactivating}
+                  onClick={() => void reactivateMembership()}
+                >
+                  {reactivating ? "Resubscribing…" : "Resubscribe"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="wlth-btn-primary"
+                  disabled={reactivating}
+                  onClick={() => void startRefreshCheckout()}
+                >
+                  Continue to secure checkout
+                </button>
+              )}
               <button
                 type="button"
                 className="wlth-btn-secondary"
@@ -1920,7 +1958,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
           {refreshStep === "payment" && (
             <div className="wlth-pay-hero">
-              {membershipDisplay.showBanner ? (
+              {membershipDisplay.showBanner && membershipDisplay.kind !== "expired" ? (
                 <>
                   {/* Reactivation banner (membershipBannerEl above) already shows
                       the reactivation + Manage billing buttons. Only keep Back. */}
