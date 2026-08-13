@@ -6,9 +6,9 @@
 import type Stripe from "stripe";
 import {
   getStripeClient,
-  getConfiguredMembershipPriceIds,
   getConfiguredMemberstackPlanId,
 } from "@/lib/integrations/stripe";
+import { calculateStripeEntitlement } from "@/lib/billing/stripe-entitlement";
 import {
   applyTrustedPaymentByMemberstackId,
   findMemberByMemberstackId,
@@ -74,33 +74,16 @@ function failResult(
   };
 }
 
-async function resolveStripePriceId(
-  stripe: Stripe,
-  customerId: string
-): Promise<string> {
-  const configured = [...getConfiguredMembershipPriceIds()].filter((id) =>
-    id.startsWith("price_")
-  );
-  if (configured[0]) return configured[0];
+/**
+ * Price used whenever a NEW membership/subscription is created (rejoin path).
+ * Must be the current Stripe `price_…`; never a legacy/grandfathered price.
+ * The old allowlist (`STRIPE_MEMBERSHIP_PRICE_IDS`) is intentionally NOT used
+ * here — it may contain legacy prices old members are still paying.
+ */
+function resolveStripePriceId(): string {
   const envPrice = (process.env.STRIPE_REACTIVATION_PRICE_ID || "").trim();
   if (envPrice.startsWith("price_")) return envPrice;
-
-  const subs = await stripe.subscriptions.list({
-    customer: customerId,
-    status: "all",
-    limit: 15,
-  });
-  for (const sub of subs.data) {
-    const pid = sub.items.data[0]?.price?.id;
-    if (pid?.startsWith("price_")) return pid;
-  }
-
-  const prices = await stripe.prices.list({ active: true, limit: 30 });
-  const preferred =
-    prices.data.find((p) => p.unit_amount === 4500) ||
-    prices.data.find((p) => p.unit_amount === 1500) ||
-    prices.data[0];
-  return preferred?.id?.startsWith("price_") ? preferred.id : "";
+  return "";
 }
 
 /** True when Stripe customer has a usable default or listed card. */
@@ -165,6 +148,66 @@ function isScheduledCancel(s: Stripe.Subscription): boolean {
   if (s.cancel_at_period_end) return true;
   if (typeof s.cancel_at === "number" && s.cancel_at * 1000 > Date.now()) return true;
   return false;
+}
+
+/**
+ * A member whose membership payment was fully refunded loses grandfathered
+ * pricing: they must NOT reverse an old cancellation and recover the old price.
+ *
+ * Primary signal is the Airtable Payment=Refunded state written by the Stripe
+ * webhook on `charge.refunded`. We strengthen it with live Stripe data (the
+ * most recent qualifying membership payment is fully refunded) so a missed
+ * webhook still cannot silently recover an old price.
+ */
+function paymentFieldIsRefunded(fields: Record<string, unknown>): boolean {
+  return fieldStr(fields, MEMBER_FIELDS.payment).toLowerCase() === "refunded";
+}
+
+async function latestMembershipPaymentFullyRefunded(
+  stripe: Stripe,
+  stripeCustomerId: string
+): Promise<boolean> {
+  try {
+    const entitlement = await calculateStripeEntitlement({
+      stripe,
+      stripeCustomerId,
+      includeSubscriptions: false,
+    });
+    const latest = [...entitlement.qualifyingPayments].sort(
+      (a, b) => b.periodEndUnix - a.periodEndUnix
+    )[0];
+    return Boolean(latest && latest.refundKind === "full");
+  } catch {
+    return false;
+  }
+}
+
+async function isFullyRefunded(input: {
+  fields: Record<string, unknown>;
+  stripe: Stripe;
+  stripeCustomerId: string;
+}): Promise<boolean> {
+  if (paymentFieldIsRefunded(input.fields)) return true;
+  return latestMembershipPaymentFullyRefunded(input.stripe, input.stripeCustomerId);
+}
+
+/**
+ * Safely end an old (refunded) subscription so rejoining never creates a second
+ * active subscription. Best-effort: Stripe already refunded the charge, so this
+ * only tears down the orphaned subscription object.
+ */
+async function safelyEndSubscription(stripe: Stripe, subscriptionId: string): Promise<void> {
+  try {
+    await stripe.subscriptions.cancel(subscriptionId);
+  } catch (e) {
+    console.error(
+      JSON.stringify({
+        event: "reactivate_end_refunded_sub_failed",
+        subscriptionId,
+        error: e instanceof Error ? e.message : String(e),
+      })
+    );
+  }
 }
 
 /**
@@ -319,14 +362,6 @@ export async function reactivateMembershipForMember(input: {
   }
 
   const stripe = getStripeClient();
-  const priceId = await resolveStripePriceId(stripe, stripeCustomerId);
-  if (!priceId) {
-    return failResult({
-      status: "no_price",
-      reason:
-        "No Stripe membership price configured. Set STRIPE_REACTIVATION_PRICE_ID=price_…",
-    });
-  }
 
   // Prefer stored subscription id first (same as billing-status)
   const storedSubId = fieldStr(fields, MEMBER_FIELDS.stripeSubscriptionId);
@@ -368,13 +403,22 @@ export async function reactivateMembershipForMember(input: {
    * 2) active/trialing && scheduled cancel  → reverse cancel only, no charge
    * 3) past_due / unpaid / incomplete        → payment-method / portal path
    * 4) canceled (ended)                      → new subscription (or portal if no card)
+   *
+   * Fully refunded members lose grandfathered pricing: rules 1–3 are skipped and
+   * they always rejoin via a new subscription at the NEW price (rule 4).
    */
+  const fullRefunded = await isFullyRefunded({
+    fields,
+    stripe,
+    stripeCustomerId,
+  });
+
   const live = subsList.find(
     (s) =>
       (s.status === "active" || s.status === "trialing") && !isScheduledCancel(s)
   );
-  if (live) {
-    const { plan } = commerceIds(live, priceId);
+  if (!fullRefunded && live) {
+    const { plan, subPrice } = commerceIds(live, "");
     const next = periodEndIso(live);
     await syncReactivateBilling({
       memberstackId: msId,
@@ -387,7 +431,7 @@ export async function reactivateMembershipForMember(input: {
         [MEMBER_FIELDS.memberstackPlanId]:
           getConfiguredMemberstackPlanId() ||
           fieldStr(fields, MEMBER_FIELDS.memberstackPlanId),
-        ["Paid Plans (price ids)"]: formatPaidPlansText([plan || priceId]),
+        ["Paid Plans (price ids)"]: formatPaidPlansText([subPrice, plan]),
         [MEMBER_FIELDS.cancelAtPeriodEnd]: false,
         [MEMBER_FIELDS.cancellationEffectiveAt]: "",
         ...(next ? { [MEMBER_FIELDS.serviceAccessUntil]: next } : {}),
@@ -410,9 +454,9 @@ export async function reactivateMembershipForMember(input: {
     (s) =>
       (s.status === "active" || s.status === "trialing") && isScheduledCancel(s)
   );
-  if (pendingCancel) {
+  if (!fullRefunded && pendingCancel) {
     const updated = await reverseScheduledCancellation(stripe, pendingCancel);
-    const { subPrice, plan } = commerceIds(updated, priceId);
+    const { subPrice, plan } = commerceIds(updated, "");
     const next = periodEndIso(updated);
     await syncReactivateBilling({
       memberstackId: msId,
@@ -421,11 +465,9 @@ export async function reactivateMembershipForMember(input: {
         [MEMBER_FIELDS.stripeSubscriptionId]: updated.id,
         [MEMBER_FIELDS.stripeSubscriptionStatus]: updated.status,
         [MEMBER_FIELDS.stripeCustomerId]: stripeCustomerId,
-        [MEMBER_FIELDS.stripePriceId]: plan || subPrice || priceId,
+        [MEMBER_FIELDS.stripePriceId]: plan || subPrice,
         [MEMBER_FIELDS.memberstackPlanId]: getConfiguredMemberstackPlanId() || "",
-        ["Paid Plans (price ids)"]: formatPaidPlansText([
-          getConfiguredMemberstackPlanId() || priceId,
-        ]),
+        ["Paid Plans (price ids)"]: formatPaidPlansText([subPrice]),
         [MEMBER_FIELDS.cancelAtPeriodEnd]: false,
         [MEMBER_FIELDS.cancellationEffectiveAt]: "",
         ...(next ? { [MEMBER_FIELDS.serviceAccessUntil]: next } : {}),
@@ -449,7 +491,7 @@ export async function reactivateMembershipForMember(input: {
   const problem = subsList.find((s) =>
     ["past_due", "unpaid", "incomplete"].includes(s.status)
   );
-  if (problem) {
+  if (!fullRefunded && problem) {
     const pmId = await resolveDefaultPaymentMethodId(stripe, stripeCustomerId);
     if (!pmId) {
       return failResult({
@@ -473,7 +515,29 @@ export async function reactivateMembershipForMember(input: {
     });
   }
 
-  // Subscription has ended (canceled / incomplete_expired / etc.) — new paid sub.
+  // Fully refunded: safely end any still-live old subscription so rejoining never
+  // creates a second active subscription, then rejoin at the NEW price below.
+  if (fullRefunded) {
+    for (const s of subsList) {
+      if (
+        ["active", "trialing", "past_due", "unpaid", "incomplete"].includes(s.status)
+      ) {
+        await safelyEndSubscription(stripe, s.id);
+      }
+    }
+  }
+
+  // Subscription has ended (canceled / incomplete_expired / etc.) — new paid sub
+  // at the current price. Never reuse a historical/grandfathered price.
+  const priceId = resolveStripePriceId();
+  if (!priceId) {
+    return failResult({
+      status: "no_price",
+      reason:
+        "No Stripe membership price configured. Set STRIPE_REACTIVATION_PRICE_ID=price_…",
+    });
+  }
+
   const pmId = await resolveDefaultPaymentMethodId(stripe, stripeCustomerId);
   if (!pmId) {
     return failResult({

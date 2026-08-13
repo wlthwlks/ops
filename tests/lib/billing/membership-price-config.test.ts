@@ -83,6 +83,15 @@ describe("parseMembershipPriceConfig", () => {
     expect(c.nativeStripePriceIds).toEqual([]);
     expect(c.memberstackCommerceIds).toEqual(["prc_only"]);
   });
+
+  it("allowlist with both legacy and new price keeps both native ids", () => {
+    const c = parseMembershipPriceConfig({
+      stripeMembershipPriceIds: "price_legacy, price_new",
+      memberstackMembershipPriceId: "prc_plan",
+    });
+    expect(c.nativeStripePriceIds).toEqual(["price_legacy", "price_new"]);
+    expect(c.memberstackCommerceIds).toEqual(["prc_plan"]);
+  });
 });
 
 describe("getQualifyingMembershipPriceIds fail-closed", () => {
@@ -121,6 +130,29 @@ describe("getQualifyingMembershipPriceIds fail-closed", () => {
         allow
       )
     ).toEqual(["price_membership"]);
+  });
+
+  it("old and new price invoices both qualify when both are allowlisted", () => {
+    const allow = new Set(["price_legacy", "price_new"]);
+    expect(
+      getQualifyingMembershipPriceIds([line("price_legacy")], allow)
+    ).toEqual(["price_legacy"]);
+    expect(
+      getQualifyingMembershipPriceIds([line("price_new")], allow)
+    ).toEqual(["price_new"]);
+    expect(
+      getQualifyingMembershipPriceIds(
+        [line("price_legacy"), line("price_new"), line("price_other")],
+        allow
+      )
+    ).toEqual(["price_legacy", "price_new"]);
+  });
+
+  it("old and new price both contribute to period end when allowlisted", () => {
+    const allow = new Set(["price_legacy", "price_new"]);
+    expect(
+      getMembershipPeriodEnd([line("price_legacy", 100), line("price_new", 200)], allow)
+    ).toBe(200);
   });
 
   it("period end only from qualifying lines", () => {

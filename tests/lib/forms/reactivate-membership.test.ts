@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const findMemberByMemberstackId = vi.fn();
 const applyTrustedPaymentByMemberstackId = vi.fn();
@@ -6,16 +6,22 @@ const subscriptionsList = vi.fn();
 const subscriptionsUpdate = vi.fn();
 const subscriptionsCreate = vi.fn();
 const subscriptionsRetrieve = vi.fn();
+const subscriptionsCancel = vi.fn();
 const customersRetrieve = vi.fn();
 const customersUpdate = vi.fn();
 const customersList = vi.fn();
 const paymentMethodsList = vi.fn();
 const pricesList = vi.fn();
+const calculateStripeEntitlement = vi.fn();
 
 vi.mock("@/lib/forms/airtable/members-sync", () => ({
   findMemberByMemberstackId: (...a: unknown[]) => findMemberByMemberstackId(...a),
   applyTrustedPaymentByMemberstackId: (...a: unknown[]) =>
     applyTrustedPaymentByMemberstackId(...a),
+}));
+
+vi.mock("@/lib/billing/stripe-entitlement", () => ({
+  calculateStripeEntitlement: (...a: unknown[]) => calculateStripeEntitlement(...a),
 }));
 
 vi.mock("@/lib/integrations/stripe", () => ({
@@ -25,6 +31,7 @@ vi.mock("@/lib/integrations/stripe", () => ({
       update: (...a: unknown[]) => subscriptionsUpdate(...a),
       create: (...a: unknown[]) => subscriptionsCreate(...a),
       retrieve: (...a: unknown[]) => subscriptionsRetrieve(...a),
+      cancel: (...a: unknown[]) => subscriptionsCancel(...a),
     },
     customers: {
       retrieve: (...a: unknown[]) => customersRetrieve(...a),
@@ -38,10 +45,10 @@ vi.mock("@/lib/integrations/stripe", () => ({
       list: (...a: unknown[]) => pricesList(...a),
     },
   }),
-  getConfiguredMembershipPriceIds: () => new Set(["price_membership"]),
+  getConfiguredMembershipPriceIds: () =>
+    new Set(["price_legacy", "price_new"]),
   getConfiguredMemberstackPlanId: () => "prc_plan",
 }));
-
 
 vi.mock("@/lib/billing/service-access-sync", () => ({
   formatPaidPlansText: (ids: string[]) => ids.filter(Boolean).join(", "),
@@ -50,9 +57,18 @@ vi.mock("@/lib/billing/service-access-sync", () => ({
 import { reactivateMembershipForMember } from "@/lib/forms/billing/reactivate-membership";
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 
+function membershipLine(priceId: string, periodEnd?: number) {
+  return {
+    data: [{ price: { id: priceId }, ...(periodEnd ? { current_period_end: periodEnd } : {}) }],
+  };
+}
+
 describe("reactivateMembershipForMember", () => {
+  const prevPrice = process.env.STRIPE_REACTIVATION_PRICE_ID;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env.STRIPE_REACTIVATION_PRICE_ID = "price_new";
     findMemberByMemberstackId.mockResolvedValue([
       {
         id: "rec1",
@@ -66,7 +82,8 @@ describe("reactivateMembershipForMember", () => {
       record: { id: "rec1", fields: {} },
       shadowed: false,
     });
-    pricesList.mockResolvedValue({ data: [{ id: "price_membership", unit_amount: 4500 }] });
+    calculateStripeEntitlement.mockResolvedValue({ qualifyingPayments: [] });
+    pricesList.mockResolvedValue({ data: [{ id: "price_new", unit_amount: 4500 }] });
     customersRetrieve.mockResolvedValue({
       id: "cus_test",
       invoice_settings: { default_payment_method: "pm_card" },
@@ -77,6 +94,10 @@ describe("reactivateMembershipForMember", () => {
     subscriptionsRetrieve.mockRejectedValue(new Error("not found"));
   });
 
+  afterEach(() => {
+    if (prevPrice === undefined) delete process.env.STRIPE_REACTIVATION_PRICE_ID;
+    else process.env.STRIPE_REACTIVATION_PRICE_ID = prevPrice;
+  });
 
   it("active + cancel_at_period_end: reverses cancel only — no create/checkout charge", async () => {
     subscriptionsList.mockResolvedValue({
@@ -85,7 +106,7 @@ describe("reactivateMembershipForMember", () => {
           id: "sub_pending",
           status: "active",
           cancel_at_period_end: true,
-          items: { data: [{ price: { id: "price_membership" }, current_period_end: 1735689600 }] },
+          items: membershipLine("price_legacy", 1735689600),
           current_period_end: 1735689600,
         },
       ],
@@ -94,7 +115,7 @@ describe("reactivateMembershipForMember", () => {
       id: "sub_pending",
       status: "active",
       cancel_at_period_end: false,
-      items: { data: [{ price: { id: "price_membership" }, current_period_end: 1735689600 }] },
+      items: membershipLine("price_legacy", 1735689600),
       current_period_end: 1735689600,
     });
 
@@ -122,7 +143,7 @@ describe("reactivateMembershipForMember", () => {
           status: "active",
           cancel_at_period_end: false,
           cancel_at: future,
-          items: { data: [{ price: { id: "price_membership" }, current_period_end: future }] },
+          items: membershipLine("price_legacy", future),
           current_period_end: future,
         },
       ],
@@ -132,7 +153,7 @@ describe("reactivateMembershipForMember", () => {
       status: "active",
       cancel_at_period_end: false,
       cancel_at: null,
-      items: { data: [{ price: { id: "price_membership" }, current_period_end: future }] },
+      items: membershipLine("price_legacy", future),
       current_period_end: future,
     });
 
@@ -158,7 +179,7 @@ describe("reactivateMembershipForMember", () => {
           id: "sub_live",
           status: "active",
           cancel_at_period_end: false,
-          items: { data: [{ price: { id: "price_membership" } }] },
+          items: membershipLine("price_legacy"),
         },
       ],
     });
@@ -172,21 +193,42 @@ describe("reactivateMembershipForMember", () => {
     expect(subscriptionsCreate).not.toHaveBeenCalled();
   });
 
-  it("canceled subscription: creates a new paid subscription (charge path)", async () => {
+  it("active old-price member stays on the old price (never migrated)", async () => {
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_legacy_active",
+          status: "active",
+          cancel_at_period_end: false,
+          items: membershipLine("price_legacy"),
+        },
+      ],
+    });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.status).toBe("already_active");
+    expect(result.charged).toBe(false);
+    expect(subscriptionsUpdate).not.toHaveBeenCalled();
+    expect(subscriptionsCreate).not.toHaveBeenCalled();
+    expect(subscriptionsCancel).not.toHaveBeenCalled();
+  });
+
+  it("canceled subscription: creates a new paid subscription at the NEW price", async () => {
     subscriptionsList.mockResolvedValue({
       data: [
         {
           id: "sub_old",
           status: "canceled",
           cancel_at_period_end: false,
-          items: { data: [{ price: { id: "price_membership" } }] },
+          items: membershipLine("price_legacy"),
         },
       ],
     });
     subscriptionsCreate.mockResolvedValue({
       id: "sub_new",
       status: "active",
-      items: { data: [{ price: { id: "price_membership" } }] },
+      items: membershipLine("price_new"),
     });
 
     const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
@@ -199,11 +241,38 @@ describe("reactivateMembershipForMember", () => {
     expect(subscriptionsCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         customer: "cus_test",
-        items: [{ price: "price_membership" }],
+        items: [{ price: "price_new" }],
         default_payment_method: "pm_card",
         payment_behavior: "error_if_incomplete",
       })
     );
+  });
+
+  it("canceled after period end never reuses the historical old price", async () => {
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_ended",
+          status: "canceled",
+          cancel_at_period_end: false,
+          items: membershipLine("price_legacy"),
+        },
+      ],
+    });
+    subscriptionsCreate.mockResolvedValue({
+      id: "sub_new2",
+      status: "active",
+      items: membershipLine("price_new"),
+    });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.status).toBe("reactivated");
+    const createArgs = subscriptionsCreate.mock.calls[0][0] as {
+      items: { price: string }[];
+    };
+    expect(createArgs.items[0].price).toBe("price_new");
+    expect(createArgs.items[0].price).not.toBe("price_legacy");
   });
 
   it("prefers cancel reverse over creating a second subscription when both exist", async () => {
@@ -213,13 +282,13 @@ describe("reactivateMembershipForMember", () => {
           id: "sub_canceled",
           status: "canceled",
           cancel_at_period_end: false,
-          items: { data: [{ price: { id: "price_membership" } }] },
+          items: membershipLine("price_legacy"),
         },
         {
           id: "sub_pending",
           status: "active",
           cancel_at_period_end: true,
-          items: { data: [{ price: { id: "price_membership" } }] },
+          items: membershipLine("price_legacy"),
         },
       ],
     });
@@ -227,7 +296,7 @@ describe("reactivateMembershipForMember", () => {
       id: "sub_pending",
       status: "active",
       cancel_at_period_end: false,
-      items: { data: [{ price: { id: "price_membership" } }] },
+      items: membershipLine("price_legacy"),
     });
 
     const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
@@ -244,7 +313,7 @@ describe("reactivateMembershipForMember", () => {
           id: "sub_old",
           status: "canceled",
           cancel_at_period_end: false,
-          items: { data: [{ price: { id: "price_membership" } }] },
+          items: membershipLine("price_legacy"),
         },
       ],
     });
@@ -271,7 +340,7 @@ describe("reactivateMembershipForMember", () => {
           id: "sub_trial",
           status: "trialing",
           cancel_at_period_end: true,
-          items: { data: [{ price: { id: "price_membership" } }] },
+          items: membershipLine("price_legacy"),
         },
       ],
     });
@@ -279,7 +348,7 @@ describe("reactivateMembershipForMember", () => {
       id: "sub_trial",
       status: "trialing",
       cancel_at_period_end: false,
-      items: { data: [{ price: { id: "price_membership" } }] },
+      items: membershipLine("price_legacy"),
     });
 
     const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
@@ -295,7 +364,7 @@ describe("reactivateMembershipForMember", () => {
           id: "sub_past_due",
           status: "past_due",
           cancel_at_period_end: false,
-          items: { data: [{ price: { id: "price_membership" } }] },
+          items: membershipLine("price_legacy"),
         },
       ],
     });
@@ -321,7 +390,7 @@ describe("reactivateMembershipForMember", () => {
           id: "sub_past_due",
           status: "past_due",
           cancel_at_period_end: false,
-          items: { data: [{ price: { id: "price_membership" } }] },
+          items: membershipLine("price_legacy"),
         },
       ],
     });
@@ -346,7 +415,7 @@ describe("reactivateMembershipForMember", () => {
           id: "sub_cancel_sched",
           status: "active",
           cancel_at_period_end: true,
-          items: { data: [{ price: { id: "price_membership" }, current_period_end: 1735689600 }] },
+          items: membershipLine("price_legacy", 1735689600),
           current_period_end: 1735689600,
         },
       ],
@@ -355,7 +424,7 @@ describe("reactivateMembershipForMember", () => {
       id: "sub_cancel_sched",
       status: "active",
       cancel_at_period_end: false,
-      items: { data: [{ price: { id: "price_membership" }, current_period_end: 1735689600 }] },
+      items: membershipLine("price_legacy", 1735689600),
       current_period_end: 1735689600,
     });
 
@@ -373,7 +442,7 @@ describe("reactivateMembershipForMember", () => {
           id: "sub_cancel_sched2",
           status: "active",
           cancel_at_period_end: true,
-          items: { data: [{ price: { id: "price_membership" }, current_period_end: 1735689600 }] },
+          items: membershipLine("price_legacy", 1735689600),
           current_period_end: 1735689600,
         },
       ],
@@ -382,7 +451,7 @@ describe("reactivateMembershipForMember", () => {
       id: "sub_cancel_sched2",
       status: "active",
       cancel_at_period_end: false,
-      items: { data: [{ price: { id: "price_membership" }, current_period_end: 1735689600 }] },
+      items: membershipLine("price_legacy", 1735689600),
       current_period_end: 1735689600,
     });
 
@@ -400,7 +469,7 @@ describe("reactivateMembershipForMember", () => {
           id: "sub_old",
           status: "canceled",
           cancel_at_period_end: false,
-          items: { data: [{ price: { id: "price_membership" } }] },
+          items: membershipLine("price_legacy"),
         },
       ],
     });
@@ -416,5 +485,156 @@ describe("reactivateMembershipForMember", () => {
     expect(result.success).toBe(false);
     expect(result.message).toBeTruthy();
     expect(result.message).toBe(result.reason);
+  });
+
+  // —— Grandfathering / full-refund rules ——
+
+  it("full refund + rejoin before old period end: rejoins at NEW price, does not reverse", async () => {
+    findMemberByMemberstackId.mockResolvedValue([
+      {
+        id: "rec1",
+        fields: {
+          [MEMBER_FIELDS.stripeCustomerId]: "cus_test",
+          [MEMBER_FIELDS.memberstackId]: "mem_1",
+          [MEMBER_FIELDS.payment]: "Refunded",
+        },
+      },
+    ]);
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_refunded_pending",
+          status: "active",
+          cancel_at_period_end: true,
+          items: membershipLine("price_legacy", 1735689600),
+          current_period_end: 1735689600,
+        },
+      ],
+    });
+    subscriptionsCancel.mockResolvedValue({ id: "sub_refunded_pending", status: "canceled" });
+    subscriptionsCreate.mockResolvedValue({
+      id: "sub_new_refund",
+      status: "active",
+      items: membershipLine("price_new"),
+    });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.status).toBe("reactivated");
+    expect(result.charged).toBe(true);
+    expect(subscriptionsUpdate).not.toHaveBeenCalled();
+    expect(subscriptionsCancel).toHaveBeenCalledWith("sub_refunded_pending");
+    expect(subscriptionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ items: [{ price: "price_new" }] })
+    );
+  });
+
+  it("full refund (Stripe-strengthened) also blocks old-price recovery", async () => {
+    // Airtable does NOT say Refunded, but Stripe's latest qualifying payment is a full refund.
+    calculateStripeEntitlement.mockResolvedValue({
+      qualifyingPayments: [
+        { periodEndUnix: 1735689600, refundKind: "full", invoiceId: "in_x" },
+      ],
+    });
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_refunded_stripe",
+          status: "active",
+          cancel_at_period_end: true,
+          items: membershipLine("price_legacy", 1735689600),
+          current_period_end: 1735689600,
+        },
+      ],
+    });
+    subscriptionsCancel.mockResolvedValue({ id: "sub_refunded_stripe", status: "canceled" });
+    subscriptionsCreate.mockResolvedValue({
+      id: "sub_new_stripe",
+      status: "active",
+      items: membershipLine("price_new"),
+    });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.status).toBe("reactivated");
+    expect(subscriptionsCancel).toHaveBeenCalledWith("sub_refunded_stripe");
+    expect(subscriptionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ items: [{ price: "price_new" }] })
+    );
+  });
+
+  it("partial refund does not remove grandfathering — reverses old subscription", async () => {
+    calculateStripeEntitlement.mockResolvedValue({
+      qualifyingPayments: [
+        { periodEndUnix: 1735689600, refundKind: "partial", invoiceId: "in_y" },
+      ],
+    });
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_partial_refund",
+          status: "active",
+          cancel_at_period_end: true,
+          items: membershipLine("price_legacy", 1735689600),
+          current_period_end: 1735689600,
+        },
+      ],
+    });
+    subscriptionsUpdate.mockResolvedValue({
+      id: "sub_partial_refund",
+      status: "active",
+      cancel_at_period_end: false,
+      items: membershipLine("price_legacy", 1735689600),
+      current_period_end: 1735689600,
+    });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.status).toBe("cancellation_reversed");
+    expect(result.charged).toBe(false);
+    expect(subscriptionsCancel).not.toHaveBeenCalled();
+    expect(subscriptionsCreate).not.toHaveBeenCalled();
+    expect(subscriptionsUpdate).toHaveBeenCalledWith("sub_partial_refund", {
+      cancel_at_period_end: false,
+    });
+  });
+
+  it("full refund with a still-active old subscription ends it before creating new (no duplicates)", async () => {
+    findMemberByMemberstackId.mockResolvedValue([
+      {
+        id: "rec1",
+        fields: {
+          [MEMBER_FIELDS.stripeCustomerId]: "cus_test",
+          [MEMBER_FIELDS.memberstackId]: "mem_1",
+          [MEMBER_FIELDS.payment]: "Refunded",
+        },
+      },
+    ]);
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_still_active",
+          status: "active",
+          cancel_at_period_end: false,
+          items: membershipLine("price_legacy"),
+        },
+      ],
+    });
+    subscriptionsCancel.mockResolvedValue({ id: "sub_still_active", status: "canceled" });
+    subscriptionsCreate.mockResolvedValue({
+      id: "sub_new_after_refund",
+      status: "active",
+      items: membershipLine("price_new"),
+    });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.status).toBe("reactivated");
+    expect(subscriptionsCancel).toHaveBeenCalledWith("sub_still_active");
+    expect(subscriptionsCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ items: [{ price: "price_new" }] })
+    );
+    // Old subscription was ended, never reversed to active
+    expect(subscriptionsUpdate).not.toHaveBeenCalled();
   });
 });

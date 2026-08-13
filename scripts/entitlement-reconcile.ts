@@ -5,15 +5,26 @@
  * NEVER creates Airtable members. NEVER email-matches. NEVER modifies Stripe.
  * NEVER touches matching/introduction logic. NEVER deletes records.
  *
- * Default: dry-run (zero Airtable writes).
- * Writes require explicit --apply.
+ * Default: dry-run (zero Airtable writes). Writes require explicit --apply.
+ *
+ * Apply mode is STREAMING + RESUMPTABLE:
+ *   - Corrections are written in batches of 10 as members are computed
+ *     (no waiting until the whole scan finishes).
+ *   - Progress is checkpointed to reports/billing-reconcile-progress.json
+ *     after every batch; a failed batch falls back to per-record writes so one
+ *     bad record never aborts the run.
+ *   - Re-running --apply auto-resumes from the checkpoint (skips already
+ *     processed members, retries failed ones). --reset starts over.
+ *   - Apply mode skips the slow Stripe active-sub census (reuse dry-run numbers).
  *
  * Usage:
- *   npm run billing:reconcile
- *   npm run billing:reconcile -- --limit=50
+ *   npm run billing:reconcile                                  (dry-run)
+ *   npm run billing:reconcile -- --limit=50                    (dry-run, N rows)
  *   npm run billing:reconcile -- --customer=cus_xxx
  *   npm run billing:reconcile -- --concurrency=4
- *   npm run billing:reconcile -- --apply
+ *   npm run billing:reconcile -- --apply                       (stream + resume)
+ *   npm run billing:reconcile -- --apply --reset               (start over)
+ *   npm run billing:reconcile -- --apply --limit=5             (test subset, keeps checkpoint open)
  */
 import * as dotenv from "dotenv";
 import * as fs from "fs";
@@ -53,6 +64,30 @@ const AB = process.env.AIRTABLE_BASE_ID;
 
 const CANCEL_AT_PERIOD_END_FIELD = MEMBER_FIELDS.cancelAtPeriodEnd;
 const CANCELLATION_EFFECTIVE_AT_FIELD = MEMBER_FIELDS.cancellationEffectiveAt;
+
+const WRITE_BATCH_SIZE = 10;
+const BATCH_GAP_MS = 150;
+const REPORTS_DIR = path.join(process.cwd(), "reports");
+const CHECKPOINT_FILE = path.join(REPORTS_DIR, "billing-reconcile-progress.json");
+
+type CheckpointStatus =
+  | "written"
+  | "blocked"
+  | "failed"
+  | "no_cus"
+  | "duplicate"
+  | "unverifiable";
+
+type Checkpoint = {
+  runId: string;
+  mode: "apply";
+  startedAt: string;
+  updatedAt: string;
+  priceIds: string[];
+  status: "in_progress" | "complete";
+  totals: { scanned: number; written: number; failed: number; blocked: number };
+  done: Record<string, CheckpointStatus>;
+};
 
 type Category =
   | "currently_entitled"
@@ -122,16 +157,12 @@ function isoEqualish(a: string, b: string): boolean {
   return Math.abs(am - bm) < 1000;
 }
 
-function displayVal(v: unknown): string {
-  if (v == null) return "";
-  return String(v);
-}
-
 async function mapPool<T, R>(
   items: T[],
   concurrency: number,
   fn: (item: T, index: number) => Promise<R>,
-  onProgress?: (done: number, total: number, index: number) => void
+  onProgress?: (done: number, total: number, index: number) => void,
+  onItem?: (result: R, index: number) => Promise<void> | void
 ): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
@@ -140,7 +171,9 @@ async function mapPool<T, R>(
   async function worker(workerId: number) {
     while (next < items.length) {
       const i = next++;
-      results[i] = await fn(items[i], i);
+      const r = await fn(items[i], i);
+      results[i] = r;
+      if (onItem) await onItem(r, i);
       done++;
       if (onProgress) onProgress(done, total, i);
       else console.log(`  [w${workerId}] ${done}/${total} done (index ${i})`);
@@ -206,7 +239,7 @@ function buildDesiredPatch(
   ent: StripeEntitlementResult,
   now: Date
 ): {
-  desired: Record<string, string>;
+  desired: Record<string, unknown>;
   categories: Category[];
   notes: string[];
 } {
@@ -226,7 +259,7 @@ function buildDesiredPatch(
     subStatus === "incomplete" ||
     subStatus === "incomplete_expired";
 
-  const desired: Record<string, string> = {};
+  const desired: Record<string, unknown> = {};
 
   if (hasPartial) {
     categories.push("partial_refund_manual_review");
@@ -249,7 +282,8 @@ function buildDesiredPatch(
     desired[STRIPE_SUBSCRIPTION_ID_FIELD] = sub.id;
   }
 
-  desired[CANCEL_AT_PERIOD_END_FIELD] = cape ? "true" : "false";
+  // Checkbox field — must be boolean, not string "true"/"false"
+  desired[CANCEL_AT_PERIOD_END_FIELD] = cape;
 
   if (cape && sub?.cancelAtUnix != null) {
     desired[CANCELLATION_EFFECTIVE_AT_FIELD] = new Date(sub.cancelAtUnix * 1000).toISOString();
@@ -343,7 +377,7 @@ function buildDesiredPatch(
 
 function diffPatch(
   fields: Record<string, unknown>,
-  desired: Record<string, string>,
+  desired: Record<string, unknown>,
   options: { allowServiceAccessReduction: boolean }
 ): { changes: FieldChange[]; patch: Record<string, unknown> } {
   const changes: FieldChange[] = [];
@@ -352,27 +386,29 @@ function diffPatch(
   for (const [field, newRaw] of Object.entries(desired)) {
     const oldRaw = fStr(fields, field);
     const newValue = newRaw;
+    const newStr = String(newValue);
 
     if (field === SERVICE_ACCESS_FIELD) {
-      if (!newValue) continue;
-      if (isoEqualish(oldRaw, newValue)) continue;
+      if (!newStr) continue;
+      if (isoEqualish(oldRaw, newStr)) continue;
       const oldMs = oldRaw ? new Date(oldRaw).getTime() : NaN;
-      const newMs = new Date(newValue).getTime();
+      const newMs = new Date(newStr).getTime();
       if (!Number.isNaN(oldMs) && !Number.isNaN(newMs) && newMs < oldMs) {
         if (!options.allowServiceAccessReduction) {
           // Still allow reduction when Stripe proves shorter paid-through
           // (this reconcile is corrective). Always allow here.
         }
       }
-      changes.push({ field, oldValue: oldRaw, newValue });
-      patch[field] = newValue;
+      changes.push({ field, oldValue: oldRaw, newValue: newStr });
+      patch[field] = newStr;
       continue;
     }
 
-    if (oldRaw === newValue) continue;
-    // Avoid clearing non-empty with empty
-    if (!newValue && oldRaw) continue;
-    changes.push({ field, oldValue: oldRaw, newValue });
+    if (oldRaw === newStr) continue;
+    // Only skip clearing when the NEW value is an EMPTY STRING (not falsy boolean).
+    // A checkbox `false` is a legitimate value and must be written.
+    if (newStr === "" && oldRaw) continue;
+    changes.push({ field, oldValue: oldRaw, newValue: newStr });
     patch[field] = newValue;
   }
 
@@ -577,6 +613,157 @@ async function countActiveStripeMembershipSubs(
   return { activeSubs, uniqueCustomers: customers.size };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function newCheckpoint(priceIds: Set<string>): Checkpoint {
+  return {
+    runId: `${Date.now()}`,
+    mode: "apply",
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    priceIds: [...priceIds],
+    status: "in_progress",
+    totals: { scanned: 0, written: 0, failed: 0, blocked: 0 },
+    done: {},
+  };
+}
+
+function saveCheckpoint(cp: Checkpoint): void {
+  fs.mkdirSync(REPORTS_DIR, { recursive: true });
+  cp.updatedAt = new Date().toISOString();
+  const tmp = `${CHECKPOINT_FILE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(cp, null, 2));
+  fs.renameSync(tmp, CHECKPOINT_FILE);
+}
+
+function loadCheckpoint(priceIds: Set<string>): Checkpoint | null {
+  if (!fs.existsSync(CHECKPOINT_FILE)) return null;
+  try {
+    const raw = JSON.parse(fs.readFileSync(CHECKPOINT_FILE, "utf8")) as Partial<Checkpoint>;
+    if (raw?.mode !== "apply") return null;
+    const ids = (raw.priceIds || []).slice().sort().join(",");
+    const want = [...priceIds].slice().sort().join(",");
+    if (ids !== want) {
+      console.log(
+        "Checkpoint membership price_ config differs from current config — ignoring old checkpoint."
+      );
+      return null;
+    }
+    if (!raw.done || typeof raw.done !== "object") return null;
+    if (!raw.totals || typeof raw.totals !== "object") return null;
+    return {
+      runId: raw.runId || `${Date.now()}`,
+      mode: "apply",
+      startedAt: raw.startedAt || new Date().toISOString(),
+      updatedAt: raw.updatedAt || new Date().toISOString(),
+      priceIds: raw.priceIds || [...priceIds],
+      status: raw.status === "complete" ? "complete" : "in_progress",
+      totals: {
+        scanned: raw.totals.scanned || 0,
+        written: raw.totals.written || 0,
+        failed: raw.totals.failed || 0,
+        blocked: raw.totals.blocked || 0,
+      },
+      done: raw.done as Record<string, CheckpointStatus>,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function terminalStatus(p: MemberPlan): CheckpointStatus {
+  if (p.categories.includes("duplicate_stripe_customer_id")) return "duplicate";
+  if (p.categories.includes("missing_stripe_customer_id")) return "no_cus";
+  if (p.categories.includes("unverifiable")) return "unverifiable";
+  return "blocked";
+}
+
+/**
+ * Streaming writer: buffers apply-eligible patches and flushes them to Airtable
+ * in batches of WRITE_BATCH_SIZE. On batch failure it falls back to per-record
+ * writes so one bad record never blocks the run. Saves the checkpoint after
+ * every successful flush.
+ */
+function createStreamingWriter(
+  airtable: ReturnType<typeof createAirtableClient>,
+  cp: Checkpoint
+) {
+  const buffer: Array<{ id: string; fields: Record<string, unknown> }> = [];
+  let chain: Promise<void> = Promise.resolve();
+  let writtenThisRun = 0;
+  let failedThisRun = 0;
+  let nonWrittenSinceSave = 0;
+
+  function mark(recordId: string, status: CheckpointStatus) {
+    cp.done[recordId] = status;
+    cp.updatedAt = new Date().toISOString();
+  }
+
+  async function flushBatch(batch: Array<{ id: string; fields: Record<string, unknown> }>) {
+    try {
+      await airtable.updateRecords(MEMBERS_TABLE, batch);
+      for (const r of batch) mark(r.id, "written");
+      cp.totals.written += batch.length;
+      writtenThisRun += batch.length;
+      console.log(`  ✓ wrote batch of ${batch.length} (cumulative written ${cp.totals.written})`);
+      saveCheckpoint(cp);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `  ✗ batch of ${batch.length} failed: ${msg} — retrying each record individually…`
+      );
+      for (const r of batch) {
+        try {
+          await airtable.updateRecords(MEMBERS_TABLE, [r]);
+          mark(r.id, "written");
+          cp.totals.written += 1;
+          writtenThisRun += 1;
+          console.log(`    ✓ ${r.id} written`);
+        } catch (e2) {
+          mark(r.id, "failed");
+          cp.totals.failed += 1;
+          failedThisRun += 1;
+          console.error(`    ✗ ${r.id} FAILED: ${e2 instanceof Error ? e2.message : e2}`);
+        }
+      }
+      saveCheckpoint(cp);
+    }
+    await sleep(BATCH_GAP_MS);
+  }
+
+  function push(plan: MemberPlan) {
+    const fields = assertMembersWritePayload({ ...plan.patch });
+    buffer.push({ id: plan.airtableRecordId, fields });
+    if (buffer.length >= WRITE_BATCH_SIZE) {
+      const batch = buffer.splice(0, WRITE_BATCH_SIZE);
+      chain = chain.then(() => flushBatch(batch));
+    }
+  }
+
+  function recordNonWritten(plan: MemberPlan) {
+    mark(plan.airtableRecordId, terminalStatus(plan));
+    cp.totals.blocked += 1;
+    nonWrittenSinceSave += 1;
+    if (nonWrittenSinceSave >= 25) {
+      nonWrittenSinceSave = 0;
+      saveCheckpoint(cp);
+    }
+  }
+
+  async function flushRemaining(): Promise<{ written: number; failed: number }> {
+    await chain;
+    if (buffer.length > 0) {
+      await flushBatch(buffer.splice(0, buffer.length));
+    }
+    saveCheckpoint(cp);
+    return { written: writtenThisRun, failed: failedThisRun };
+  }
+
+  return { push, recordNonWritten, flushRemaining };
+}
+
 async function main() {
   console.log("WLTH WLKS Production Membership Entitlement Reconciliation");
   console.log("Stripe = billing source of truth | Exact cus_ match only | No creates\n");
@@ -612,9 +799,11 @@ async function main() {
   const members = await loadMembers(airtable, args);
   console.log(`Loaded ${members.length} Airtable member rows\n`);
 
-  // Optional Stripe active-sub census (helps explain 2247 vs ~3000)
+  // Stripe active-sub census only runs in dry-run (the ~2247-vs-3000 comparison
+  // is a one-time diagnostic; apply reuses the dry-run numbers and skips this
+  // slow pagination pass).
   let stripeCensus: { activeSubs: number; uniqueCustomers: number } | null = null;
-  if (args["skip-stripe-census"] !== "true" && !args.customer && !args["airtable-record"]) {
+  if (!apply && args["skip-stripe-census"] !== "true" && !args.customer && !args["airtable-record"]) {
     console.log("Counting active/trialing WLTH WLKS Stripe subscriptions…");
     try {
       stripeCensus = await countActiveStripeMembershipSubs(stripe, allow);
@@ -626,6 +815,8 @@ async function main() {
         `Stripe census failed: ${e instanceof Error ? e.message : e} (continuing)\n`
       );
     }
+  } else if (apply) {
+    console.log("Skipping Stripe active-sub census (apply mode — reuse dry-run numbers).\n");
   }
 
   const concurrency = Math.min(6, Math.max(1, parseInt(args.concurrency || "3", 10) || 3));
@@ -638,11 +829,57 @@ async function main() {
     charges: stripe.charges,
   };
 
-  console.log(`Deriving Stripe entitlement for ${members.length} members (concurrency=${concurrency})…`);
+  // Deterministic ordering so checkpoint resume is stable across runs.
+  const sortedMembers = [...members].sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  );
+
+  // ── Checkpoint / resume (apply mode only) ──────────────────────────────
+  let cp: Checkpoint | null = null;
+  let pendingMembers: typeof sortedMembers = sortedMembers;
+  let resumedSkipped = 0;
+
+  if (apply) {
+    if (args.reset === "true" && fs.existsSync(CHECKPOINT_FILE)) {
+      fs.rmSync(CHECKPOINT_FILE);
+      console.log("Reset: removed existing checkpoint file.\n");
+    }
+    cp = loadCheckpoint(allow);
+    if (cp) {
+      if (cp.status === "complete") {
+        console.log(
+          `Checkpoint is COMPLETE (written=${cp.totals.written}, failed=${cp.totals.failed}). ` +
+            `Re-run with --reset to redo from scratch.\n`
+        );
+        return;
+      }
+      const doneMap = cp.done;
+      pendingMembers = sortedMembers.filter((m) => {
+        const st = doneMap[m.id];
+        return st === undefined || st === "failed";
+      });
+      resumedSkipped = sortedMembers.length - pendingMembers.length;
+      console.log(
+        `Resumed checkpoint: ${resumedSkipped} already processed, ` +
+          `${pendingMembers.length} remaining (${cp.totals.written} written so far, ${cp.totals.failed} failed).\n`
+      );
+    } else {
+      cp = newCheckpoint(allow);
+      cp.totals.scanned = sortedMembers.length;
+      saveCheckpoint(cp);
+      console.log("Started new apply checkpoint.\n");
+    }
+  }
+
+  console.log(`Deriving Stripe entitlement for ${pendingMembers.length} members (concurrency=${concurrency})…`);
   let loggedDone = 0;
-  const logEvery = Math.max(1, Math.floor(members.length / 100));
+  const logEvery = Math.max(1, Math.floor(pendingMembers.length / 100));
+
+  // Apply mode: stream writes as plans are computed.
+  const writer = apply && cp ? createStreamingWriter(airtable, cp) : null;
+
   const results = await mapPool(
-    members,
+    pendingMembers,
     concurrency,
     async (member) => {
       const cusId = fStr(member.fields, STRIPE_CUSTOMER_ID_FIELD);
@@ -713,16 +950,41 @@ async function main() {
       }
       return planMember(member, ent, now);
     },
-    (done, total, _index) => {
+    (done, total) => {
       loggedDone = done;
       if (done === 1 || done === total || done % logEvery === 0) {
         const pct = total > 0 ? Math.round((done / total) * 100) : 100;
         console.log(`  [scan] ${done}/${total} (${pct}%) — last cus lookup in progress…`);
       }
+    },
+    (plan) => {
+      if (!writer) return;
+      if (plan.applyEligible) writer.push(plan);
+      else writer.recordNonWritten(plan);
     }
   );
   void loggedDone;
   plans.push(...results);
+
+  // Apply mode: flush any remaining buffered writes and finalize checkpoint.
+  if (writer && cp) {
+    const { written, failed } = await writer.flushRemaining();
+    const fullRun = !args.limit && !args.customer && !args["airtable-record"];
+    if (fullRun) {
+      cp.status = "complete";
+    }
+    saveCheckpoint(cp);
+    console.log(
+      `\nApply pass finished: ${written} written this run, ${failed} failed this run. ` +
+        `Cumulative: ${cp.totals.written} written, ${cp.totals.failed} failed.`
+    );
+    const failedIds = Object.entries(cp.done).filter(([, s]) => s === "failed");
+    if (failedIds.length > 0) {
+      console.log(`\nFailed records (re-run --apply to retry these):`);
+      for (const [id] of failedIds.slice(0, 50)) console.log(`  ${id}`);
+      if (failedIds.length > 50) console.log(`  … and ${failedIds.length - 50} more`);
+    }
+  }
 
   // ── Totals ─────────────────────────────────────────────────────────────
   const catCounts = new Map<Category, number>();
@@ -746,7 +1008,10 @@ async function main() {
     console.log(`Stripe active+trialing WLTH WLKS subs:     ${stripeCensus.activeSubs}`);
     console.log(`Stripe unique customers (those subs):      ${stripeCensus.uniqueCustomers}`);
   }
-  console.log(`Airtable rows scanned:                       ${plans.length}`);
+  console.log(`Airtable rows scanned:                       ${sortedMembers.length}`);
+  if (apply && resumedSkipped > 0) {
+    console.log(`  (resumed-skipped from checkpoint: ${resumedSkipped}, processed this run: ${plans.length})`);
+  }
   console.log(`Airtable legacy has-access (Active+Paid OR future until): ${airtableAccessLegacy}`);
   console.log(`Airtable V2 has-access (Service access until only):       ${airtableAccessV2}`);
   console.log(`Stripe entitled now (linked rows):           ${stripeEntitled}`);
@@ -773,8 +1038,11 @@ async function main() {
     if (n > 0) console.log(`  ${c}: ${n}`);
   }
   console.log("");
-  console.log(`Rows with field changes: ${withChanges.length}`);
-  console.log(`Apply-eligible (high confidence): ${applyEligible.length}`);
+  console.log(`Rows with field changes (this run): ${withChanges.length}`);
+  console.log(`Apply-eligible (high confidence, this run): ${applyEligible.length}`);
+  if (cp) {
+    console.log(`Checkpoint cumulative: ${cp.totals.written} written, ${cp.totals.failed} failed, ${cp.totals.blocked} blocked`);
+  }
   console.log(`Incorrect future/legacy access vs Stripe: ${incorrectFuture.length}`);
   console.log(`Stripe entitled but Airtable stale/missing state: ${staleVsStripe.length}`);
 
@@ -824,8 +1092,10 @@ async function main() {
     generatedAt: now.toISOString(),
     mode: apply ? "apply" : "dry-run",
     stripeCensus,
+    resumedSkipped,
     totals: {
-      airtableRowsScanned: plans.length,
+      airtableRowsScanned: sortedMembers.length,
+      airtableRowsProcessedThisRun: plans.length,
       airtableAccessLegacy,
       airtableAccessV2,
       stripeEntitledLinked: stripeEntitled,
@@ -833,6 +1103,16 @@ async function main() {
       rowsWithChanges: withChanges.length,
       applyEligible: applyEligible.length,
       categories: Object.fromEntries(catCounts),
+      ...(cp
+        ? {
+            checkpoint: {
+              status: cp.status,
+              written: cp.totals.written,
+              failed: cp.totals.failed,
+              blocked: cp.totals.blocked,
+            },
+          }
+        : {}),
     },
     membershipPriceIds: [...allow],
     members: plans.map((p) => ({
@@ -902,39 +1182,18 @@ async function main() {
   console.log(`\nJSON report: ${jsonPath}`);
   console.log(`CSV report:  ${csvPath}`);
 
-  // ── Apply ──────────────────────────────────────────────────────────────
+  // ── Apply summary (writes already streamed above) ─────────────────────
   if (!apply) {
     console.log("\nNo writes performed (dry-run).");
     console.log("\nCommands:");
     console.log("  Dry-run:  npm run billing:reconcile");
     console.log("  Apply:    npm run billing:reconcile -- --apply");
+    console.log("  Resume:   npm run billing:reconcile -- --apply        (auto-resumes checkpoint)");
+    console.log("  Reset:    npm run billing:reconcile -- --apply --reset");
     return;
   }
 
-  const toWrite = applyEligible.filter((p) => Object.keys(p.patch).length > 0);
-  if (toWrite.length === 0) {
-    console.log("\nNothing to apply.");
-    return;
-  }
-
-  console.log(`\nApplying ${toWrite.length} member corrections…`);
-  const batches: Array<Array<{ id: string; fields: Record<string, unknown> }>> = [];
-  for (let i = 0; i < toWrite.length; i += 10) {
-    batches.push(
-      toWrite.slice(i, i + 10).map((p) => {
-        const fields = assertMembersWritePayload({ ...p.patch });
-        return { id: p.airtableRecordId, fields };
-      })
-    );
-  }
-
-  let written = 0;
-  for (const batch of batches) {
-    await airtable.updateRecordsBatched(MEMBERS_TABLE, batch);
-    written += batch.length;
-    console.log(`  Wrote ${written}/${toWrite.length}`);
-  }
-  console.log(`Done — applied ${written} member updates. No records deleted.`);
+  console.log("\nDone. No records deleted.");
 }
 
 main().catch((e) => {
