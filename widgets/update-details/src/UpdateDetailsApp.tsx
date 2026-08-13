@@ -1711,43 +1711,52 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     }
 
     const refreshPaid = p.get("refresh_paid");
+    const fromCheckout = p.get("fromCheckout");
+    const msStripePriceId = (p.get("stripePriceId") || "").trim();
+    const msPriceId = (p.get("msPriceId") || "").trim();
     const awaiting = memberId ? isAwaitingPostPaymentMatching(memberId) : false;
 
-    const clearRefreshParam = () => {
+    const clearCheckoutParams = () => {
       try {
         const url = new URL(window.location.href);
         url.searchParams.delete("refresh_paid");
+        url.searchParams.delete("fromCheckout");
+        url.searchParams.delete("msPriceId");
+        url.searchParams.delete("stripePriceId");
+        url.searchParams.delete("forceRefetch");
         window.history.replaceState({}, "", url.pathname + url.search);
       } catch {
         /* ignore */
       }
     };
 
+    // Memberstack's purchasePlansWithCheckout returns via fromCheckout / msPriceId /
+    // stripePriceId (it ignores successUrl/cancelUrl). stripePriceId=price_… is only
+    // present after a successful payment, so it is our "paid" signal.
+    const memberstackReturned =
+      fromCheckout !== null || msStripePriceId !== "" || msPriceId !== "";
+    const paidReturn =
+      refreshPaid === "1" ||
+      (memberstackReturned && msStripePriceId.startsWith("price_"));
+
     // Post-checkout return. The progressive "matching" flow is ONLY for members
     // who were genuinely mid-signup. Established members returning from a payment
     // attempt (paid or not) go back to the normal update-details form and must
     // never be pushed into the signup / matching steps.
-    if (refreshPaid === "1" || (awaiting && refreshPaid !== "0")) {
+    if (paidReturn) {
+      clearAwaitingPostPaymentMatching();
+      clearCheckoutParams();
       if (!midSignupRef.current) {
-        clearAwaitingPostPaymentMatching();
-        clearRefreshParam();
-        if (refreshPaid === "1") {
-          // Definitely paid (Stripe successUrl). Reconcile immediately so the
-          // new subscription/paid state is reflected without waiting on the
-          // async webhook, then refresh billing.
-          void (async () => {
-            await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-              method: "POST",
-              token,
-              body: JSON.stringify({}),
-            }).catch(() => undefined);
-            await refreshBilling(token);
-          })();
-        } else {
-          // Ambiguous return (marker present, no success param) — do NOT confirm,
-          // just reflect billing via the webhook reconciliation.
-          void refreshBilling(token);
-        }
+        // Established member who just paid — reconcile immediately so the new
+        // subscription/paid state is reflected, then refresh billing.
+        void (async () => {
+          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+            method: "POST",
+            token,
+            body: JSON.stringify({}),
+          }).catch(() => undefined);
+          await refreshBilling(token);
+        })();
       } else {
         void (async () => {
           setRefreshBusy(true);
@@ -1797,14 +1806,14 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               "We’re still confirming your payment with Stripe. Stay on this page a moment, then continue."
             );
           }
-          clearRefreshParam();
           if (mountedRef.current) setRefreshBusy(false);
         })();
       }
-    } else if (refreshPaid === "0") {
-      // Cancelled checkout — never force the progressive flow for established members.
+    } else if (refreshPaid === "0" || memberstackReturned || awaiting) {
+      // Cancelled or ambiguous return — never force the progressive flow or revive
+      // billing state for established members. Just reflect via webhook reconciliation.
       clearAwaitingPostPaymentMatching();
-      clearRefreshParam();
+      clearCheckoutParams();
       if (midSignupRef.current) {
         setNeedsRefresh(true);
         setRefreshStep("payment");
