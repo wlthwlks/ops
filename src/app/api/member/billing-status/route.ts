@@ -143,7 +143,12 @@ async function loadLiveStripeSnapshot(
       try {
         const direct = await stripe.subscriptions.retrieve(stored);
         if (direct && !("deleted" in direct && (direct as { deleted?: boolean }).deleted)) {
-          return { ...subscriptionToSnapshot(direct), error: null };
+          // Trust the stored subscription only while it is still live. A stale
+          // canceled/incomplete_expired id must not shadow a newer active
+          // subscription (e.g. after the member re-subscribed and paid).
+          if (direct.status !== "canceled" && direct.status !== "incomplete_expired") {
+            return { ...subscriptionToSnapshot(direct), error: null };
+          }
         }
       } catch {
         /* fall through to list */
