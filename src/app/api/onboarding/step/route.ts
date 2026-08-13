@@ -15,7 +15,7 @@ import { enforcePublicWriteRateLimit } from "@/lib/forms/http";
 import {
   findCatalogCityByCode,
   resolveIndustryForWrite,
-  validatePhoneParts,
+  resolvePhoneForCountry,
 } from "@/lib/forms/reference-data";
 import { normalizePostCode } from "@/lib/forms/reference-data/country-phone";
 import { syncMemberstackCustomFields } from "@/lib/forms/memberstack/custom-fields";
@@ -153,14 +153,17 @@ async function stepDataToAirtablePatch(
       };
     }
     case "LOCATION": {
-      const phonePrefix = String(data.phonePrefix || "").trim();
       const phoneRaw = String(data.phone || "").trim();
-      const iso2 = String(data.countryIso2 || "").trim() || null;
-      const phoneResult = validatePhoneParts(phonePrefix, phoneRaw, iso2);
+      const countryCode = String(data.countryCode || "").trim();
+      // Authoritative country + calling code derived from the selected Airtable
+      // country (record id); client-supplied phonePrefix/countryIso2 are NEVER
+      // trusted for validation here.
+      const phoneResult = await resolvePhoneForCountry(countryCode, phoneRaw);
       if (!phoneResult.ok) {
         throw new FormsError("PROFILE_VALIDATION_FAILED", phoneResult.message, {
           status: 400,
           retryable: false,
+          details: { fieldErrors: { phone: [phoneResult.message] }, formErrors: [] },
         });
       }
       const postCode = normalizePostCode(

@@ -3,7 +3,7 @@
  * Kept local so Vite bundles stay self-contained without Node-only imports.
  */
 import { z } from "zod";
-import { parsePhoneNumberFromString } from "libphonenumber-js";
+import { parsePhoneNumberFromString } from "libphonenumber-js/max";
 
 function validatePhonePair(
   data: { phone?: string; phonePrefix?: string; countryIso2?: string },
@@ -11,8 +11,9 @@ function validatePhonePair(
   required: boolean
 ) {
   const prefix = (data.phonePrefix || "").trim();
-  const phone = (data.phone || "").trim().replace(/[\s().-]/g, "");
-  if (!required && !prefix && !phone) return;
+  const iso = (data.countryIso2 || "").trim().toUpperCase();
+  const raw = (data.phone || "").trim();
+  if (!required && !prefix && !raw) return;
   if (!prefix || !/^\+\d{1,4}$/.test(prefix)) {
     ctx.addIssue({
       code: "custom",
@@ -21,15 +22,18 @@ function validatePhonePair(
     });
     return;
   }
-  if (!phone || phone.length < 4) {
-    ctx.addIssue({
-      code: "custom",
-      message: "Enter a valid phone number",
-      path: ["phone"],
-    });
+  if (!raw) {
+    ctx.addIssue({ code: "custom", message: "Enter a valid phone number", path: ["phone"] });
     return;
   }
-  if (!/^\d+$/.test(phone)) {
+  if (/[a-zA-Z]/.test(raw)) {
+    ctx.addIssue({ code: "custom", message: "Enter a valid phone number", path: ["phone"] });
+    return;
+  }
+  const isInternational = raw.startsWith("+");
+  const digitsBody = isInternational ? raw.slice(1) : raw;
+  const digits = digitsBody.replace(/[\s().\-]/g, "");
+  if (!/^\d+$/.test(digits)) {
     ctx.addIssue({
       code: "custom",
       message: "Phone number should contain digits only",
@@ -37,13 +41,22 @@ function validatePhonePair(
     });
     return;
   }
-  const iso = (data.countryIso2 || "").trim().toUpperCase();
-  let parsed = iso
-    ? parsePhoneNumberFromString(phone, iso as never)
-    : parsePhoneNumberFromString(`${prefix}${phone}`);
-  if (!parsed?.isValid()) {
-    parsed = parsePhoneNumberFromString(`${prefix}${phone}`);
+  if (digits.length < 4) {
+    ctx.addIssue({ code: "custom", message: "Enter a valid phone number", path: ["phone"] });
+    return;
   }
+  const parseInput = isInternational ? `+${digits}` : digits;
+  // Strict: when ISO2 known, parse with the selected country (local form) or as
+  // international (pasted full number) and verify it actually belongs to it.
+  // Without ISO2 (legacy/test path) parse the leading-+ international input or
+  // fall back to prefix+national digits.
+  const parsed = iso
+    ? isInternational
+      ? parsePhoneNumberFromString(parseInput)
+      : parsePhoneNumberFromString(parseInput, iso as never)
+    : isInternational
+      ? parsePhoneNumberFromString(parseInput)
+      : parsePhoneNumberFromString(`${prefix}${digits}`);
   if (!parsed?.isValid()) {
     ctx.addIssue({
       code: "custom",
@@ -56,6 +69,27 @@ function validatePhonePair(
     ctx.addIssue({
       code: "custom",
       message: "Phone number does not match the selected country’s calling code",
+      path: ["phone"],
+    });
+    return;
+  }
+  // Shared calling codes (e.g. US/CA on +1): resolved country must match the
+  // selected one; reject when a pasted number belongs to a different country.
+  if (iso && parsed.country && parsed.country !== iso) {
+    let belong = "";
+    try {
+      belong =
+        typeof Intl !== "undefined" && "DisplayNames" in Intl
+          ? new Intl.DisplayNames(["en"], { type: "region" }).of(parsed.country) || ""
+          : "";
+    } catch {
+      belong = "";
+    }
+    ctx.addIssue({
+      code: "custom",
+      message: belong
+        ? `This phone number belongs to ${belong}, not the selected country`
+        : "That phone number doesn’t look valid for the selected country",
       path: ["phone"],
     });
   }

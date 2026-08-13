@@ -17,6 +17,7 @@ import { enforcePublicWriteRateLimit } from "@/lib/forms/http";
 import {
   findCatalogCityByCode,
   resolveIndustryForWrite,
+  resolvePhoneForCountry,
   validatePhoneParts,
 } from "@/lib/forms/reference-data";
 import { normalizePostCode } from "@/lib/forms/reference-data/country-phone";
@@ -176,7 +177,13 @@ export async function PATCH(request: Request) {
       const prefix = (d.phonePrefix || "").trim();
       const phone = (d.phone || "").trim();
       if (prefix || phone) {
-        const phoneResult = validatePhoneParts(prefix, phone, d.countryIso2 || null);
+        const countryCode = (d.countryCode || "").trim();
+        // Prefer the authoritative server-side derivation from the selected
+        // Airtable country; only fall back to client-supplied prefix/iso2 when
+        // the payload truly omits a country (legacy partial updates).
+        const phoneResult = countryCode
+          ? await resolvePhoneForCountry(countryCode, phone)
+          : validatePhoneParts(prefix, phone, d.countryIso2 || null);
         if (!phoneResult.ok) {
           throw new FormsError("PROFILE_VALIDATION_FAILED", phoneResult.message, {
             status: 400,

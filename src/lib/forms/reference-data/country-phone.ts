@@ -6,7 +6,7 @@ import {
   getCountryCallingCode,
   parsePhoneNumberFromString,
   type CountryCode,
-} from "libphonenumber-js";
+} from "libphonenumber-js/max";
 
 /** Normalize country labels for lookup (lowercase, collapse whitespace/punctuation). */
 export function normalizeCountryLabel(label: string): string {
@@ -165,6 +165,25 @@ export function normalizeNationalDigits(nationalNumber: string): string {
   return (nationalNumber || "").trim().replace(/[\s().-]/g, "");
 }
 
+let displayNames: Intl.DisplayNames | null | undefined;
+/** Best-effort human country name from ISO2 (e.g. "US" → "United States"). */
+export function countryNameForIso2(iso2: string | null | undefined): string | null {
+  const code = (iso2 || "").trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return null;
+  try {
+    if (displayNames === undefined) {
+      displayNames =
+        typeof Intl !== "undefined" && "DisplayNames" in Intl
+          ? new Intl.DisplayNames(["en"], { type: "region" })
+          : null;
+    }
+    const name = displayNames?.of(code);
+    return name || null;
+  } catch {
+    return null;
+  }
+}
+
 /** Validate national number + dial prefix; returns E.164 parts or error. */
 export function validatePhoneParts(
   phonePrefix: string,
@@ -172,28 +191,48 @@ export function validatePhoneParts(
   iso2?: string | null
 ): { ok: true; e164: string; national: string; prefix: string } | { ok: false; message: string } {
   const prefix = (phonePrefix || "").trim();
-  let national = normalizeNationalDigits(nationalNumber);
   if (!prefix || !/^\+\d{1,4}$/.test(prefix)) {
     return { ok: false, message: "Select a country so we can add the correct calling code" };
   }
-  if (!national || national.length < 4) {
+
+  const expectedIso2 = (iso2 || "").trim().toUpperCase() as CountryCode | "";
+
+  // Preserve a leading "+" exactly once; strip formatting noise (spaces, parens, hyphens).
+  const raw = (nationalNumber || "").trim();
+  if (!raw) {
     return { ok: false, message: "Enter a valid phone number" };
   }
-  if (!/^\d+$/.test(national)) {
+  // Real letters (other than a leading "+") are never part of a phone number.
+  if (/[a-zA-Z]/.test(raw)) {
+    return { ok: false, message: "Enter a valid phone number" };
+  }
+  const isInternational = raw.startsWith("+");
+  const digitsBody = isInternational ? raw.slice(1) : raw;
+  const digits = digitsBody.replace(/[\s().\-]/g, "");
+  if (!/^\d+$/.test(digits)) {
     return { ok: false, message: "Phone number should contain digits only" };
   }
-
-  const country = (iso2 || "").trim().toUpperCase() as CountryCode | "";
-  let parsed = country
-    ? parsePhoneNumberFromString(national, country)
-    : parsePhoneNumberFromString(`${prefix}${national}`);
-
-  // Retry with full international if national-with-country failed
-  if ((!parsed || !parsed.isValid()) && !country) {
-    parsed = parsePhoneNumberFromString(`${prefix}${national}`);
+  if (digits.length < 4) {
+    return { ok: false, message: "Enter a valid phone number" };
   }
-  if ((!parsed || !parsed.isValid()) && country) {
-    parsed = parsePhoneNumberFromString(`${prefix}${national}`);
+  const parseInput = isInternational ? `+${digits}` : digits;
+
+  // When the selected country is known, parse strictly with that country and
+  // verify the parsed number actually belongs to it (handles shared calling
+  // codes such as US/CA on +1 by checking libphonenumber’s resolved country).
+  // Without an iso2 (legacy / test paths), fall back to parsing the full number
+  // (international if the user included a "+", otherwise the prefix + digits).
+  let parsed: ReturnType<typeof parsePhoneNumberFromString>;
+  if (expectedIso2) {
+    parsed = isInternational
+      ? parsePhoneNumberFromString(parseInput)
+      : parsePhoneNumberFromString(parseInput, expectedIso2);
+  } else {
+    parsed =
+      (isInternational
+        ? parsePhoneNumberFromString(parseInput)
+        : parsePhoneNumberFromString(`${prefix}${digits}`)) ??
+      parsePhoneNumberFromString(parseInput);
   }
 
   if (!parsed || !parsed.isValid()) {
@@ -203,8 +242,29 @@ export function validatePhoneParts(
     };
   }
 
-  // Ensure calling code matches selected prefix
   const parsedPrefix = `+${parsed.countryCallingCode}`;
+
+  // For shared calling codes (e.g. +1 covers US and CA), the calling code alone
+  // can’t tell us which country the number belongs to — libphonenumber does.
+  // Resolve the country first and surface a clear "wrong country" message.
+  if (expectedIso2) {
+    if (!parsed.country) {
+      return {
+        ok: false,
+        message: "Phone number does not match the selected country’s calling code",
+      };
+    }
+    if (parsed.country !== expectedIso2) {
+      const belong = countryNameForIso2(parsed.country);
+      return {
+        ok: false,
+        message: belong
+          ? `This phone number belongs to ${belong}, not the selected country`
+          : "That phone number doesn’t look valid for the selected country",
+      };
+    }
+  }
+
   if (parsedPrefix !== prefix) {
     return {
       ok: false,

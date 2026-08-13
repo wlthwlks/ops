@@ -6,6 +6,7 @@
 export {
   loadLocationCatalog,
   findCatalogCityByCode,
+  findCatalogCountryByCode,
   findCatalogCityByRecordIds,
   resolveMemberLocationDto,
   isAirtableRecordId,
@@ -50,9 +51,47 @@ export {
   defaultDialCodeFromLocale,
   auditCountryPhoneMappings,
   normalizeCountryLabel,
+  countryNameForIso2,
   REQUIRED_PHONE_COUNTRY_LABELS,
   type CountryPhoneMeta,
 } from "./country-phone";
+
+import {
+  dialCodeForIso2,
+  resolveCountryIso2,
+  validatePhoneParts,
+} from "./country-phone";
+import { findCatalogCountryByCode } from "./airtable-catalog";
+
+/**
+ * Authoritative server-side phone validation: derive the expected country +
+ * calling code from the selected Airtable `countryCode` (record id) — never
+ * trust phonePrefix / countryIso2 sent by the browser.
+ */
+export async function resolvePhoneForCountry(
+  countryCode: string,
+  rawPhone: string
+): Promise<
+  | { ok: true; e164: string; national: string; prefix: string }
+  | { ok: false; message: string }
+> {
+  const country = await findCatalogCountryByCode(countryCode);
+  if (!country) {
+    return {
+      ok: false,
+      message: "Select a country so we can add the correct calling code",
+    };
+  }
+  const iso2 = resolveCountryIso2(country.label);
+  const dialCode = dialCodeForIso2(iso2);
+  if (!iso2 || !dialCode) {
+    return {
+      ok: false,
+      message: "Select a country so we can add the correct calling code",
+    };
+  }
+  return validatePhoneParts(dialCode, rawPhone, iso2);
+}
 
 export async function getOnboardingReferenceData() {
   const { loadLocationCatalog } = await import("./airtable-catalog");

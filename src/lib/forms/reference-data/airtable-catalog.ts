@@ -199,6 +199,17 @@ export async function findCatalogCityByCode(
   return catalog.cities.find((c) => c.code === id || c.airtableRecordId === id);
 }
 
+/** Look up a catalogue COUNTRIES row by Airtable record id (their form `countryCode`). */
+export async function findCatalogCountryByCode(
+  code: string,
+  airtable?: AirtableClient | null
+): Promise<CatalogCountry | undefined> {
+  const id = code.trim();
+  if (!id) return undefined;
+  const catalog = await loadLocationCatalog(airtable ?? getClient());
+  return catalog.countries.find((c) => c.code === id);
+}
+
 export async function findCatalogCityByRecordIds(
   recordIds: string[],
   airtable?: AirtableClient | null
