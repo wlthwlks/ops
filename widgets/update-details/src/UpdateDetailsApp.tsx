@@ -1958,7 +1958,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
           {refreshStep === "payment" && (
             <div className="wlth-pay-hero">
-              {membershipDisplay.showBanner && membershipDisplay.kind !== "expired" ? (
+              {membershipDisplay.showBanner ? (
                 <>
                   {/* Reactivation banner (membershipBannerEl above) already shows
                       the reactivation + Manage billing buttons. Only keep Back. */}
