@@ -30,14 +30,12 @@ describe("extractStripeCustomerIdFromMemberstackRaw", () => {
 describe("isRecentStripeTimestamp", () => {
   const now = 1_800_000_000;
 
-  it("accepts timestamps within the 15-minute window", () => {
+  it("accepts timestamps within the recent window", () => {
     expect(isRecentStripeTimestamp(now, now)).toBe(true);
-    expect(isRecentStripeTimestamp(now - 10 * 60, now)).toBe(true);
+    expect(isRecentStripeTimestamp(now - 60 * 60, now)).toBe(true);
   });
 
   it("rejects timestamps older than the window", () => {
-    expect(isRecentStripeTimestamp(now - 20 * 60, now)).toBe(false);
-    expect(isRecentStripeTimestamp(now - 60 * 60, now)).toBe(false);
     expect(isRecentStripeTimestamp(now - 3 * 60 * 60, now)).toBe(false);
     expect(isRecentStripeTimestamp(now - 7 * 24 * 60 * 60, now)).toBe(false);
   });

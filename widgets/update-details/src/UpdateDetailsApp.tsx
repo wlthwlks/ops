@@ -1154,18 +1154,15 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         return;
       }
       const base = window.location.origin + window.location.pathname;
-      // Only mid-signup members need the post-payment matching marker.
-      if (memberId && onboardingIncomplete) {
-        markAwaitingPostPaymentMatching(memberId);
-      }
+      if (memberId) markAwaitingPostPaymentMatching(memberId);
       await w.$memberstackDom.purchasePlansWithCheckout({
         priceId: membershipPriceId,
         successUrl: `${base}?refresh_paid=1`,
         cancelUrl: `${base}?refresh_paid=0`,
       });
-      // Popup closed without full-page return. confirm-checkout only extends
-      // Service access until when Stripe shows a *recent* paid invoice or new sub
-      // (cancel/Back has neither → access unchanged).
+      // Popup closed without navigation. confirm-checkout only accepts RECENT
+      // Stripe evidence (new invoice / new sub), so cancel/Back does not extend
+      // access; a real payment does update Service access until.
       if (onboardingIncomplete) {
         await api(props.apiBase, "/api/onboarding/confirm-checkout", {
           method: "POST",
@@ -1186,21 +1183,11 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           token,
           body: JSON.stringify({}),
         }).catch(() => undefined);
-        for (let i = 0; i < 12; i++) {
-          if (i > 0 && i % 3 === 0) {
-            await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-              method: "POST",
-              token,
-              body: JSON.stringify({}),
-            }).catch(() => undefined);
-          }
+        for (let i = 0; i < 8; i++) {
           const b = await refreshBilling(token);
           const ui = String(b?.uiState ?? "").trim();
           const pay = String(b?.payment ?? "").toLowerCase();
-          if (ui === "active" || pay === "paid") {
-            setOk("Payment confirmed. Your membership is active again.");
-            break;
-          }
+          if (ui === "active" || pay === "paid") break;
           await new Promise((r) => setTimeout(r, 2000));
         }
       }
@@ -1713,13 +1700,18 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
     if (p.get("reactivated") === "1" || p.get("billing_refresh") === "1") {
       void (async () => {
-        // Portal / manage-billing return: never invent payment. Only refresh billing.
-        // confirm-checkout is reserved for proven checkout returns (refresh_paid / price_).
         if (p.get("reactivated") === "1") {
-          setOk("Welcome back; refreshing your membership status…");
+          setOk("Welcome back; confirming your membership…");
+          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+            method: "POST",
+            token,
+            body: JSON.stringify({}),
+          }).catch(() => undefined);
         }
+        // Short delay so Stripe portal cancel is visible to API immediately after redirect
         await new Promise((r) => setTimeout(r, 400));
         await refreshBilling(token);
+        // One more pull shortly after — covers webhook/Stripe eventual consistency
         await new Promise((r) => setTimeout(r, 1500));
         await refreshBilling(token);
         try {
@@ -1762,41 +1754,35 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       refreshPaid === "1" ||
       (memberstackReturned && msStripePriceId.startsWith("price_"));
 
-    // Post-checkout return. Progressive "matching" is ONLY for mid-signup.
-    // paidReturn is a proven success signal (refresh_paid=1 or stripePriceId=price_…).
-    // Call confirm-checkout so Service access until is written immediately; cancel/Back
-    // never sets paidReturn so access stays unchanged.
+    // Post-checkout return. The progressive "matching" flow is ONLY for members
+    // who were genuinely mid-signup. Established members returning from a payment
+    // attempt (paid or not) go back to the normal update-details form and must
+    // never be pushed into the signup / matching steps.
     if (paidReturn) {
       clearAwaitingPostPaymentMatching();
       clearCheckoutParams();
       if (!midSignupRef.current) {
+        // Established member who just paid — confirm + poll so Service access until
+        // and Paid/Active land before the UI settles (webhook may lag).
         void (async () => {
-          setRefreshBusy(true);
-          try {
-            await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-              method: "POST",
-              token,
-              body: JSON.stringify({}),
-            }).catch(() => undefined);
-            for (let i = 0; i < 12; i++) {
-              if (i > 0 && i % 3 === 0) {
-                await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-                  method: "POST",
-                  token,
-                  body: JSON.stringify({}),
-                }).catch(() => undefined);
-              }
-              const b = await refreshBilling(token);
-              const ui = String(b?.uiState ?? "").trim();
-              const pay = String(b?.payment ?? "").toLowerCase();
-              if (ui === "active" || pay === "paid") {
-                setOk("Payment confirmed. Your membership is active again.");
-                break;
-              }
-              await new Promise((r) => setTimeout(r, 2000));
+          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+            method: "POST",
+            token,
+            body: JSON.stringify({}),
+          }).catch(() => undefined);
+          for (let i = 0; i < 8; i++) {
+            if (i > 0 && i % 3 === 0) {
+              await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+                method: "POST",
+                token,
+                body: JSON.stringify({}),
+              }).catch(() => undefined);
             }
-          } finally {
-            if (mountedRef.current) setRefreshBusy(false);
+            const b = await refreshBilling(token);
+            const ui = String(b?.uiState ?? "").trim();
+            const pay = String(b?.payment ?? "").toLowerCase();
+            if (ui === "active" || pay === "paid") break;
+            await new Promise((r) => setTimeout(r, 2000));
           }
         })();
       } else {
@@ -1810,6 +1796,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
             token,
             body: JSON.stringify({}),
           }).catch(() => undefined);
+          // Poll briefly for Paid/Active like signup
           let confirmed = false;
           for (let i = 0; i < 15; i++) {
             try {
@@ -1851,7 +1838,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         })();
       }
     } else if (refreshPaid === "0" || memberstackReturned || awaiting) {
-      // Cancelled or ambiguous — do NOT call confirm-checkout.
+      // Cancelled or ambiguous return — never force the progressive flow or revive
+      // billing state for established members. Poll briefly so a successful
+      // payment (Memberstack returns a clean URL with no success param) is picked
+      // up via the async Stripe webhook / live Stripe reconciliation.
       clearAwaitingPostPaymentMatching();
       clearCheckoutParams();
       if (midSignupRef.current) {
