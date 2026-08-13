@@ -1729,12 +1729,25 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     // never be pushed into the signup / matching steps.
     if (refreshPaid === "1" || (awaiting && refreshPaid !== "0")) {
       if (!midSignupRef.current) {
-        // Established member: do NOT re-confirm checkout. confirm-checkout has
-        // write side-effects (revives Paid/Active from historical invoices), and
-        // the Stripe webhook already reconciles real payments. Just refresh.
         clearAwaitingPostPaymentMatching();
         clearRefreshParam();
-        void refreshBilling(token);
+        if (refreshPaid === "1") {
+          // Definitely paid (Stripe successUrl). Reconcile immediately so the
+          // new subscription/paid state is reflected without waiting on the
+          // async webhook, then refresh billing.
+          void (async () => {
+            await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+              method: "POST",
+              token,
+              body: JSON.stringify({}),
+            }).catch(() => undefined);
+            await refreshBilling(token);
+          })();
+        } else {
+          // Ambiguous return (marker present, no success param) — do NOT confirm,
+          // just reflect billing via the webhook reconciliation.
+          void refreshBilling(token);
+        }
       } else {
         void (async () => {
           setRefreshBusy(true);
