@@ -797,29 +797,18 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           <>
             <h3>Your membership has ended</h3>
             <p className="wlth-muted" style={{ marginBottom: 12 }}>
-              Your paid access has expired. Subscribe again to restore full membership.
-              Use Manage billing to add or change cards.
+              Your paid access has expired. Subscribe again to restore full membership —
+              you&apos;ll review the plan and price on Stripe before you&apos;re charged.
             </p>
             <div className="wlth-actions">
-              {billing?.hasPaymentMethod ? (
-                <button
-                  type="button"
-                  className="wlth-btn-primary"
-                  disabled={reactivating}
-                  onClick={() => void reactivateMembership()}
-                >
-                  {reactivating ? "Resubscribing…" : "Resubscribe"}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="wlth-btn-primary"
-                  disabled={reactivating}
-                  onClick={() => void startRefreshCheckout()}
-                >
-                  Continue to secure checkout
-                </button>
-              )}
+              <button
+                type="button"
+                className="wlth-btn-primary"
+                disabled={refreshBusy}
+                onClick={() => void startRefreshCheckout()}
+              >
+                {refreshBusy ? "Opening secure checkout…" : "Subscribe again"}
+              </button>
               <button
                 type="button"
                 className="wlth-btn-secondary"
@@ -1607,20 +1596,33 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       })) as Record<string, unknown>;
       if (!res.success) {
         const status = String(res.status || "");
-        if (
-          status === "no_payment_method" ||
-          status === "payment_problem" ||
-          Boolean(res.requiresPaymentMethod)
-        ) {
+        if (status === "payment_problem") {
           setError(
-            String(res.reason || res.message || "Add a payment method to continue your membership.")
+            String(
+              res.reason ||
+                res.message ||
+                "Your payment needs attention. Update your card to continue."
+            )
           );
+          await openPortal();
+          return;
+        }
+        if (status === "no_payment_method" || Boolean(res.requiresPaymentMethod)) {
+          setError(
+            String(
+              res.reason ||
+                res.message ||
+                "Add a payment method to continue your membership."
+            )
+          );
+          await openPortal();
           return;
         }
         if (status === "no_stripe_customer") {
           setError(
             String(res.reason || res.message || "No Stripe customer — complete checkout first.")
           );
+          await startRefreshCheckout();
           return;
         }
         setError(String(res.reason || res.message || "Could not reactivate membership"));
