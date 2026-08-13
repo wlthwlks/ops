@@ -1162,8 +1162,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       });
       // Popup closed without navigation. Only confirm-checkout for genuinely
       // mid-signup members (it advances payment state). Established members must
-      // not be revived — poll briefly so a successful payment is picked up via
-      // the async webhook / live Stripe reconciliation.
+      // not be revived — reconcile a possible successful payment (recent-only)
+      // then poll for the async webhook / live Stripe reconciliation.
       if (onboardingIncomplete) {
         await api(props.apiBase, "/api/onboarding/confirm-checkout", {
           method: "POST",
@@ -1179,6 +1179,11 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           goAfterPaymentToMatching();
         }
       } else {
+        await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+          method: "POST",
+          token,
+          body: JSON.stringify({}),
+        }).catch(() => undefined);
         for (let i = 0; i < 8; i++) {
           const b = await refreshBilling(token);
           const ui = String(b?.uiState ?? "").trim();
@@ -1821,10 +1826,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         })();
       }
     } else if (refreshPaid === "0" || memberstackReturned || awaiting) {
-      // Cancelled or ambiguous return — never force the progressive flow or revive
-      // billing state for established members. Poll briefly so a successful
-      // payment (Memberstack returns a clean URL with no success param) is picked
-      // up via the async Stripe webhook / live Stripe reconciliation.
+      // Cancelled or ambiguous return — reconcile a possible successful payment,
+      // then poll briefly. confirm-checkout now only accepts RECENT evidence, so
+      // it won't revive an expired member based on historical invoices.
       clearAwaitingPostPaymentMatching();
       clearCheckoutParams();
       if (midSignupRef.current) {
@@ -1832,6 +1836,11 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         setRefreshStep("payment");
       } else {
         void (async () => {
+          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
+            method: "POST",
+            token,
+            body: JSON.stringify({}),
+          }).catch(() => undefined);
           for (let i = 0; i < 8; i++) {
             const b = await refreshBilling(token);
             const ui = String(b?.uiState ?? "").trim();

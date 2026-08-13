@@ -33,6 +33,30 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * Recent-payment window used to distinguish a NEW payment from historical
+ * billing evidence. The recovery path (no checkout session id) must only mark a
+ * member "paid" from evidence produced in the last few minutes — otherwise a
+ * previously-cancelled member with an old paid invoice / stale active
+ * subscription would be incorrectly revived and have "Service access until"
+ * extended.
+ */
+const RECENT_PAYMENT_WINDOW_SEC = 2 * 60 * 60; // 2 hours
+
+export function isRecentStripeTimestamp(
+  unixSeconds: number | null | undefined,
+  nowUnix: number = Math.floor(Date.now() / 1000)
+): boolean {
+  if (typeof unixSeconds !== "number" || unixSeconds <= 0) return false;
+  return nowUnix - unixSeconds <= RECENT_PAYMENT_WINDOW_SEC;
+}
+
+function invoicePaidAtUnix(inv: Stripe.Invoice): number | null {
+  const t = inv.status_transitions;
+  if (t && typeof t.paid_at === "number") return t.paid_at;
+  return null;
+}
+
+/**
  * Prefer VERCEL_ENV when set (preview builds still have NODE_ENV=production).
  * Local: fall back to NODE_ENV.
  */
@@ -570,6 +594,9 @@ export async function confirmCheckoutForMember(input: {
       });
       for (const inv of invoices.data) {
         if (!inv.id) continue;
+        // Only treat a paid invoice as evidence of a NEW payment when it was paid
+        // recently. Historical paid invoices must not revive an expired member.
+        if (!isRecentStripeTimestamp(invoicePaidAtUnix(inv))) continue;
         const lines = await listAllInvoiceLines(stripe, inv.id);
 
         const rawPrices: string[] = [];
@@ -627,8 +654,11 @@ export async function confirmCheckoutForMember(input: {
           limit: 10,
         });
         const pick =
-          subs.data.find((s) => ["active", "trialing", "past_due"].includes(s.status)) ||
-          null;
+          subs.data.find(
+            (s) =>
+              ["active", "trialing", "past_due"].includes(s.status) &&
+              isRecentStripeTimestamp(s.created)
+          ) || null;
         if (pick) {
           subscriptionId = subscriptionId || pick.id;
           subscriptionStatus = pick.status;
