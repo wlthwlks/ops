@@ -427,7 +427,7 @@ export async function reactivateMembershipForMember(input: {
         [MEMBER_FIELDS.stripeSubscriptionId]: live.id,
         [MEMBER_FIELDS.stripeSubscriptionStatus]: live.status,
         [MEMBER_FIELDS.stripeCustomerId]: stripeCustomerId,
-        [MEMBER_FIELDS.stripePriceId]: plan,
+        [MEMBER_FIELDS.stripePriceId]: subPrice,
         [MEMBER_FIELDS.memberstackPlanId]:
           getConfiguredMemberstackPlanId() ||
           fieldStr(fields, MEMBER_FIELDS.memberstackPlanId),
@@ -456,7 +456,7 @@ export async function reactivateMembershipForMember(input: {
   );
   if (!fullRefunded && pendingCancel) {
     const updated = await reverseScheduledCancellation(stripe, pendingCancel);
-    const { subPrice, plan } = commerceIds(updated, "");
+    const { subPrice } = commerceIds(updated, "");
     const next = periodEndIso(updated);
     await syncReactivateBilling({
       memberstackId: msId,
@@ -465,7 +465,7 @@ export async function reactivateMembershipForMember(input: {
         [MEMBER_FIELDS.stripeSubscriptionId]: updated.id,
         [MEMBER_FIELDS.stripeSubscriptionStatus]: updated.status,
         [MEMBER_FIELDS.stripeCustomerId]: stripeCustomerId,
-        [MEMBER_FIELDS.stripePriceId]: plan || subPrice,
+        [MEMBER_FIELDS.stripePriceId]: subPrice,
         [MEMBER_FIELDS.memberstackPlanId]: getConfiguredMemberstackPlanId() || "",
         ["Paid Plans (price ids)"]: formatPaidPlansText([subPrice]),
         [MEMBER_FIELDS.cancelAtPeriodEnd]: false,
@@ -579,9 +579,9 @@ export async function reactivateMembershipForMember(input: {
     patch: {
       [MEMBER_FIELDS.stripeSubscriptionId]: created.id,
       [MEMBER_FIELDS.stripeSubscriptionStatus]: created.status,
-      [MEMBER_FIELDS.stripePriceId]: plan,
-      [MEMBER_FIELDS.memberstackPlanId]: getConfiguredMemberstackPlanId() || plan,
-      ["Paid Plans (price ids)"]: formatPaidPlansText([plan, subPrice]),
+      [MEMBER_FIELDS.stripePriceId]: subPrice,
+      [MEMBER_FIELDS.memberstackPlanId]: getConfiguredMemberstackPlanId() || "",
+      ["Paid Plans (price ids)"]: formatPaidPlansText([subPrice, plan]),
       [MEMBER_FIELDS.cancelAtPeriodEnd]: false,
       ...(next ? { [MEMBER_FIELDS.serviceAccessUntil]: next } : {}),
     },

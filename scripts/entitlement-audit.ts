@@ -132,6 +132,14 @@ async function deriveEntitlement(cus: string): Promise<Record<string, unknown> |
           cancel_at: ps.cancel_at, canceled_at: ps.canceled_at, ended_at: ps.ended_at, current_period_end: ps.current_period_end }, { paidThroughUnix: put });
         ck = cls.kind; ecu = cls.effectiveUnix; notes.push(...cls.notes);
         if (cls.kind==="immediate" && cls.effectiveUnix!=null && put!=null && cls.effectiveUnix < put) { put = cls.effectiveUnix; notes.push("Clamped to immediate cancel"); }
+        // Active subs are entitled through the CURRENT period end even while the
+        // renewal invoice is open/draft (Stripe keeps them active until dunning fails).
+        const itemEnd = primary.items?.data?.[0]?.current_period_end;
+        const periodEnd = (typeof ps.current_period_end === "number" ? ps.current_period_end : typeof itemEnd === "number" ? itemEnd : null) as number | null;
+        if (primary.status === "active" && periodEnd != null && (put == null || periodEnd > put)) {
+          put = periodEnd;
+          notes.push("Active subscription — paid-through promoted to current period end");
+        }
       }
     } catch { notes.push("Sub list failed"); }
     return { stripeCustomerId: cus, hasEntitlementNow: put!=null && put>=Math.floor(Date.now()/1000),

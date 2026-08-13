@@ -433,6 +433,23 @@ export async function calculateStripeEntitlement(input: {
           paidThroughUnix = cls.effectiveUnix;
           notes.push("Clamped paid-through to immediate cancellation time");
         }
+
+        // Active subscriptions are entitled through their CURRENT period end even
+        // when the renewal invoice is still open/draft — Stripe keeps the sub active
+        // (member keeps access) until dunning fails. Without this, a member whose
+        // renewal hasn't paid yet would look expired from paid invoices alone.
+        // past_due / unpaid / trialing are intentionally NOT promoted (see access rules).
+        if (
+          primarySubscription.status === "active" &&
+          primarySubscription.currentPeriodEndUnix != null &&
+          (paidThroughUnix == null ||
+            primarySubscription.currentPeriodEndUnix > paidThroughUnix)
+        ) {
+          paidThroughUnix = primarySubscription.currentPeriodEndUnix;
+          notes.push(
+            "Active subscription — paid-through promoted to current period end (renewal invoice may still be pending)"
+          );
+        }
       }
       if (subs.data.filter((s) => s.status === "active" || s.status === "trialing").length > 1) {
         notes.push("Multiple active/trialing subscriptions");

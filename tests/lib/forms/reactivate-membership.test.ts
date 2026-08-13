@@ -132,6 +132,11 @@ describe("reactivateMembershipForMember", () => {
     });
     expect(subscriptionsCreate).not.toHaveBeenCalled();
     expect(applyTrustedPaymentByMemberstackId).toHaveBeenCalled();
+    const patch = applyTrustedPaymentByMemberstackId.mock.calls[0][0]
+      .patch as Record<string, unknown>;
+    // Keeps the existing subscription's original native price in "Stripe Price ID".
+    expect(patch[MEMBER_FIELDS.stripePriceId]).toBe("price_legacy");
+    expect(patch[MEMBER_FIELDS.memberstackPlanId]).toBe("prc_plan");
   });
 
   it("active + cancel_at timestamp: clears cancel without combining cancel_at params", async () => {
@@ -246,6 +251,11 @@ describe("reactivateMembershipForMember", () => {
         payment_behavior: "error_if_incomplete",
       })
     );
+    const patch = applyTrustedPaymentByMemberstackId.mock.calls[0][0]
+      .patch as Record<string, unknown>;
+    // Native Stripe price_ goes in "Stripe Price ID" — never the Memberstack commerce id.
+    expect(patch[MEMBER_FIELDS.stripePriceId]).toBe("price_new");
+    expect(patch[MEMBER_FIELDS.memberstackPlanId]).toBe("prc_plan");
   });
 
   it("canceled after period end never reuses the historical old price", async () => {
