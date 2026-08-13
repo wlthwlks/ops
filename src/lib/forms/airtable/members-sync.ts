@@ -27,7 +27,10 @@ import {
   splitStoredPhone,
 } from "@/lib/forms/reference-data";
 import { FormsError } from "@/lib/forms/errors";
-import { isInProgressOnboarding } from "@/lib/forms/onboarding/onboarding-status";
+import {
+  isEstablishedOnboarding,
+  isInProgressOnboarding,
+} from "@/lib/forms/onboarding/onboarding-status";
 import { canWriteAirtableFromForms } from "@/lib/forms/feature-flags";
 import { stripComputedMemberWriteFields } from "@/lib/forms/airtable/write-guards";
 import {
@@ -734,6 +737,22 @@ export async function updateOnboardingStep(
     throw new FormsError("AIRTABLE_MEMBER_NOT_FOUND", "Member not found for Memberstack ID", {
       status: 404,
     });
+  }
+
+  // "Onboarding status" is lifecycle-only: it must never regress an established
+  // member (blank legacy or COMPLETE) back into a signup stage — e.g. the
+  // matching GOAL / HELP_WANTED / EXPERTISE / CONNECTION steps. The update-details
+  // refresh flow must not silently reset an established member's onboarding status.
+  const currentOnboardingStatus = String(
+    existing.fields[MEMBER_FIELDS.onboardingStatus] ?? ""
+  ).trim();
+  const incomingStage = String(input.stage || "").trim().toUpperCase();
+  if (
+    incomingStage !== "COMPLETE" &&
+    incomingStage !== "COMPLETED" &&
+    isEstablishedOnboarding(currentOnboardingStatus)
+  ) {
+    return { record: existing, shadowed: false };
   }
 
   const fields: Record<string, unknown> = {

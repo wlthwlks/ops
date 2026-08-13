@@ -216,6 +216,7 @@ describe("Airtable member writes never include computed Name", () => {
         fields: {
           [MEMBER_FIELDS.memberstackId]: "mem_1",
           [MEMBER_FIELDS.email]: "a@b.com",
+          [MEMBER_FIELDS.onboardingStatus]: "ACCOUNT_CREATED",
         },
       },
     ]);
@@ -254,7 +255,10 @@ describe("Airtable member writes never include computed Name", () => {
     listRecords.mockResolvedValue([
       {
         id: "rec_existing",
-        fields: { [MEMBER_FIELDS.memberstackId]: "mem_1" },
+        fields: {
+          [MEMBER_FIELDS.memberstackId]: "mem_1",
+          [MEMBER_FIELDS.onboardingStatus]: "ACCOUNT_CREATED",
+        },
       },
     ]);
 
@@ -283,7 +287,10 @@ describe("Airtable member writes never include computed Name", () => {
     listRecords.mockResolvedValue([
       {
         id: "rec_existing",
-        fields: { [MEMBER_FIELDS.memberstackId]: "mem_2" },
+        fields: {
+          [MEMBER_FIELDS.memberstackId]: "mem_2",
+          [MEMBER_FIELDS.onboardingStatus]: "ACCOUNT_CREATED",
+        },
       },
     ]);
 
@@ -303,6 +310,69 @@ describe("Airtable member writes never include computed Name", () => {
     expect(fields[MEMBER_FIELDS.availabilityV2]).toBeUndefined();
     // Existing Airtable availability data must not be cleared
     expect(fields[MEMBER_FIELDS.availabilityLegacy]).toBeUndefined();
+  });
+
+  it("updateOnboardingStep does not regress a COMPLETE member into a matching step", async () => {
+    listRecords.mockResolvedValue([
+      {
+        id: "rec_done",
+        fields: {
+          [MEMBER_FIELDS.memberstackId]: "mem_done",
+          [MEMBER_FIELDS.onboardingStatus]: "COMPLETE",
+        },
+      },
+    ]);
+
+    const { updateOnboardingStep } = await loadMembersSync();
+    const result = await updateOnboardingStep({
+      memberstackId: "mem_done",
+      stage: "GOAL",
+      patch: { [MEMBER_FIELDS.ninetyDayGoal]: "should-not-write" },
+    });
+
+    expect(updateRecords).not.toHaveBeenCalled();
+    expect(result.record?.id).toBe("rec_done");
+  });
+
+  it("updateOnboardingStep does not regress a blank (legacy) member into a matching step", async () => {
+    listRecords.mockResolvedValue([
+      {
+        id: "rec_legacy",
+        fields: { [MEMBER_FIELDS.memberstackId]: "mem_legacy" },
+      },
+    ]);
+
+    const { updateOnboardingStep } = await loadMembersSync();
+    await updateOnboardingStep({
+      memberstackId: "mem_legacy",
+      stage: "EXPERTISE",
+      patch: { [MEMBER_FIELDS.expertise]: ["recExp1"] },
+    });
+
+    expect(updateRecords).not.toHaveBeenCalled();
+  });
+
+  it("updateOnboardingStep allows COMPLETE to finish the final matching step", async () => {
+    listRecords.mockResolvedValue([
+      {
+        id: "rec_finish",
+        fields: {
+          [MEMBER_FIELDS.memberstackId]: "mem_finish",
+          [MEMBER_FIELDS.onboardingStatus]: "CONNECTION",
+        },
+      },
+    ]);
+
+    const { updateOnboardingStep } = await loadMembersSync();
+    await updateOnboardingStep({
+      memberstackId: "mem_finish",
+      stage: "COMPLETE",
+      patch: {},
+    });
+
+    expect(updateRecords).toHaveBeenCalledTimes(1);
+    const fields = updateRecords.mock.calls[0][1][0].fields as Record<string, unknown>;
+    expect(fields[MEMBER_FIELDS.onboardingStatus]).toBe("COMPLETE");
   });
 
   it("upsert with attribution uses canonical UTM field names", async () => {
