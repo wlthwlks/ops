@@ -400,17 +400,21 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     });
   };
 
-  const refreshBilling = async (accessToken?: string | null) => {
+  const refreshBilling = async (
+    accessToken?: string | null
+  ): Promise<Record<string, unknown> | null> => {
     const t = accessToken || token;
-    if (!t) return;
+    if (!t) return null;
     try {
       const bill = await api(props.apiBase, "/api/member/billing-status", {
         token: t,
         cache: "no-store",
       });
       applyBillingPayload(bill.billing);
+      return (bill.billing || null) as Record<string, unknown> | null;
     } catch {
       /* ignore — billing refreshes on next mount */
+      return null;
     }
   };
 
@@ -1158,7 +1162,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       });
       // Popup closed without navigation. Only confirm-checkout for genuinely
       // mid-signup members (it advances payment state). Established members must
-      // not be revived — just reflect billing via the webhook reconciliation.
+      // not be revived — poll briefly so a successful payment is picked up via
+      // the async webhook / live Stripe reconciliation.
       if (onboardingIncomplete) {
         await api(props.apiBase, "/api/onboarding/confirm-checkout", {
           method: "POST",
@@ -1174,7 +1179,13 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           goAfterPaymentToMatching();
         }
       } else {
-        await refreshBilling(token);
+        for (let i = 0; i < 8; i++) {
+          const b = await refreshBilling(token);
+          const ui = String(b?.uiState ?? "").trim();
+          const pay = String(b?.payment ?? "").toLowerCase();
+          if (ui === "active" || pay === "paid") break;
+          await new Promise((r) => setTimeout(r, 2000));
+        }
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
@@ -1811,14 +1822,24 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       }
     } else if (refreshPaid === "0" || memberstackReturned || awaiting) {
       // Cancelled or ambiguous return — never force the progressive flow or revive
-      // billing state for established members. Just reflect via webhook reconciliation.
+      // billing state for established members. Poll briefly so a successful
+      // payment (Memberstack returns a clean URL with no success param) is picked
+      // up via the async Stripe webhook / live Stripe reconciliation.
       clearAwaitingPostPaymentMatching();
       clearCheckoutParams();
       if (midSignupRef.current) {
         setNeedsRefresh(true);
         setRefreshStep("payment");
       } else {
-        void refreshBilling(token);
+        void (async () => {
+          for (let i = 0; i < 8; i++) {
+            const b = await refreshBilling(token);
+            const ui = String(b?.uiState ?? "").trim();
+            const pay = String(b?.payment ?? "").toLowerCase();
+            if (ui === "active" || pay === "paid") break;
+            await new Promise((r) => setTimeout(r, 2000));
+          }
+        })();
       }
     }
   }, [token, loading, props.apiBase, memberId, sessionId]);
