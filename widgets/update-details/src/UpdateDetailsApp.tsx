@@ -1162,8 +1162,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       });
       // Popup closed without navigation. Only confirm-checkout for genuinely
       // mid-signup members (it advances payment state). Established members must
-      // not be revived — reconcile a possible successful payment (recent-only)
-      // then poll for the async webhook / live Stripe reconciliation.
+      // not be revived — poll for the Stripe webhook reconciliation instead.
       if (onboardingIncomplete) {
         await api(props.apiBase, "/api/onboarding/confirm-checkout", {
           method: "POST",
@@ -1179,11 +1178,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           goAfterPaymentToMatching();
         }
       } else {
-        await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-          method: "POST",
-          token,
-          body: JSON.stringify({}),
-        }).catch(() => undefined);
         for (let i = 0; i < 8; i++) {
           const b = await refreshBilling(token);
           const ui = String(b?.uiState ?? "").trim();
@@ -1763,15 +1757,18 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       clearAwaitingPostPaymentMatching();
       clearCheckoutParams();
       if (!midSignupRef.current) {
-        // Established member who just paid — reconcile immediately so the new
-        // subscription/paid state is reflected, then refresh billing.
+        // Established member — never call confirm-checkout (it has write
+        // side-effects and can extend "Service access until" without a real
+        // payment). Poll so the Stripe invoice.paid webhook reconciliation
+        // (which only runs on an actual payment) is reflected.
         void (async () => {
-          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-            method: "POST",
-            token,
-            body: JSON.stringify({}),
-          }).catch(() => undefined);
-          await refreshBilling(token);
+          for (let i = 0; i < 8; i++) {
+            const b = await refreshBilling(token);
+            const ui = String(b?.uiState ?? "").trim();
+            const pay = String(b?.payment ?? "").toLowerCase();
+            if (ui === "active" || pay === "paid") break;
+            await new Promise((r) => setTimeout(r, 2000));
+          }
         })();
       } else {
         void (async () => {
@@ -1826,9 +1823,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         })();
       }
     } else if (refreshPaid === "0" || memberstackReturned || awaiting) {
-      // Cancelled or ambiguous return — reconcile a possible successful payment,
-      // then poll briefly. confirm-checkout now only accepts RECENT evidence, so
-      // it won't revive an expired member based on historical invoices.
+      // Cancelled or ambiguous return — do NOT call confirm-checkout (it can
+      // extend "Service access until" without a real payment). Poll briefly so a
+      // genuine payment is reflected via the Stripe invoice.paid webhook.
       clearAwaitingPostPaymentMatching();
       clearCheckoutParams();
       if (midSignupRef.current) {
@@ -1836,11 +1833,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         setRefreshStep("payment");
       } else {
         void (async () => {
-          await api(props.apiBase, "/api/onboarding/confirm-checkout", {
-            method: "POST",
-            token,
-            body: JSON.stringify({}),
-          }).catch(() => undefined);
           for (let i = 0; i < 8; i++) {
             const b = await refreshBilling(token);
             const ui = String(b?.uiState ?? "").trim();
