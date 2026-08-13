@@ -26,6 +26,7 @@ import {
   resolveNativeMembershipAllowlist,
 } from "@/lib/billing/service-access-sync";
 import { FormsError } from "@/lib/forms/errors";
+import { isInProgressOnboarding } from "@/lib/forms/onboarding/onboarding-status";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -745,7 +746,9 @@ export async function confirmCheckoutForMember(input: {
   ).trim();
 
   const patch: Record<string, unknown> = {};
-  if (currentOnboardingStatus !== "COMPLETE") {
+  // Only advance onboarding for genuinely in-progress signups. Established
+  // members (blank legacy or COMPLETE) must never be reset into the signup form.
+  if (isInProgressOnboarding(currentOnboardingStatus)) {
     patch[MEMBER_FIELDS.onboardingStatus] = "PAYMENT_CONFIRMED";
   }
   if (subscriptionId) {

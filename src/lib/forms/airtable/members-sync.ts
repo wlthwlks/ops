@@ -27,6 +27,7 @@ import {
   splitStoredPhone,
 } from "@/lib/forms/reference-data";
 import { FormsError } from "@/lib/forms/errors";
+import { isInProgressOnboarding } from "@/lib/forms/onboarding/onboarding-status";
 import { canWriteAirtableFromForms } from "@/lib/forms/feature-flags";
 import { stripComputedMemberWriteFields } from "@/lib/forms/airtable/write-guards";
 import {
@@ -981,7 +982,9 @@ export async function applyTrustedPaymentByMemberstackId(
     [MEMBER_FIELDS.billingLastSyncedAt]: new Date().toISOString(),
     ...(input.patch || {}),
   };
-  if (currentStatus !== "COMPLETE") {
+  // Only advance onboarding for genuinely in-progress signups. Established
+  // members (blank legacy or COMPLETE) must never be reset into the signup form.
+  if (isInProgressOnboarding(currentStatus)) {
     patch[MEMBER_FIELDS.onboardingStatus] = "PAYMENT_CONFIRMED";
   }
 
