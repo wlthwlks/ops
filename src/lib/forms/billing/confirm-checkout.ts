@@ -462,8 +462,14 @@ export async function confirmCheckoutForMember(input: {
   let subscriptionStatus = "";
   let priceIds: string[] = [];
   let paidThrough: Date | null = null;
-  /** Only invoice-derived paid-through may extend Service access until. */
-  let paidThroughFromRecentInvoice = false;
+  /**
+   * Only trusted sources may extend Service access until:
+   * - recent paid membership invoice
+   * - paid Checkout Session (cs_…)
+   * - brand-new subscription created in the recent window (resubscribe charge)
+   * Never bare historical sub period end (Back from portal).
+   */
+  let mayExtendServiceAccess = false;
   let verifiedPaid = false;
   let ownershipMethod = "";
   let qualificationMode = "";
@@ -542,8 +548,9 @@ export async function confirmCheckoutForMember(input: {
           if (priceIds.length === 0) priceIds = live.priceIds;
           subscriptionStatus = live.status || subscriptionStatus;
           if (live.periodEnd) {
-            // Session path has not set paidThrough yet; take sub period end.
+            // Paid Checkout Session — take sub period end for Service access until.
             paidThrough = live.periodEnd;
+            mayExtendServiceAccess = true;
           }
         } catch {
           /* keep */
@@ -571,6 +578,8 @@ export async function confirmCheckoutForMember(input: {
       } else {
         priceIds = gate.qualifying;
         verifiedPaid = true;
+        // Paid session without expandable period still verified; recovery may fill access.
+        if (paidThrough) mayExtendServiceAccess = true;
       }
     } else {
       // Soft unproven — do not trust session customer alone; recover below
@@ -655,7 +664,7 @@ export async function confirmCheckoutForMember(input: {
           if (through && q.length > 0) {
             verifiedPaid = true;
             paidThrough = through;
-            paidThroughFromRecentInvoice = true;
+            mayExtendServiceAccess = true;
             priceIds = q;
             qualificationMode = "native_allowlist";
             break;
@@ -670,7 +679,7 @@ export async function confirmCheckoutForMember(input: {
           }
           if (maxEnd != null) {
             paidThrough = new Date(maxEnd * 1000);
-            paidThroughFromRecentInvoice = true;
+            mayExtendServiceAccess = true;
           }
           verifiedPaid = true;
           priceIds = gate.qualifying;
@@ -679,11 +688,10 @@ export async function confirmCheckoutForMember(input: {
         }
       }
 
-      // Recently created active subscription can confirm payment status for signup
-      // progress, but must NOT set Service access until (that needs a paid invoice
-      // or a paid Checkout Session). Prevents Back-from-portal from extending access
-      // using an old sub's current_period_end.
-      if (!verifiedPaid || priceIds.length === 0) {
+      // Brand-new subscription (created in recent window) = real resubscribe charge.
+      // Safe to set Service access until from period end. Old subs are excluded by
+      // isRecentStripeTimestamp(s.created) so Back-from-portal cannot revive.
+      if (!verifiedPaid || priceIds.length === 0 || !mayExtendServiceAccess) {
         const subs = await stripe.subscriptions.list({
           customer: stripeCustomerId,
           status: "all",
@@ -710,7 +718,20 @@ export async function confirmCheckoutForMember(input: {
             verifiedPaid = true;
             priceIds = dedupePriceIds([...priceIds, ...gate.qualifying]);
             qualificationMode = gate.mode;
-            // Intentionally do not set paidThrough from sub period end here.
+            const itemEnd = pick.items?.data?.[0]?.current_period_end;
+            const top = (pick as unknown as { current_period_end?: number })
+              .current_period_end;
+            const unix =
+              typeof itemEnd === "number"
+                ? itemEnd
+                : typeof top === "number"
+                  ? top
+                  : null;
+            if (typeof unix === "number" && unix > 0) {
+              const end = new Date(unix * 1000);
+              if (!paidThrough || end > paidThrough) paidThrough = end;
+              mayExtendServiceAccess = true;
+            }
           }
         }
       }
@@ -721,14 +742,14 @@ export async function confirmCheckoutForMember(input: {
     try {
       const live = await loadSubscriptionBilling(stripe, subscriptionId);
       subscriptionStatus = live.status || subscriptionStatus;
-      // Session path may use sub period end only when Checkout Session was paid
-      // (sessionId path already set verifiedPaid from payment_status=paid).
+      // Paid Checkout Session: trust sub period end for access.
       if (
         sessionId.startsWith("cs_") &&
         live.periodEnd &&
         (!paidThrough || live.periodEnd > paidThrough)
       ) {
         paidThrough = live.periodEnd;
+        mayExtendServiceAccess = true;
       }
       if (live.priceIds.length > 0) {
         const gate = passesPriceGate({
@@ -744,6 +765,7 @@ export async function confirmCheckoutForMember(input: {
             ["active", "trialing", "past_due"].includes(live.status)
           ) {
             verifiedPaid = true;
+            mayExtendServiceAccess = true;
           }
         }
       }
@@ -854,13 +876,8 @@ export async function confirmCheckoutForMember(input: {
   // Clear cancel only when we proved a real payment (session paid or recent invoice/sub).
   patch[MEMBER_FIELDS.cancelAtPeriodEnd] = false;
   patch[MEMBER_FIELDS.cancellationEffectiveAt] = "";
-  // Extend Service access until only from a recent paid invoice, or from a paid
-  // Checkout Session's subscription period. Never from bare sub period end on
-  // recovery (Back from portal must not push access forward).
-  const mayWriteAccess =
-    paidThrough != null &&
-    (paidThroughFromRecentInvoice || sessionId.startsWith("cs_"));
-  if (mayWriteAccess && paidThrough) {
+  // Extend Service access until only from trusted paid evidence (see mayExtendServiceAccess).
+  if (mayExtendServiceAccess && paidThrough) {
     patch[MEMBER_FIELDS.serviceAccessUntil] = paidThrough.toISOString().slice(0, 10);
   }
 
