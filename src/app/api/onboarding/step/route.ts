@@ -200,15 +200,36 @@ async function stepDataToAirtablePatch(
         data.primaryIndustry as string | undefined,
         data.otherIndustry as string | undefined
       );
-      return {
-        patch: {
-          ...(industry != null ? { [MEMBER_FIELDS.industry]: industry } : {}),
-          [MEMBER_FIELDS.businessStage]: data.businessStage,
-          [MEMBER_FIELDS.revenue]: data.annualRevenue,
-          [MEMBER_FIELDS.businessDescription]: data.businessDescription,
-        },
-        msFields: {},
+      const patch: Record<string, unknown> = {
+        ...(industry != null ? { [MEMBER_FIELDS.industry]: industry } : {}),
+        [MEMBER_FIELDS.businessStage]: data.businessStage,
+        [MEMBER_FIELDS.revenue]: data.annualRevenue,
+        [MEMBER_FIELDS.businessDescription]: data.businessDescription,
       };
+      if (Array.isArray(data.socialLinks)) {
+        const dupe = findDuplicateSocialPlatforms(data.socialLinks);
+        if (dupe) {
+          throw new FormsError(
+            "PROFILE_VALIDATION_FAILED",
+            `Duplicate social platform: ${dupe}`,
+            { status: 400, details: { fieldErrors: { socialLinks: [`Duplicate social platform: ${dupe}`] }, formErrors: [] } }
+          );
+        }
+        const validLinks: Array<{ platform: string; url: string }> = [];
+        for (const link of data.socialLinks) {
+          const result = normalizeSocialUrl(link.platform, link.url);
+          if (!result.ok) {
+            throw new FormsError(
+              "PROFILE_VALIDATION_FAILED",
+              result.message,
+              { status: 400, details: { fieldErrors: { socialLinks: [result.message] }, formErrors: [] } }
+            );
+          }
+          if (result.url) validLinks.push({ platform: link.platform, url: result.url });
+        }
+        patch[MEMBER_FIELDS.socialMedia] = serializeSocialMediaField(validLinks as never);
+      }
+      return { patch, msFields: {} };
     }
     case "PAYMENT_PENDING":
     case "PAYMENT_CONFIRMED":

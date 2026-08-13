@@ -142,6 +142,11 @@ export const locationSchema = withPhoneValidation(locationObjectSchema, {
   required: true,
 });
 
+export const socialLinkSchema = z.object({
+  platform: z.string().trim().min(1).max(20),
+  url: z.string().trim().max(500),
+});
+
 export const businessSchema = z
   .object({
     primaryIndustry: z.enum(industryCodes),
@@ -151,6 +156,7 @@ export const businessSchema = z
     businessDescription: z.string().trim().min(40).max(400),
     businessName: z.string().trim().max(120).optional(),
     businessWebsite: z.string().trim().url().optional().or(z.literal("")),
+    socialLinks: z.array(socialLinkSchema).optional(),
   })
   .superRefine(otherIndustryRefine);
 
@@ -166,11 +172,6 @@ export const helpWantedSchema = z.object({
 export const expertiseSchema = z.object({
   expertiseOffered: z.array(matchingOptionCode).max(5),
   expertiseContext: z.string().trim().max(400).optional(),
-});
-
-export const socialLinkSchema = z.object({
-  platform: z.string().trim().min(1).max(20),
-  url: z.string().trim().max(500),
 });
 
 export const connectionSchema = z.object({

@@ -142,6 +142,14 @@ export const businessFormSchema = z
       .trim()
       .min(40, "Please write at least 40 characters")
       .max(400, "Keep under 400 characters"),
+    socialLinks: z
+      .array(
+        z.object({
+          platform: z.string().trim().min(1).max(20),
+          url: z.string().trim().max(500),
+        })
+      )
+      .optional(),
   })
   .superRefine(otherIndustryRefine);
 

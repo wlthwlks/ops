@@ -860,7 +860,10 @@ export function SignupApp(props: { apiBase: string }) {
     setAsyncState(BUSY.saving);
     scrollSignupToTop();
     try {
-      await saveStep("BUSINESS", values);
+      await saveStep("BUSINESS", {
+        ...values,
+        socialLinks: socialLinks.filter((l) => l.url.trim()),
+      });
       await saveStep("PAYMENT_PENDING", {});
       setAsyncState(BUSY.next);
       stepper.setComplete("business");
@@ -1286,6 +1289,102 @@ export function SignupApp(props: { apiBase: string }) {
               revenueError={businessForm.formState.errors.annualRevenue?.message}
               descriptionError={businessForm.formState.errors.businessDescription?.message}
             />
+
+            <p className="wlth-section-title" style={{ marginTop: 20 }}>Social links (optional)</p>
+            <p className="wlth-muted">Add your social profiles so members can connect.</p>
+            {socialError && (
+              <div className="wlth-banner-error" role="alert" style={{ marginBottom: 12 }}>
+                {socialError}
+              </div>
+            )}
+            {socialLinks.map((link, idx) => (
+              <div key={link.platform} className="wlth-social-row">
+                <span className="wlth-social-row__label">
+                  {SOCIAL_PLATFORM_LABELS[link.platform]}
+                </span>
+                <input
+                  className="wlth-social-row__input"
+                  id={"signup-social-" + link.platform}
+                  placeholder={link.platform + ".com/..."}
+                  value={displayUrl(link.url)}
+                  aria-invalid={!!socialLinksErrors[idx]}
+                  onChange={(e) => updateSocialUrl(idx, e.target.value)}
+                  onBlur={() => {
+                    if (link.url.trim()) {
+                      const result = normalizeSocialUrl(link.platform, link.url);
+                      if (result.ok && result.url) {
+                        const next = [...socialLinks];
+                        next[idx] = { ...next[idx], url: displayUrl(result.url) };
+                        setSocialLinks(next);
+                        if (socialLinksErrors[idx]) {
+                          const nextErrors = [...socialLinksErrors];
+                          nextErrors[idx] = "";
+                          setSocialLinksErrors(nextErrors);
+                        }
+                      } else if (!result.ok) {
+                        const nextErrors = [...socialLinksErrors];
+                        nextErrors[idx] = result.message;
+                        setSocialLinksErrors(nextErrors);
+                      }
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="wlth-btn-remove"
+                  onClick={() => removeSocialLink(idx)}
+                  aria-label={"Remove " + SOCIAL_PLATFORM_LABELS[link.platform]}
+                >
+                  &times;
+                </button>
+                {socialLinksErrors[idx] ? (
+                  <div className="wlth-error" style={{ width: "100%", marginTop: 4 }}>
+                    {socialLinksErrors[idx]}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+            {!addingSocialPlatform && (
+              <button
+                type="button"
+                className="wlth-btn-secondary"
+                style={{ marginTop: 8 }}
+                onClick={() => {
+                  setSocialError("");
+                  setAddingSocialPlatform(true);
+                }}
+              >
+                + Add social profile
+              </button>
+            )}
+            {addingSocialPlatform && (
+              <div className="wlth-social-picker">
+                <p className="wlth-muted">Select a platform:</p>
+                <div className="wlth-social-picker__options">
+                  {ADDABLE_SOCIAL_PLATFORMS.filter(
+                    (p) => !socialLinks.some((l) => l.platform === p)
+                  ).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      className="wlth-btn-secondary"
+                      onClick={() => addSocialLink(p)}
+                    >
+                      {SOCIAL_PLATFORM_LABELS[p]}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="wlth-btn-secondary"
+                  style={{ marginTop: 8 }}
+                  onClick={() => setAddingSocialPlatform(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+
             <div className="wlth-actions">
               <button
                 type="button"
@@ -1531,10 +1630,7 @@ export function SignupApp(props: { apiBase: string }) {
               setAsyncState(BUSY.saving);
               scrollSignupToTop();
               try {
-                await saveStep("CONNECTION", {
-                  ...v,
-                  socialLinks: socialLinks.filter((l) => l.url.trim()),
-                });
+                await saveStep("CONNECTION", v);
                 await finish();
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Save failed");
@@ -1552,103 +1648,7 @@ export function SignupApp(props: { apiBase: string }) {
               register={connectionForm.register("connectionType") as never}
               error={connectionForm.formState.errors.connectionType?.message as string}
             />
-
-            <p className="wlth-section-title" style={{ marginTop: 20 }}>Social links (optional)</p>
-            <p className="wlth-muted">Add your social profiles so members can connect.</p>
-            {socialError && (
-              <div className="wlth-banner-error" role="alert" style={{ marginBottom: 12 }}>
-                {socialError}
-              </div>
-            )}
-            {socialLinks.map((link, idx) => (
-              <div key={link.platform} className="wlth-social-row">
-                <span className="wlth-social-row__label">
-                  {SOCIAL_PLATFORM_LABELS[link.platform]}
-                </span>
-                <input
-                  className="wlth-social-row__input"
-                  id={"signup-social-" + link.platform}
-                  placeholder={link.platform + ".com/..."}
-                  value={displayUrl(link.url)}
-                  aria-invalid={!!socialLinksErrors[idx]}
-                  onChange={(e) => updateSocialUrl(idx, e.target.value)}
-                  onBlur={() => {
-                    if (link.url.trim()) {
-                      const result = normalizeSocialUrl(link.platform, link.url);
-                      if (result.ok && result.url) {
-                        const next = [...socialLinks];
-                        next[idx] = { ...next[idx], url: displayUrl(result.url) };
-                        setSocialLinks(next);
-                        if (socialLinksErrors[idx]) {
-                          const nextErrors = [...socialLinksErrors];
-                          nextErrors[idx] = "";
-                          setSocialLinksErrors(nextErrors);
-                        }
-                      } else if (!result.ok) {
-                        const nextErrors = [...socialLinksErrors];
-                        nextErrors[idx] = result.message;
-                        setSocialLinksErrors(nextErrors);
-                      }
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  className="wlth-btn-remove"
-                  onClick={() => removeSocialLink(idx)}
-                  aria-label={"Remove " + SOCIAL_PLATFORM_LABELS[link.platform]}
-                >
-                  &times;
-                </button>
-                {socialLinksErrors[idx] ? (
-                  <div className="wlth-error" style={{ width: "100%", marginTop: 4 }}>
-                    {socialLinksErrors[idx]}
-                  </div>
-                ) : null}
-              </div>
-            ))}
-            {!addingSocialPlatform && (
-              <button
-                type="button"
-                className="wlth-btn-secondary"
-                style={{ marginTop: 8 }}
-                onClick={() => {
-                  setSocialError("");
-                  setAddingSocialPlatform(true);
-                }}
-              >
-                + Add social profile
-              </button>
-            )}
-            {addingSocialPlatform && (
-              <div className="wlth-social-picker">
-                <p className="wlth-muted">Select a platform:</p>
-                <div className="wlth-social-picker__options">
-                  {ADDABLE_SOCIAL_PLATFORMS.filter(
-                    (p) => !socialLinks.some((l) => l.platform === p)
-                  ).map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      className="wlth-btn-secondary"
-                      onClick={() => addSocialLink(p)}
-                    >
-                      {SOCIAL_PLATFORM_LABELS[p]}
-                    </button>
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  className="wlth-btn-secondary"
-                  style={{ marginTop: 8 }}
-                  onClick={() => setAddingSocialPlatform(false)}
-                >
-                  Cancel
-                </button>
-              </div>
-            )}
-
-            <div className="wlth-actions" style={{ marginTop: 20 }}>
+            <div className="wlth-actions">
               <button type="submit" className="wlth-btn-primary" disabled={busy}>
                 Finish
               </button>
