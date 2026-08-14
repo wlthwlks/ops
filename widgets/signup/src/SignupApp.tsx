@@ -316,7 +316,6 @@ export function SignupApp(props: { apiBase: string }) {
         clearPaymentQueryParam();
         clearCheckoutFlags();
         clearAwaitingPostPaymentMatching();
-        await new Promise((r) => setTimeout(r, 700));
         markPreGoalComplete(stepper);
         await stepper.goTo("goal");
         setAsyncState({ kind: "idle" });
@@ -329,15 +328,15 @@ export function SignupApp(props: { apiBase: string }) {
       /* continue to poll */
     }
 
-    // Stripe/Memberstack can lag a few seconds after a real charge — keep verifying.
-    const maxAttempts = 20;
-    const delayMs = 2000;
+    // Fast poll first (Stripe/Memberstack often ready in 1–3s), then ease off.
+    // Cap ~20s total wait instead of ~40s+ of fixed 2s sleeps.
+    const maxAttempts = 18;
     let confirmed = false;
     for (let i = 0; i < maxAttempts; i++) {
       if (!mountedRef.current) return;
       try {
-        // Re-confirm every attempt for the first few, then every 3rd — invoices land late.
-        if (i < 4 || i % 3 === 0) {
+        // Confirm every attempt early; every other attempt later (invoice lag).
+        if (i < 8 || i % 2 === 0) {
           const conf = await api(props.apiBase, "/api/onboarding/confirm-checkout", {
             method: "POST",
             token: accessToken,
@@ -360,6 +359,7 @@ export function SignupApp(props: { apiBase: string }) {
       } catch {
         /* retry */
       }
+      const delayMs = i < 6 ? 400 : i < 12 ? 800 : 1200;
       await new Promise((r) => setTimeout(r, delayMs));
     }
 
@@ -369,7 +369,6 @@ export function SignupApp(props: { apiBase: string }) {
 
     if (confirmed) {
       clearAwaitingPostPaymentMatching();
-      await new Promise((r) => setTimeout(r, 700));
       markPreGoalComplete(stepper);
       await stepper.goTo("goal");
       setAsyncState({ kind: "idle" });
@@ -1008,7 +1007,7 @@ export function SignupApp(props: { apiBase: string }) {
       // have completed payment — verify with the server. Cancel/Back leaves no
       // recent paid evidence → confirm keeps us on Payment.
       if (outcome === "navigating_or_closed" && mountedRef.current) {
-        await new Promise((r) => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, 200));
         if (!mountedRef.current) return;
         // If a full-page redirect already started, this component will unmount.
         const p = new URLSearchParams(window.location.search);
