@@ -109,14 +109,15 @@ const BUSY = {
     description: "Stripe is opening so you can complete your membership payment.",
   },
   /**
-   * Back from Stripe only — never used on the outbound checkout path.
+   * Back from Stripe while we verify — never claim success until server confirms.
+   * (False "Payment confirmed" confuses customers who pressed Back / cancelled.)
    */
   paymentReturn: {
     kind: "busy" as const,
-    variant: "payment-confirmed" as const,
-    title: "Payment confirmed",
+    variant: "payment-verification" as const,
+    title: "Checking your payment…",
     description:
-      "We’re finishing setup with Stripe. This usually takes only a moment.",
+      "We’re confirming the status with Stripe. This usually takes only a moment.",
   },
   finish: {
     kind: "busy" as const,
@@ -272,8 +273,8 @@ export function SignupApp(props: { apiBase: string }) {
   };
 
   /**
-   * Stripe-return path only: show payment-confirmed and verify server-side.
-   * Never call from outbound startCheckout.
+   * Stripe-return path only: show verification loader and verify server-side.
+   * Never call from outbound startCheckout. Never show "payment confirmed" until paid.
    */
   const confirmPaymentFromServer = async (accessToken: string | null) => {
     setAsyncState(BUSY.paymentReturn);
