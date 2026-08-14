@@ -328,13 +328,15 @@ export function SignupApp(props: { apiBase: string }) {
       /* continue to poll */
     }
 
-    const maxAttempts = 15;
+    // Stripe/Memberstack can lag a few seconds after a real charge — keep verifying.
+    const maxAttempts = 20;
     const delayMs = 2000;
     let confirmed = false;
     for (let i = 0; i < maxAttempts; i++) {
       if (!mountedRef.current) return;
       try {
-        if (i > 0 && i % 3 === 0) {
+        // Re-confirm every attempt for the first few, then every 3rd — invoices land late.
+        if (i < 4 || i % 3 === 0) {
           const conf = await api(props.apiBase, "/api/onboarding/confirm-checkout", {
             method: "POST",
             token: accessToken,
@@ -373,19 +375,26 @@ export function SignupApp(props: { apiBase: string }) {
       scrollSignupToTop();
     } else {
       setAsyncState({ kind: "idle" });
+      // Stay on Payment. Do not surface internal pending link messages after a real pay attempt.
       const configHint =
         lastConfirmStatus === "membership_price_config_missing"
-          ?       " Membership price configuration is incomplete; contact support if this continues."
+          ? " Membership price configuration is incomplete; contact support if this continues."
           : lastConfirmStatus === "stripe_customer_ambiguous"
-            ?       " We found multiple billing profiles for this email; contact support."
+            ? " We found multiple billing profiles for this email; contact support."
             : lastConfirmStatus === "session_ownership_mismatch" ||
                 lastConfirmStatus === "stripe_customer_conflict"
-               ? " We couldn't securely match this checkout to your account; contact support."
+              ? " We couldn't securely match this checkout to your account; contact support."
               : "";
+      const softPending =
+        lastConfirmStatus === "customer_linked_payment_pending" ||
+        lastConfirmStatus === "session_not_paid" ||
+        lastConfirmStatus === "stripe_customer_unresolved";
       setError(
-        (lastConfirmReason && lastConfirmReason.length < 180
-          ? lastConfirmReason
-          : "We're still confirming your payment with Stripe. Your progress is saved; refresh this page in a moment, or continue when you're ready.") +
+        (softPending
+          ? "We're still confirming your payment with Stripe. Your progress is saved — stay on this page a moment and try Continue again, or refresh."
+          : lastConfirmReason && lastConfirmReason.length < 180
+            ? lastConfirmReason
+            : "We're still confirming your payment with Stripe. Your progress is saved; refresh this page in a moment, or continue when you're ready.") +
           configHint
       );
       await stepper.goTo("payment");
@@ -597,6 +606,15 @@ export function SignupApp(props: { apiBase: string }) {
           hashParams.get("payment") ||
           ""
         ).toLowerCase();
+        // Memberstack often ignores successUrl/cancelUrl and returns with these instead.
+        const fromCheckout = params.get("fromCheckout");
+        const msStripePriceId = (params.get("stripePriceId") || "").trim();
+        const msPriceId = (params.get("msPriceId") || "").trim();
+        const memberstackReturned =
+          fromCheckout !== null || msStripePriceId !== "" || msPriceId !== "";
+        // stripePriceId=price_… is present only after a successful Memberstack payment.
+        const memberstackPaid =
+          memberstackReturned && msStripePriceId.startsWith("price_");
         let checkoutPending = false;
         let checkoutFresh = false;
         try {
@@ -618,18 +636,25 @@ export function SignupApp(props: { apiBase: string }) {
             params.get("checkout_session_id") ||
             params.get("cs_id")
         );
-        // Explicit Stripe return — do NOT require sessionStorage (often lost on redirect)
+        // Explicit paid return — do NOT require sessionStorage (often lost on redirect)
         const explicitPaySuccess =
-          paymentReturn === "success" || (hasSessionId && paymentReturn !== "cancel");
+          paymentReturn === "success" ||
+          memberstackPaid ||
+          (hasSessionId && paymentReturn !== "cancel");
+        // Back / cancel from Stripe or Memberstack without a paid price signal
+        const explicitPayCancel =
+          paymentReturn === "cancel" ||
+          (memberstackReturned && !memberstackPaid && paymentReturn !== "success");
 
         const mid = t ? memberIdFromAccessToken(t) : "";
         const awaitingMatching =
           Boolean(mid) && isAwaitingPostPaymentMatching(mid);
 
-        if (paymentReturn === "cancel") {
+        if (explicitPayCancel) {
           clearCheckoutFlags();
           clearPaymentQueryParam();
-          // Keep awaiting flag so they can retry checkout; resume to payment
+          clearAwaitingPostPaymentMatching();
+          // Stay on Payment only — no error for cancel / Back.
           if (t) {
             try {
               await resumeFromStatus(t);
@@ -639,10 +664,21 @@ export function SignupApp(props: { apiBase: string }) {
           } else {
             await stepper.goTo("payment");
           }
+          // Drop Memberstack checkout query noise
+          try {
+            const url = new URL(window.location.href);
+            url.searchParams.delete("fromCheckout");
+            url.searchParams.delete("stripePriceId");
+            url.searchParams.delete("msPriceId");
+            url.searchParams.delete("forceRefetch");
+            window.history.replaceState({}, "", url.pathname + url.search);
+          } catch {
+            /* ignore */
+          }
         } else if (explicitPaySuccess && t) {
-          // Always confirm + go Matching on ?payment=success (even if session flags gone)
+          // Always confirm + go Matching on successful return (even if session flags gone)
           await confirmPaymentFromServer(t);
-        } else if ((checkoutFresh || awaitingMatching) && t && !paymentReturn) {
+        } else if ((checkoutFresh || awaitingMatching) && t && !paymentReturn && !memberstackReturned) {
           /**
            * Stripe sometimes strips query params. Only auto-confirm when we have
            * checkout intent AND server says payment stage or later (or paid).
@@ -967,17 +1003,22 @@ export function SignupApp(props: { apiBase: string }) {
         confirmPaymentFromServer,
       });
 
-      // If the promise resolved without navigation (popup closed), restore Payment.
-      // Do not show payment-confirmed; do not call confirmPaymentFromServer.
+      // Popup closed or same-tab return without a hard navigation. Memberstack may
+      // have completed payment — verify with the server. Cancel/Back leaves no
+      // recent paid evidence → confirm keeps us on Payment.
       if (outcome === "navigating_or_closed" && mountedRef.current) {
-        // Keep verification loader briefly in case a full-page redirect is mid-flight.
-        await new Promise((r) => setTimeout(r, 400));
+        await new Promise((r) => setTimeout(r, 500));
         if (!mountedRef.current) return;
-        // Still here → checkout closed without leaving
-        clearCheckoutFlags();
-        setAsyncState({ kind: "idle" });
-        await stepper.goTo("payment");
-        scrollSignupToTop();
+        // If a full-page redirect already started, this component will unmount.
+        const p = new URLSearchParams(window.location.search);
+        if (p.get("payment") === "cancel") {
+          clearCheckoutFlags();
+          setAsyncState({ kind: "idle" });
+          await stepper.goTo("payment");
+          scrollSignupToTop();
+          return;
+        }
+        await confirmPaymentFromServer(token);
       }
     } catch (e) {
       clearCheckoutFlags();
@@ -987,6 +1028,8 @@ export function SignupApp(props: { apiBase: string }) {
       }
       if (mountedRef.current) {
         setAsyncState({ kind: "idle" });
+        await stepper.goTo("payment");
+        scrollSignupToTop();
       }
     }
   };

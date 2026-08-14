@@ -116,12 +116,20 @@ export function resolveNativeMembershipAllowlist(
     return new Set([...membershipPriceIds].filter((id) => id.startsWith("price_")));
   }
   try {
-    return getStripeNativeMembershipPriceIds({
+    const set = getStripeNativeMembershipPriceIds({
       requireConfigured: false,
       failClosedInProduction: false,
     });
+    // Checkout / resubscribe often uses the current reactivation price; include it
+    // so confirm-checkout and invoice qualification match live Stripe charges.
+    const reactivation = (process.env.STRIPE_REACTIVATION_PRICE_ID || "").trim();
+    if (reactivation.startsWith("price_")) set.add(reactivation);
+    return set;
   } catch {
-    return new Set();
+    const reactivation = (process.env.STRIPE_REACTIVATION_PRICE_ID || "").trim();
+    return reactivation.startsWith("price_")
+      ? new Set([reactivation])
+      : new Set();
   }
 }
 

@@ -53,6 +53,8 @@ export function isRecentStripeTimestamp(
 function invoicePaidAtUnix(inv: Stripe.Invoice): number | null {
   const t = inv.status_transitions;
   if (t && typeof t.paid_at === "number") return t.paid_at;
+  // Some paid invoices briefly omit paid_at — created is a safe fallback for recency.
+  if (typeof inv.created === "number" && inv.created > 0) return inv.created;
   return null;
 }
 
