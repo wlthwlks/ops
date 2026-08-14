@@ -329,14 +329,15 @@ export function SignupApp(props: { apiBase: string }) {
       /* continue to poll */
     }
 
-    // Proven signup path: poll long enough for Stripe invoice + Airtable write.
+    // Poll like update-details subscribe-again: confirm every few ticks + payment-status.
     const maxAttempts = 15;
     const delayMs = 2000;
     let confirmed = false;
     for (let i = 0; i < maxAttempts; i++) {
       if (!mountedRef.current) return;
       try {
-        if (i > 0 && i % 3 === 0) {
+        // First attempts + every 3rd: re-hit confirm-checkout (Stripe lag).
+        if (i === 0 || i % 3 === 0) {
           const conf = await api(props.apiBase, "/api/onboarding/confirm-checkout", {
             method: "POST",
             token: accessToken,
@@ -375,6 +376,7 @@ export function SignupApp(props: { apiBase: string }) {
       scrollSignupToTop();
     } else {
       setAsyncState({ kind: "idle" });
+      // Never surface internal server reasons like "Linked Stripe Customer ID…".
       const configHint =
         lastConfirmStatus === "membership_price_config_missing"
           ? " Membership price configuration is incomplete; contact support if this continues."
@@ -384,10 +386,20 @@ export function SignupApp(props: { apiBase: string }) {
                 lastConfirmStatus === "stripe_customer_conflict"
               ? " We couldn't securely match this checkout to your account; contact support."
               : "";
+      const softPending =
+        lastConfirmStatus === "customer_linked_payment_pending" ||
+        lastConfirmStatus === "session_not_paid" ||
+        lastConfirmStatus === "stripe_customer_unresolved" ||
+        lastConfirmStatus === "session_price_not_membership" ||
+        !lastConfirmStatus;
       setError(
-        (lastConfirmReason && lastConfirmReason.length < 180
-          ? lastConfirmReason
-          : "We're still confirming your payment with Stripe. Your progress is saved; refresh this page in a moment, or continue when you're ready.") +
+        (softPending
+          ? "We're still confirming your payment with Stripe. Your progress is saved — stay on Payment and try Continue again, or refresh in a moment."
+          : lastConfirmReason &&
+              lastConfirmReason.length < 180 &&
+              !/linked stripe customer/i.test(lastConfirmReason)
+            ? lastConfirmReason
+            : "We're still confirming your payment with Stripe. Your progress is saved; refresh this page in a moment, or continue when you're ready.") +
           configHint
       );
       await stepper.goTo("payment");

@@ -441,6 +441,12 @@ export async function confirmCheckoutForMember(input: {
     existingRows.length === 1
       ? String(existingRows[0].fields[MEMBER_FIELDS.stripeCustomerId] || "").trim()
       : "";
+  const currentOnboardingEarly = String(
+    existingRows[0]?.fields[MEMBER_FIELDS.onboardingStatus] ?? ""
+  ).trim();
+  /** Mid-signup first payment — accept live active subs/invoices without the
+   *  "recent only" resubscribe guard (that guard is for established members). */
+  const midSignupPayment = isInProgressOnboarding(currentOnboardingEarly);
   const memberstackAdminCus = input.memberstackRaw
     ? extractStripeCustomerIdFromMemberstackRaw(input.memberstackRaw)
     : "";
@@ -628,9 +634,14 @@ export async function confirmCheckoutForMember(input: {
       });
       for (const inv of invoices.data) {
         if (!inv.id) continue;
-        // Only treat a paid invoice as evidence of a NEW payment when it was paid
-        // recently. Historical paid invoices must not revive an expired member.
-        if (!isRecentStripeTimestamp(invoicePaidAtUnix(inv))) continue;
+        // Established members: only RECENT paid invoices (avoid revive on Back).
+        // Mid-signup first payment: any paid membership invoice qualifies.
+        if (
+          !midSignupPayment &&
+          !isRecentStripeTimestamp(invoicePaidAtUnix(inv))
+        ) {
+          continue;
+        }
         const lines = await listAllInvoiceLines(stripe, inv.id);
 
         const rawPrices: string[] = [];
@@ -687,12 +698,14 @@ export async function confirmCheckoutForMember(input: {
           status: "all",
           limit: 10,
         });
+        // Mid-signup: any live sub is the first membership payment.
+        // Established: only recently created subs (resubscribe charge).
         const pick =
-          subs.data.find(
-            (s) =>
-              ["active", "trialing", "past_due"].includes(s.status) &&
-              isRecentStripeTimestamp(s.created)
-          ) || null;
+          subs.data.find((s) => {
+            if (!["active", "trialing", "past_due"].includes(s.status)) return false;
+            if (midSignupPayment) return true;
+            return isRecentStripeTimestamp(s.created);
+          }) || null;
         if (pick) {
           subscriptionId = subscriptionId || pick.id;
           subscriptionStatus = pick.status;
@@ -708,7 +721,20 @@ export async function confirmCheckoutForMember(input: {
             verifiedPaid = true;
             priceIds = dedupePriceIds([...priceIds, ...gate.qualifying]);
             qualificationMode = gate.mode;
-            // New resubscribe charge: write Service access until from period end.
+            paidThrough = preferLaterPaidThrough(
+              paidThrough,
+              subscriptionPeriodEnd(pick)
+            );
+          } else if (
+            midSignupPayment &&
+            ["active", "trialing"].includes(pick.status) &&
+            subPrices.length > 0
+          ) {
+            // Mid-signup: live sub with any price_ line — accept even if allowlist
+            // is slightly out of date (Memberstack may use the current checkout price).
+            verifiedPaid = true;
+            priceIds = dedupePriceIds([...priceIds, ...subPrices]);
+            qualificationMode = qualificationMode || "mid_signup_live_sub";
             paidThrough = preferLaterPaidThrough(
               paidThrough,
               subscriptionPeriodEnd(pick)
@@ -752,31 +778,38 @@ export async function confirmCheckoutForMember(input: {
       nativeAllow,
       previewCommerceMode,
     });
-    qualificationMode = gate.mode;
+    qualificationMode = gate.mode || qualificationMode;
     if (!gate.ok) {
-      console.error(
-        JSON.stringify({
-          event: "confirm_checkout_final_gate",
-          status: gate.mode === "fail_closed" ? "membership_price_config_missing" : "session_price_not_membership",
+      // Mid-signup with a live verified sub/invoice: do not fail closed on allowlist
+      // mismatch — Memberstack checkout price may be the current reactivation price.
+      if (midSignupPayment && priceIds.some((id) => id.startsWith("price_"))) {
+        qualificationMode = "mid_signup_price_passthrough";
+      } else {
+        console.error(
+          JSON.stringify({
+            event: "confirm_checkout_final_gate",
+            status: gate.mode === "fail_closed" ? "membership_price_config_missing" : "session_price_not_membership",
+            qualificationMode: gate.mode,
+            ownershipMethod: ownershipMethod || null,
+            nativeAllowCount: nativeAllow.size,
+            priceCount: priceIds.length,
+          })
+        );
+        return {
+          paymentConfirmed: false,
+          status:
+            gate.mode === "fail_closed"
+              ? "membership_price_config_missing"
+              : "session_price_not_membership",
+          stripeCustomerId: "",
+          reason: gate.reason || "Price gate failed",
           qualificationMode: gate.mode,
-          ownershipMethod: ownershipMethod || null,
-          nativeAllowCount: nativeAllow.size,
-          priceCount: priceIds.length,
-        })
-      );
-      return {
-        paymentConfirmed: false,
-        status:
-          gate.mode === "fail_closed"
-            ? "membership_price_config_missing"
-            : "session_price_not_membership",
-        stripeCustomerId: "",
-        reason: gate.reason || "Price gate failed",
-        qualificationMode: gate.mode,
-        ownershipMethod: ownershipMethod || undefined,
-      };
+          ownershipMethod: ownershipMethod || undefined,
+        };
+      }
+    } else {
+      priceIds = gate.qualifying;
     }
-    priceIds = gate.qualifying;
   }
 
   if (!stripeCustomerId) {
