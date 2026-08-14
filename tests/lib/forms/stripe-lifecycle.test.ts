@@ -103,11 +103,12 @@ describe("handleExpandedStripeEvent", () => {
     expect(patch["Service access until"]).toBeUndefined();
   });
 
-  it("active subscription.created does not write Service access until", async () => {
+  it("active subscription.created writes Service access until from period end", async () => {
     const { handleExpandedStripeEvent } = await import(
       "@/lib/forms/webhooks/stripe-lifecycle"
     );
     const future = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30;
+    const expected = new Date(future * 1000).toISOString().slice(0, 10);
     await handleExpandedStripeEvent({
       type: "customer.subscription.created",
       data: {
@@ -117,7 +118,14 @@ describe("handleExpandedStripeEvent", () => {
           status: "active",
           cancel_at_period_end: false,
           current_period_end: future,
-          items: { data: [{ current_period_end: future }] },
+          items: {
+            data: [
+              {
+                current_period_end: future,
+                price: { id: "price_mem" },
+              },
+            ],
+          },
         },
       },
     } as never);
@@ -126,6 +134,8 @@ describe("handleExpandedStripeEvent", () => {
     expect(patch["Cancel at period end"]).toBe("false");
     expect(patch["Payment"]).toBe("Paid");
     expect(patch["Membership"]).toBe("Active");
-    expect(patch["Service access until"]).toBeUndefined();
+    expect(patch["Service access until"]).toBe(expected);
+    expect(patch["Stripe Price ID"]).toBe("price_mem");
+    expect(patch["Stripe subscription status"]).toBe("active");
   });
 });

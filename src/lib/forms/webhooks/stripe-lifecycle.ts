@@ -80,13 +80,24 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
         } else if (accessUntil) {
           patch[MEMBER_FIELDS.cancellationEffectiveAt] = accessUntil;
         }
-        // Membership remains Active during grace
+        // Membership remains Active during grace — do not invent/extend access here.
         patch[MEMBER_FIELDS.membership] = "Active";
       } else if (sub.status === "active" || sub.status === "trialing") {
         patch[MEMBER_FIELDS.cancelAtPeriodEnd] = "false";
         patch[MEMBER_FIELDS.cancellationEffectiveAt] = "";
         patch[MEMBER_FIELDS.membership] = "Active";
         patch[MEMBER_FIELDS.payment] = "Paid";
+        // New/renewed live sub (Dashboard create, checkout, resubscribe): set
+        // Service access until from Stripe period end. invoice.paid remains
+        // authoritative for invoice-line paid-through and is monotonic.
+        if (accessUntil) {
+          patch[MEMBER_FIELDS.serviceAccessUntil] = accessUntil;
+        }
+        const priceId = sub.items?.data?.[0]?.price?.id;
+        if (typeof priceId === "string" && priceId.startsWith("price_")) {
+          patch[MEMBER_FIELDS.stripePriceId] = priceId;
+        }
+        patch[MEMBER_FIELDS.stripeSubscriptionStatus] = sub.status;
       }
 
       const result = await updateMemberBilling({
