@@ -900,7 +900,9 @@ export function SignupApp(props: { apiBase: string }) {
         ...values,
         socialLinks: socialLinks.filter((l) => l.url.trim()),
       });
-      await saveStep("PAYMENT_PENDING", {});
+      // Do NOT write PAYMENT_PENDING here. Stay on BUSINESS in Airtable until
+      // payment is actually confirmed — cancel/Back from Stripe must not leave
+      // members stuck mid-payment with a false PAYMENT_PENDING checkpoint.
       setAsyncState(BUSY.next);
       stepper.setComplete("business");
       await stepper.next();
