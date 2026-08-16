@@ -1,0 +1,1 @@
+ALTER TABLE "city_introduction_settings" ADD COLUMN "auto_approve_delivery_mode" text DEFAULT 'simulation' NOT NULL;

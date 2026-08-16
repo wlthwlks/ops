@@ -13,6 +13,16 @@ export async function GET(request: NextRequest) {
   const denied = rejectUnauthorizedCron(request);
   if (denied) return denied;
 
+  // Cutover gate: flip this to "false" once the unified introduction
+  // engine is in production to disable the legacy recurring cron.
+  if (process.env.LEGACY_RECURRING_INTROS_ENABLED === "false") {
+    return NextResponse.json({
+      success: true,
+      skipped: true,
+      reason: "legacy_recurring_intros_disabled",
+    });
+  }
+
   let introsMode;
   try {
     introsMode = getIntroductionsMode();

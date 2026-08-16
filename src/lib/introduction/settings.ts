@@ -59,6 +59,9 @@ export const citySettingsInputSchema = z
     repeatPairDays: z.number().int().min(1).nullable().optional(),
     memberCooldownDays: z.number().int().min(0).nullable().optional(),
     autoApprove: z.boolean().optional(),
+    autoApproveDeliveryMode: z
+      .enum(["simulation", "provider_test", "canary", "production"])
+      .optional(),
   })
   .superRefine((input, ctx) => {
     if (input.scheduleJson !== undefined && input.scheduleJson !== null) {
@@ -156,6 +159,7 @@ export async function upsertCitySettings(
     repeatPairDays: parsed.repeatPairDays,
     memberCooldownDays: parsed.memberCooldownDays,
     autoApprove: parsed.autoApprove,
+    autoApproveDeliveryMode: parsed.autoApproveDeliveryMode,
     updatedAt: new Date(),
   };
   const rows = await db

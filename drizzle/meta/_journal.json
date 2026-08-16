@@ -57,6 +57,13 @@
       "when": 1786879608766,
       "tag": "0007_unified_introductions",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786884561540,
+      "tag": "0008_auto_approve_delivery_mode",
+      "breakpoints": true
     }
   ]
 }

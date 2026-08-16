@@ -288,6 +288,7 @@ export async function createTestDb(options?: { matchmake?: boolean; introduction
         repeat_pair_days INTEGER,
         member_cooldown_days INTEGER,
         auto_approve BOOLEAN NOT NULL DEFAULT FALSE,
+        auto_approve_delivery_mode TEXT NOT NULL DEFAULT 'simulation',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         CONSTRAINT city_introduction_settings_city_code_unique UNIQUE (city_code)

@@ -38,6 +38,8 @@ export const cityIntroductionSettings = pgTable(
     repeatPairDays: integer("repeat_pair_days"),
     memberCooldownDays: integer("member_cooldown_days"),
     autoApprove: boolean("auto_approve").notNull().default(false),
+    autoApproveDeliveryMode: text("auto_approve_delivery_mode").notNull().default("simulation"),
+    // "simulation" | "provider_test" | "canary" | "production"
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

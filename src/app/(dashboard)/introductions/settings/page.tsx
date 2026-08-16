@@ -44,6 +44,7 @@ interface CityRow {
   repeatPairDays: number | null;
   memberCooldownDays: number | null;
   autoApprove: boolean;
+  autoApproveDeliveryMode: string;
 }
 
 const COMPONENT_LABELS: Record<string, string> = {
@@ -222,6 +223,7 @@ export default function IntroductionsSettingsPage() {
           maxDistanceKm: cityEdit.maxDistanceKm,
           allowUnknownPostcode: cityEdit.allowUnknownPostcode,
           autoApprove: cityEdit.autoApprove,
+          autoApproveDeliveryMode: cityEdit.autoApproveDeliveryMode,
         }),
       });
       const body = await res.json();
@@ -548,6 +550,20 @@ export default function IntroductionsSettingsPage() {
               <Switch
                 checked={cityEdit.autoApprove}
                 onChange={(v) => setCityEdit({ ...cityEdit, autoApprove: v })}
+              />
+            </Flex>
+            <Flex justify="space-between" align="center">
+              <Text>Auto-approve delivery mode</Text>
+              <Select
+                style={{ width: 160 }}
+                value={cityEdit.autoApproveDeliveryMode ?? "simulation"}
+                onChange={(v) => setCityEdit({ ...cityEdit, autoApproveDeliveryMode: v })}
+                options={[
+                  { value: "simulation", label: "Simulation" },
+                  { value: "provider_test", label: "Provider test" },
+                  { value: "canary", label: "Canary" },
+                  { value: "production", label: "Production" },
+                ]}
               />
             </Flex>
             <Flex justify="space-between" align="center">
