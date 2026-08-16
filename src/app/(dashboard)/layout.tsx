@@ -16,6 +16,11 @@ import {
   UnorderedListOutlined,
   WarningOutlined,
   BarChartOutlined,
+  ApartmentOutlined,
+  EnvironmentOutlined,
+  SettingOutlined,
+  MailOutlined,
+  SendOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
@@ -64,6 +69,17 @@ const NAV: NavItem[] = [
     key: "intros",
     label: "Introductions",
     children: [
+      { key: "/introductions", icon: <ApartmentOutlined />, label: "Introductions Overview" },
+      { key: "/introductions/city-runs", icon: <EnvironmentOutlined />, label: "City Runs" },
+      { key: "/introductions/settings", icon: <SettingOutlined />, label: "Matching Settings" },
+      { key: "/introductions/templates", icon: <MailOutlined />, label: "Email Templates" },
+      { key: "/introductions/deliveries", icon: <SendOutlined />, label: "Delivery History" },
+    ],
+  },
+  {
+    key: "intros-legacy",
+    label: "Introductions (legacy)",
+    children: [
       { key: "/get-matched", icon: <UsergroupAddOutlined />, label: "Custom Matching" },
       { key: "/recurring-intros", icon: <SwapOutlined />, label: "Recurring Introductions" },
     ],
@@ -96,6 +112,11 @@ function selectedKey(pathname: string): string {
   if (pathname.startsWith("/ops/webhook-errors")) return "/ops/webhook-errors";
   if (pathname.startsWith("/ops/form-analytics")) return "/ops/form-analytics";
   if (pathname.startsWith("/ops")) return "/ops";
+  if (pathname.startsWith("/introductions/city-runs")) return "/introductions/city-runs";
+  if (pathname.startsWith("/introductions/settings")) return "/introductions/settings";
+  if (pathname.startsWith("/introductions/templates")) return "/introductions/templates";
+  if (pathname.startsWith("/introductions/deliveries")) return "/introductions/deliveries";
+  if (pathname.startsWith("/introductions")) return "/introductions";
   if (pathname.startsWith("/recurring-intros")) return "/recurring-intros";
   if (pathname.startsWith("/get-matched")) return "/get-matched";
   if (pathname.startsWith("/overview")) return "/overview";

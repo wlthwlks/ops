@@ -181,3 +181,58 @@ export function unknownPlaceholders(subject: string, bodyHtml: string): string[]
     (token) => !known.has(token)
   );
 }
+
+/** Sample member cards used for template previews and test sends. */
+export const SAMPLE_MEMBER_CARDS: MemberCardData[] = [
+  {
+    key: "sample-1",
+    firstName: "Sarah",
+    fullName: "Sarah Smith",
+    professionalHeadline: "Founder of a wellness app",
+    city: "London",
+    industry: "TECH_SAAS",
+    businessStage: "EARLY_TRACTION",
+    helpWanted: ["FUNDRAISING"],
+    expertise: ["GROWTH_MARKETING"],
+  },
+  {
+    key: "sample-2",
+    firstName: "Priya",
+    fullName: "Priya Patel",
+    professionalHeadline: "Ex-investment banker",
+    city: "London",
+    industry: "FINANCE",
+    businessStage: "SCALING",
+    helpWanted: ["HIRING"],
+    expertise: ["FUNDRAISING", "FINANCE"],
+  },
+  {
+    key: "sample-3",
+    firstName: "James",
+    fullName: "James Okafor",
+    professionalHeadline: "Product designer",
+    city: "London",
+    industry: "CREATIVE_MEDIA",
+    businessStage: "VALIDATING",
+    helpWanted: ["SALES"],
+    expertise: ["PRODUCT"],
+  },
+];
+
+export function renderSampleEmail(subject: string, bodyHtml: string): RenderedEmail {
+  return renderIntroductionEmail({
+    subject,
+    bodyHtml,
+    cityName: "London",
+    introductionDate: new Date().toISOString().slice(0, 10),
+    members: SAMPLE_MEMBER_CARDS,
+    groupScoreBreakdown: {
+      proximity: 0.94,
+      ai_correlation: 0.81,
+      help_expertise: 0.96,
+      goal_relevance: 0.89,
+      industry: 0.7,
+      business_stage: 0.8,
+    },
+  });
+}
