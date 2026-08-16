@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/check-incomplete-onboarding",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/future-access-parity",
+      "schedule": "0 6 * * *"
     }
   ]
 }

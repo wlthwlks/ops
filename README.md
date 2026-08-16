@@ -427,6 +427,12 @@ When Slack succeeds but Airtable tracking fails, the group status becomes `sent_
 | `npm run airtable:reconcile-stripe-customers` | Fill missing `Stripe Customer ID` via strict email + billing match (dry-run default; `--apply` for auto_match only) |
 | `npm run airtable:historical-stripe-repair` | **One-time** historical repair: link/create paying Stripe customers in Airtable (not used by webhook) |
 | `npm run airtable:historical-stripe-repair -- --subscriptions` | Reconcile every active+trialing Stripe subscription (allowlist `price_` ids) to Airtable: access = `current_period_end`, links blank `Stripe Customer ID` via unique email, creates missing with `--apply --create-missing`. Monotonic — never shortens access. Dry-run by default |
+| `npm run airtable:audit-future-access-parity` | Read-only parity report: future-access Airtable rows without a listed-price active sub (extras) + qualifying memberships with no future access (holes). CSV at `tmp/future-access-parity-audit.csv` |
+| `npm run airtable:apply-future-access-parity` | Apply parity fixes: repoint conflict records to the most recent qualifying customer + clear non-qualifying future access. Dry-run default; `-- --apply` to write. Repoint list lives in `scripts/apply-future-access-parity.ts` |
+
+#### Daily parity cron
+
+`/api/cron/future-access-parity` (Vercel cron, daily 06:00) runs the same computation as the audit CLI. Holes are auto-fixed with the monotonic repair (`repairParityHoles` — extends access only); extras are alert-only via `recordIntegrationError`. Env gates: `PARITY_CRON_ENABLED=true`, optional `PARITY_CRON_AUTO_FIX_HOLES=false` (alert-only) and `PARITY_CRON_MAX_HOLES` (default 100).
 
 ### Member ownership (Memberstack + Make vs Stripe)
 

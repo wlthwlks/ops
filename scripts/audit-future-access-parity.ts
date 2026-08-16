@@ -11,6 +11,9 @@
  *   - CSV at tmp/future-access-parity-audit.csv
  *
  *   npm run airtable:audit-future-access-parity
+ *
+ * Shares its computation with the daily cron route
+ * (/api/cron/future-access-parity) via computeFutureAccessParity.
  */
 import * as dotenv from "dotenv";
 import { mkdirSync, writeFileSync } from "fs";
@@ -24,36 +27,28 @@ import {
   MEMBERS_TABLE,
   SERVICE_ACCESS_FIELD,
   STRIPE_CUSTOMER_ID_FIELD,
-  PAYMENT_FIELD,
-  MEMBERSHIP_FIELD,
   STRIPE_SUBSCRIPTION_ID_FIELD,
   STRIPE_SUBSCRIPTION_STATUS_FIELD,
   CANCEL_AT_PERIOD_END_FIELD,
   CANCELLATION_EFFECTIVE_AT_FIELD,
   resolveNativeMembershipAllowlist,
 } from "../src/lib/billing/service-access-sync";
+import { subscriptionItemPriceIds } from "../src/lib/billing/historical-stripe-member-repair";
 import {
-  listActiveMembershipSubscriptions,
-  subscriptionItemPriceIds,
-} from "../src/lib/billing/historical-stripe-member-repair";
+  computeFutureAccessParity,
+  fieldStr,
+  type ParityExtraRow,
+} from "../src/lib/billing/future-access-parity";
 
 dotenv.config();
 
-type AuditRow = {
-  airtableRecordId: string;
-  email: string;
-  name: string;
-  stripeCustomerId: string;
-  accessUntil: string;
-  payment: string;
-  membership: string;
+type AuditRow = ParityExtraRow & {
   memberstackPlanId: string;
   memberstackId: string;
   stripeSubscriptionId: string;
   stripeSubscriptionStatus: string;
   cancelAtPeriodEnd: string;
   cancellationEffectiveAt: string;
-  reason: string;
   stripeCustomerExists: string;
   stripeSubStatuses: string;
   stripeSubPriceIds: string;
@@ -62,11 +57,6 @@ type AuditRow = {
 
 const MEMBERSTACK_PLAN_ID_FIELD = "Memberstack Plan ID";
 const MEMBERSTACK_ID_FIELD = "Memberstack ID";
-
-function fieldStr(fields: Record<string, unknown>, key: string): string {
-  const v = fields[key];
-  return v == null ? "" : String(v).trim();
-}
 
 function csvEscape(v: string): string {
   if (v.includes(",") || v.includes('"') || v.includes("\n")) {
@@ -95,23 +85,26 @@ async function main() {
   console.log(`Membership price_ allowlist (${allow.size}): ${[...allow].join(", ")}\n`);
 
   console.log("Listing Stripe active+trialing qualifying memberships...");
-  const memberships = await listActiveMembershipSubscriptions(stripe, allow);
-  const stripeIds = new Set(memberships.map((m) => m.stripeCustomerId));
-  console.log(`Stripe qualifying memberships: ${memberships.length}\n`);
+  const parity = await computeFutureAccessParity({
+    stripe,
+    airtable,
+    membershipPriceIds: allow,
+  });
+  console.log(`Stripe qualifying memberships: ${parity.stripeQualifying}\n`);
 
   const date = new Date().toISOString().slice(0, 10);
-  console.log(`Listing Airtable members with Service access until after ${date}...`);
-  const records = await airtable.listRecords(MEMBERS_TABLE, {
+  console.log(`Airtable members with Service access until after ${date}: ${parity.airtableFutureAccess}\n`);
+
+  if (parity.duplicates.length > 0) {
+    console.log(`Duplicate Stripe Customer IDs across future-access records:`);
+    for (const d of parity.duplicates) console.log(`  ${d.stripeCustomerId}: ${d.count} records`);
+    console.log("");
+  }
+
+  // Enrich extras with Stripe customer/subscription detail (CLI report only).
+  const enrichedFields = await airtable.listRecords(MEMBERS_TABLE, {
     filterByFormula: `IS_AFTER({${SERVICE_ACCESS_FIELD}}, "${date}")`,
     fields: [
-      "email",
-      "Name",
-      "First Name",
-      "Last Name",
-      STRIPE_CUSTOMER_ID_FIELD,
-      SERVICE_ACCESS_FIELD,
-      PAYMENT_FIELD,
-      MEMBERSHIP_FIELD,
       MEMBERSTACK_PLAN_ID_FIELD,
       MEMBERSTACK_ID_FIELD,
       STRIPE_SUBSCRIPTION_ID_FIELD,
@@ -120,44 +113,20 @@ async function main() {
       CANCELLATION_EFFECTIVE_AT_FIELD,
     ],
   });
-  console.log(`Airtable members with future access: ${records.length}\n`);
-
-  // Same customer id appearing on multiple Airtable records inflates the count.
-  const cusIdCounts = new Map<string, number>();
-  for (const r of records) {
-    const cus = fieldStr(r.fields, STRIPE_CUSTOMER_ID_FIELD);
-    if (!cus) continue;
-    cusIdCounts.set(cus, (cusIdCounts.get(cus) || 0) + 1);
-  }
-  const duplicates = [...cusIdCounts.entries()].filter(([, n]) => n > 1);
-  if (duplicates.length > 0) {
-    console.log(`Duplicate Stripe Customer IDs across future-access records:`);
-    for (const [cus, n] of duplicates) console.log(`  ${cus}: ${n} records`);
-    console.log("");
-  }
+  const extraDetailById = new Map(
+    enrichedFields.map((r) => [r.id, r.fields] as const)
+  );
 
   const rows: AuditRow[] = [];
-  for (const r of records) {
-    const cus = fieldStr(r.fields, STRIPE_CUSTOMER_ID_FIELD);
-    const name =
-      fieldStr(r.fields, "Name") ||
-      [fieldStr(r.fields, "First Name"), fieldStr(r.fields, "Last Name")]
-        .filter(Boolean)
-        .join(" ")
-        .trim();
-
-    let reason = "in_qualifying_set";
+  for (const extra of parity.extras) {
+    const detail = extraDetailById.get(extra.airtableRecordId) ?? {};
     let stripeCustomerExists = "";
     let stripeSubStatuses = "";
     let stripeSubPriceIds = "";
     let stripeHasQualifyingPrice = "";
-
-    if (!cus) {
-      reason = "no_stripe_customer_id";
-    } else if (!stripeIds.has(cus)) {
-      reason = "cus_id_not_in_qualifying_set";
+    if (extra.reason === "cus_id_not_in_qualifying_set") {
       try {
-        const customer = await stripe.customers.retrieve(cus);
+        const customer = await stripe.customers.retrieve(extra.stripeCustomerId);
         const deleted =
           typeof customer === "object" &&
           customer !== null &&
@@ -166,7 +135,7 @@ async function main() {
         stripeCustomerExists = deleted ? "deleted" : "exists";
         if (!deleted) {
           const subs = await stripe.subscriptions.list({
-            customer: cus,
+            customer: extra.stripeCustomerId,
             limit: 100,
             expand: ["data.items.data.price"],
           });
@@ -189,30 +158,19 @@ async function main() {
         stripeCustomerExists = `error: ${e instanceof Error ? e.message.slice(0, 80) : e}`;
       }
     }
-
-    if (reason !== "in_qualifying_set" || (cusIdCounts.get(cus) || 0) > 1) {
-      if (reason === "in_qualifying_set") reason = "duplicate_airtable_record";
-      rows.push({
-        airtableRecordId: r.id,
-        email: fieldStr(r.fields, "email"),
-        name,
-        stripeCustomerId: cus,
-        accessUntil: fieldStr(r.fields, SERVICE_ACCESS_FIELD),
-        payment: fieldStr(r.fields, PAYMENT_FIELD),
-        membership: fieldStr(r.fields, MEMBERSHIP_FIELD),
-        memberstackPlanId: fieldStr(r.fields, MEMBERSTACK_PLAN_ID_FIELD),
-        memberstackId: fieldStr(r.fields, MEMBERSTACK_ID_FIELD),
-        stripeSubscriptionId: fieldStr(r.fields, STRIPE_SUBSCRIPTION_ID_FIELD),
-        stripeSubscriptionStatus: fieldStr(r.fields, STRIPE_SUBSCRIPTION_STATUS_FIELD),
-        cancelAtPeriodEnd: fieldStr(r.fields, CANCEL_AT_PERIOD_END_FIELD),
-        cancellationEffectiveAt: fieldStr(r.fields, CANCELLATION_EFFECTIVE_AT_FIELD),
-        reason,
-        stripeCustomerExists,
-        stripeSubStatuses,
-        stripeSubPriceIds,
-        stripeHasQualifyingPrice,
-      });
-    }
+    rows.push({
+      ...extra,
+      memberstackPlanId: fieldStr(detail, MEMBERSTACK_PLAN_ID_FIELD),
+      memberstackId: fieldStr(detail, MEMBERSTACK_ID_FIELD),
+      stripeSubscriptionId: fieldStr(detail, STRIPE_SUBSCRIPTION_ID_FIELD),
+      stripeSubscriptionStatus: fieldStr(detail, STRIPE_SUBSCRIPTION_STATUS_FIELD),
+      cancelAtPeriodEnd: fieldStr(detail, CANCEL_AT_PERIOD_END_FIELD),
+      cancellationEffectiveAt: fieldStr(detail, CANCELLATION_EFFECTIVE_AT_FIELD),
+      stripeCustomerExists,
+      stripeSubStatuses,
+      stripeSubPriceIds,
+      stripeHasQualifyingPrice,
+    });
   }
 
   const counts = new Map<string, number>();
@@ -224,21 +182,13 @@ async function main() {
   console.log(`  total extra: ${rows.length}`);
   console.log("");
 
-  // Reverse view: qualifying Stripe memberships whose customer has NO future-access
-  // Airtable record (holes). These members are paying but may have lapsed access.
-  const futureCusIds = new Set(
-    records.map((r) => fieldStr(r.fields, STRIPE_CUSTOMER_ID_FIELD)).filter(Boolean)
-  );
-  const holes = memberships.filter((m) => !futureCusIds.has(m.stripeCustomerId));
   console.log("=== Qualifying Stripe memberships with NO future-access Airtable record ===");
-  console.log(`  total holes: ${holes.length}`);
-  for (const h of holes) {
-    const email = typeof h.customer?.email === "string" ? h.customer.email : "";
-    const end = h.currentPeriodEndUnix
-      ? new Date(h.currentPeriodEndUnix * 1000).toISOString()
-      : "";
+  console.log(`  total holes: ${parity.holes.length}`);
+  for (const h of parity.holes) {
+    const email = h.email;
+    const end = h.currentPeriodEndIso;
     console.log(
-      `  ${h.stripeCustomerId}  ${email}  sub=${h.subscriptionId} status=${h.subscriptionStatus} period_end=${end}`
+      `  ${h.membership.stripeCustomerId}  ${email}  sub=${h.membership.subscriptionId} status=${h.membership.subscriptionStatus} period_end=${end}`
     );
     if (email) {
       try {
