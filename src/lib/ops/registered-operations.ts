@@ -7,6 +7,7 @@ import { syncSignups } from "@/lib/ops/sync-signups";
 import { donutTracker } from "@/lib/ops/donut-tracker";
 import { memberExport } from "@/lib/ops/member-export";
 import { syncToPinecone } from "@/lib/ops/sync-to-pinecone";
+import { syncIntroProfiles } from "@/lib/ops/sync-intro-profiles";
 import { dailyMatchMessage } from "@/lib/ops/daily-match-message";
 import { createAirtableClient } from "@/lib/integrations/airtable";
 import { createSlackClient } from "@/lib/integrations/slack";
@@ -189,6 +190,15 @@ export const registeredOperations: Op[] = [
     requiresAdmin: true,
     productionEnabled: false,
     summary: "Sync member embeddings to Pinecone (affects matching)",
+    whenNotToRun: "Do not run unless explicitly approved — changes production matching data.",
+  }),
+  withMeta(syncIntroProfiles, {
+    category: "pinecone_matching",
+    riskLevel: "high_risk",
+    requiresLiveMode: true,
+    requiresAdmin: true,
+    productionEnabled: false,
+    summary: "Sync semantic intro profiles to the unified-engine Pinecone namespace",
     whenNotToRun: "Do not run unless explicitly approved — changes production matching data.",
   }),
   withMeta(dailyMatchMessage, {

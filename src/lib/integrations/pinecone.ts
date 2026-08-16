@@ -22,13 +22,13 @@ export function createPineconeClient(config: PineconeConfig) {
   const pc = new Pinecone({ apiKey: config.apiKey });
   const index = pc.index(config.indexName);
 
-  async function upsertVectors(vectors: VectorRecord[]): Promise<number> {
+  async function upsertVectors(vectors: VectorRecord[], namespace?: string): Promise<number> {
     const BATCH_SIZE = 100;
     let upserted = 0;
 
     for (let i = 0; i < vectors.length; i += BATCH_SIZE) {
       const batch = vectors.slice(i, i + BATCH_SIZE);
-      await index.upsert({ records: batch });
+      await index.upsert({ records: batch, namespace });
       upserted += batch.length;
     }
 
@@ -38,12 +38,14 @@ export function createPineconeClient(config: PineconeConfig) {
   async function queryByVector(
     vector: number[],
     topK: number,
-    filter?: object
+    filter?: object,
+    namespace?: string
   ): Promise<QueryMatch[]> {
     const result = await index.query({
       vector,
       topK,
       filter,
+      namespace,
       includeMetadata: true,
     });
 
@@ -54,8 +56,8 @@ export function createPineconeClient(config: PineconeConfig) {
     }));
   }
 
-  async function fetchById(id: string): Promise<VectorRecord | null> {
-    const result = await index.fetch({ ids: [id] });
+  async function fetchById(id: string, namespace?: string): Promise<VectorRecord | null> {
+    const result = await index.fetch({ ids: [id], namespace });
     const record = result.records?.[id];
     if (!record) return null;
 
@@ -64,6 +66,23 @@ export function createPineconeClient(config: PineconeConfig) {
       values: record.values ?? [],
       metadata: (record.metadata ?? {}) as RecordMetadata,
     };
+  }
+
+  async function fetchByIds(ids: string[], namespace?: string): Promise<Map<string, VectorRecord>> {
+    const result = new Map<string, VectorRecord>();
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+      const batch = ids.slice(i, i + BATCH_SIZE);
+      const response = await index.fetch({ ids: batch, namespace });
+      for (const [id, record] of Object.entries(response.records ?? {})) {
+        result.set(id, {
+          id: record.id,
+          values: record.values ?? [],
+          metadata: (record.metadata ?? {}) as RecordMetadata,
+        });
+      }
+    }
+    return result;
   }
 
   async function fetchMetadataByIds(ids: string[]): Promise<Map<string, RecordMetadata>> {
@@ -81,13 +100,13 @@ export function createPineconeClient(config: PineconeConfig) {
     return result;
   }
 
-  async function deleteByIds(ids: string[]): Promise<void> {
+  async function deleteByIds(ids: string[], namespace?: string): Promise<void> {
     if (ids.length === 0) return;
     const BATCH_SIZE = 1000;
     for (let i = 0; i < ids.length; i += BATCH_SIZE) {
       const batch = ids.slice(i, i + BATCH_SIZE);
       try {
-        await index.deleteMany({ ids: batch });
+        await index.deleteMany({ ids: batch, namespace });
       } catch {
         // Pinecone returns 404 when IDs don't exist — safe to ignore
       }
@@ -95,15 +114,14 @@ export function createPineconeClient(config: PineconeConfig) {
   }
 
   /**
-   * Return every vector ID currently in the index. Pinecone's list API is
-   * paginated; we walk all pages. For indexes >100k vectors consider a
-   * different strategy — for our member count (~3k) this is fast.
+   * Return every vector ID currently in the index (optionally scoped to a
+   * namespace). Pinecone's list API is paginated; we walk all pages.
    */
-  async function listAllIds(): Promise<string[]> {
+  async function listAllIds(namespace?: string): Promise<string[]> {
     const ids: string[] = [];
     let paginationToken: string | undefined;
     do {
-      const result = await index.listPaginated({ paginationToken });
+      const result = await index.listPaginated({ namespace, paginationToken });
       for (const v of result.vectors ?? []) {
         if (v.id) ids.push(v.id);
       }
@@ -112,7 +130,17 @@ export function createPineconeClient(config: PineconeConfig) {
     return ids;
   }
 
-  return { upsertVectors, queryByVector, fetchById, fetchMetadataByIds, deleteByIds, listAllIds, pc, index };
+  return {
+    upsertVectors,
+    queryByVector,
+    fetchById,
+    fetchByIds,
+    fetchMetadataByIds,
+    deleteByIds,
+    listAllIds,
+    pc,
+    index,
+  };
 }
 
 export type PineconeClient = ReturnType<typeof createPineconeClient>;
