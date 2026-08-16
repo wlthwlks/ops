@@ -2,6 +2,8 @@ import { ZodError } from "zod";
 import { jsonError } from "@/lib/ops/api-response";
 import { MatchingProfilesError } from "./profiles";
 import { IntroductionSettingsError } from "./settings";
+import { EmailTemplateError } from "./templates";
+import { FreezeError } from "./freeze";
 
 /**
  * Map introduction-engine domain errors to structured API responses.
@@ -17,7 +19,15 @@ export function introductionErrorResponse(err: unknown) {
       details,
     });
   }
+  if (err instanceof FreezeError) {
+    const status = err.code === "PLAN_RUN_NOT_FOUND" ? 404 : 409;
+    return jsonError(err.code, err.message, status);
+  }
   if (err instanceof MatchingProfilesError || err instanceof IntroductionSettingsError) {
+    const status = err.code.endsWith("NOT_FOUND") ? 404 : 422;
+    return jsonError(err.code, err.message, status);
+  }
+  if (err instanceof EmailTemplateError) {
     const status = err.code.endsWith("NOT_FOUND") ? 404 : 422;
     return jsonError(err.code, err.message, status);
   }

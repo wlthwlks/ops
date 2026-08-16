@@ -91,6 +91,9 @@ export interface PlanMemberRegistryEntry {
   industry: string | null;
   businessStage: string | null;
   professionalHeadline: string | null;
+  helpWanted: string[];
+  expertise: string[];
+  connectionTypes: string[];
 }
 
 interface PlanSnapshot {
@@ -327,6 +330,9 @@ function toRegistryEntry(member: PlanMember): PlanMemberRegistryEntry {
     industry: member.industry,
     businessStage: member.businessStage,
     professionalHeadline: member.professionalHeadline,
+    helpWanted: member.helpWanted,
+    expertise: member.expertise,
+    connectionTypes: member.connectionTypes,
   };
 }
 
@@ -921,6 +927,8 @@ export async function getRunDetail(db: AppDb, runId: string) {
       cityName: group.cityName,
       overallScore: group.overallScore,
       scoreBreakdown: group.scoreBreakdownJson ? JSON.parse(group.scoreBreakdownJson) : null,
+      emailSubjectSnapshot: group.emailSubjectSnapshot,
+      emailHtmlSnapshot: group.emailHtmlSnapshot,
       members: (membersByGroup.get(group.id) ?? []).map((m) => {
         let snapshot: PlanMemberRegistryEntry | null = null;
         if (m.memberSnapshotJson) {
@@ -942,6 +950,8 @@ export async function getRunDetail(db: AppDb, runId: string) {
           postcode: snapshot?.postcode ?? null,
           industry: snapshot?.industry ?? null,
           businessStage: snapshot?.businessStage ?? null,
+          helpWanted: snapshot?.helpWanted ?? [],
+          expertise: snapshot?.expertise ?? [],
         };
       }),
     })),
