@@ -25,6 +25,16 @@ export const introductionRuns = pgTable(
     initiatedBy: text("initiated_by"),
     summary: text("summary"),
     error: text("error"),
+    // Unified introduction engine additions
+    matchingProfileVersionId: text("matching_profile_version_id"),
+    emailTemplateVersionId: text("email_template_version_id"),
+    cityCodesJson: text("city_codes_json"),
+    deliveryMode: text("delivery_mode").notNull().default("simulation"),
+    // "simulation" | "provider_test" | "canary" | "production"
+    snapshotJson: text("snapshot_json"),
+    createdByClerkUserId: text("created_by_clerk_user_id"),
+    totalGroups: integer("total_groups"),
+    totalDeliveries: integer("total_deliveries"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     startedAt: timestamp("started_at", { withTimezone: true }),

@@ -1,7 +1,9 @@
 import {
   pgTable,
   text,
+  boolean,
   integer,
+  real,
   timestamp,
   uniqueIndex,
   index,
@@ -34,6 +36,15 @@ export const introductionGroups = pgTable(
     attemptCount: integer("attempt_count").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     sentAt: timestamp("sent_at", { withTimezone: true }),
+    // Unified introduction engine additions
+    overallScore: real("overall_score"),
+    scoreBreakdownJson: text("score_breakdown_json"),
+    matchingProfileVersionId: text("matching_profile_version_id"),
+    cityCode: text("city_code"),
+    locked: boolean("locked").notNull().default(false),
+    emailSubjectSnapshot: text("email_subject_snapshot"),
+    emailHtmlSnapshot: text("email_html_snapshot"),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("intro_groups_delivery_key_idx").on(table.deliveryKey),

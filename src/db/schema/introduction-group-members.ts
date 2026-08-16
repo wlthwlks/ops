@@ -20,6 +20,7 @@ export const introductionGroupMembers = pgTable(
     emailSnapshot: text("email_snapshot").notNull(),
     slackUserId: text("slack_user_id"),
     role: text("role").notNull(), // "new_member" | "match" | "recurring"
+    memberSnapshotJson: text("member_snapshot_json"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => [
