@@ -261,6 +261,71 @@ export function maxPaidThroughDate(
   };
 }
 
+const BILLING_DATE_FIELDS = new Set([
+  SERVICE_ACCESS_FIELD,
+  CANCELLATION_EFFECTIVE_AT_FIELD,
+]);
+
+/**
+ * True when a candidate billing field value differs from what the record
+ * currently holds. Blank/missing counts as equal to null. Date fields compare
+ * by timestamp (with string fallback). "Billing last synced at" is never a
+ * change by itself — it is only written when something else changed.
+ */
+export function billingValueChanged(
+  field: string,
+  candidate: unknown,
+  existingRaw: unknown
+): boolean {
+  if (field === BILLING_LAST_SYNCED_AT_FIELD) return false;
+
+  const existing = existingRaw == null || existingRaw === "" ? null : existingRaw;
+
+  // Checkbox semantics: blank/false are equivalent — writing false onto a
+  // never-set checkbox is not a change, writing true is.
+  if (typeof candidate === "boolean") {
+    return Boolean(existing) !== candidate;
+  }
+
+  if (candidate == null) {
+    return existing != null;
+  }
+  if (existing == null) {
+    return true;
+  }
+
+  if (BILLING_DATE_FIELDS.has(field)) {
+    const candidateMs = Date.parse(String(candidate));
+    const existingMs = Date.parse(String(existing));
+    if (!Number.isNaN(candidateMs) && !Number.isNaN(existingMs)) {
+      return candidateMs !== existingMs;
+    }
+    return String(candidate).trim() !== String(existing).trim();
+  }
+
+  return String(candidate).trim() !== String(existing).trim();
+}
+
+/** Fields read for the billing write diff — must match what updateServiceAccessUntilForCustomer compares/writes. */
+export const BILLING_SYNC_READ_FIELDS = [
+  STRIPE_CUSTOMER_ID_FIELD,
+  SERVICE_ACCESS_FIELD,
+  PAYMENT_FIELD,
+  MEMBERSHIP_FIELD,
+  LAST_INVOICE_ID_FIELD,
+  LAST_INVOICE_STATUS_FIELD,
+  CANCEL_AT_PERIOD_END_FIELD,
+  CANCELLATION_EFFECTIVE_AT_FIELD,
+  BILLING_LAST_SYNCED_AT_FIELD,
+  STRIPE_PRICE_ID_FIELD,
+  PAID_PLANS_FIELD,
+  STRIPE_SUBSCRIPTION_ID_FIELD,
+  STRIPE_SUBSCRIPTION_STATUS_FIELD,
+  LAST_STRIPE_EVENT_ID_FIELD,
+  "Memberstack Plan ID",
+  "Name",
+] as const;
+
 export async function findAirtableMembersByStripeCustomerId(
   airtable: AirtableClient,
   stripeCustomerId: string
@@ -268,7 +333,7 @@ export async function findAirtableMembersByStripeCustomerId(
   const escaped = escapeAirtableFormulaString(stripeCustomerId);
   return airtable.listRecords(MEMBERS_TABLE, {
     filterByFormula: `{${STRIPE_CUSTOMER_ID_FIELD}} = "${escaped}"`,
-    fields: [STRIPE_CUSTOMER_ID_FIELD, SERVICE_ACCESS_FIELD, "Name"],
+    fields: [...BILLING_SYNC_READ_FIELDS],
   });
 }
 
@@ -416,7 +481,6 @@ export async function updateServiceAccessUntilForCustomer(input: {
       [STRIPE_CUSTOMER_ID_FIELD]: stripeCustomerId,
       [LAST_INVOICE_ID_FIELD]: stripeInvoiceId,
       [LAST_INVOICE_STATUS_FIELD]: billing?.invoiceStatus ?? "paid",
-      [BILLING_LAST_SYNCED_AT_FIELD]: new Date().toISOString(),
       // Resubscribe / rejoin after cancel: drop stale cancel signals so UI returns to active.
       // Subscription-driven sync may pass the real cancel_at_period_end instead.
       [CANCEL_AT_PERIOD_END_FIELD]: cancelAtPeriodEnd,
@@ -446,6 +510,12 @@ export async function updateServiceAccessUntilForCustomer(input: {
       fields["Memberstack Plan ID"] = configuredPlan;
     }
 
+    // Timestamp never counts as a change by itself — only written when the
+    // record actually changes, so clean members keep their Last Modified Date.
+    const billingFieldsChanged = Object.entries(fields).some(([key, value]) =>
+      billingValueChanged(key, value, rec.fields[key])
+    );
+
     if (comparison.invalidCurrent) {
       results.push({
         airtableRecordId: rec.id,
@@ -466,7 +536,10 @@ export async function updateServiceAccessUntilForCustomer(input: {
         })
       );
       // Still write Payment/Membership — invalid date must not leave Unpaid
-      toUpdate.push({ id: rec.id, fields });
+      toUpdate.push({
+        id: rec.id,
+        fields: { ...fields, [BILLING_LAST_SYNCED_AT_FIELD]: new Date().toISOString() },
+      });
       continue;
     }
 
@@ -493,12 +566,21 @@ export async function updateServiceAccessUntilForCustomer(input: {
         newValue: comparison.finalDate.toISOString(),
         status,
         reason: comparison.reason,
-        // Access date unchanged; Payment/Membership still written below
+        // Access date unchanged; billing fields still written below when they differ
         updated: false,
       });
     }
 
-    toUpdate.push({ id: rec.id, fields });
+    // Skip the PATCH entirely when access is unchanged AND every billing field
+    // already holds the target value — avoids touching "Billing last synced at"
+    // and Airtable's record modified time on clean members.
+    if (!effectiveShouldUpdate && !billingFieldsChanged) {
+      continue;
+    }
+    toUpdate.push({
+      id: rec.id,
+      fields: { ...fields, [BILLING_LAST_SYNCED_AT_FIELD]: new Date().toISOString() },
+    });
   }
 
   if (!dryRun && toUpdate.length > 0) {

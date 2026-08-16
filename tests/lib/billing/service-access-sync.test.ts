@@ -13,6 +13,7 @@ import {
   updateServiceAccessUntilForCustomer,
   isValidStripeCustomerId,
   SERVICE_ACCESS_FIELD,
+  STRIPE_CUSTOMER_ID_FIELD,
 } from "@/lib/billing/service-access-sync";
 
 function line(partial: {
@@ -340,6 +341,62 @@ describe("updateServiceAccessUntilForCustomer", () => {
     }>;
     expect(call[0].fields.Payment).toBe("Paid");
     expect(call[0].fields.Membership).toBe("Active");
+    expect(call[0].fields[SERVICE_ACCESS_FIELD]).toBeUndefined();
+  });
+
+  it("skips PATCH when access and every billing field already match", async () => {
+    const at = mockAirtable([
+      {
+        id: "rec1",
+        fields: {
+          [STRIPE_CUSTOMER_ID_FIELD]: "cus_x",
+          [SERVICE_ACCESS_FIELD]: "2026-09-01T00:00:00.000Z",
+          Payment: "Paid",
+          Membership: "Active",
+          "Last invoice ID": "in_1",
+          "Last invoice status": "paid",
+        },
+      },
+    ]);
+    const r = await updateServiceAccessUntilForCustomer({
+      airtable: at,
+      stripeCustomerId: "cus_x",
+      paidThrough,
+      stripeInvoiceId: "in_1",
+    });
+    expect(r.status).toBe("already_up_to_date");
+    expect(at.updateRecordsBatched).not.toHaveBeenCalled();
+  });
+
+  it("still writes when a billing flag differs but access is unchanged", async () => {
+    const at = mockAirtable([
+      {
+        id: "rec1",
+        fields: {
+          [STRIPE_CUSTOMER_ID_FIELD]: "cus_x",
+          [SERVICE_ACCESS_FIELD]: "2026-09-01T00:00:00.000Z",
+          Payment: "Paid",
+          Membership: "Active",
+          "Last invoice ID": "in_1",
+          "Last invoice status": "paid",
+          "Cancel at period end": true,
+          "Cancellation effective at": "2026-08-01",
+        },
+      },
+    ]);
+    const r = await updateServiceAccessUntilForCustomer({
+      airtable: at,
+      stripeCustomerId: "cus_x",
+      paidThrough,
+      stripeInvoiceId: "in_1",
+    });
+    expect(r.status).toBe("already_up_to_date");
+    const call = at.updateRecordsBatched.mock.calls[0][1] as Array<{
+      fields: Record<string, unknown>;
+    }>;
+    expect(call[0].fields["Cancel at period end"]).toBe(false);
+    expect(call[0].fields["Cancellation effective at"]).toBe(null);
+    expect(call[0].fields["Billing last synced at"]).toBeTruthy();
     expect(call[0].fields[SERVICE_ACCESS_FIELD]).toBeUndefined();
   });
 
