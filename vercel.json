@@ -5,6 +5,10 @@
       "schedule": "0 * * * *"
     },
     {
+      "path": "/api/cron/intro-deliveries",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/retry-integrations",
       "schedule": "*/15 * * * *"
     },

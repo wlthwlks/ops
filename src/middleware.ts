@@ -11,6 +11,7 @@ const isPublicRoute = createRouteMatcher([
   "/api/cron(.*)",
   "/api/webhooks/stripe(.*)",
   "/api/webhooks/memberstack(.*)",
+  "/api/webhooks/resend(.*)",
 
   // Public APIs used by the Webflow widgets
   "/api/onboarding(.*)",
