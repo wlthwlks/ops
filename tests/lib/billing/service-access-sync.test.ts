@@ -220,7 +220,7 @@ describe("updateServiceAccessUntilForCustomer", () => {
     expect(call[0].fields["Last invoice ID"]).toBe("in_1");
     // Resubscribe must clear stale cancel so UI returns to normal active.
     expect(call[0].fields["Cancel at period end"]).toBe(false);
-    expect(call[0].fields["Cancellation effective at"]).toBe("");
+    expect(call[0].fields["Cancellation effective at"]).toBe(null);
   });
 
   it("clears cancel flags on paid invoice even when access already later", async () => {
@@ -246,7 +246,7 @@ describe("updateServiceAccessUntilForCustomer", () => {
     expect(call[0].fields.Payment).toBe("Paid");
     expect(call[0].fields.Membership).toBe("Active");
     expect(call[0].fields["Cancel at period end"]).toBe(false);
-    expect(call[0].fields["Cancellation effective at"]).toBe("");
+    expect(call[0].fields["Cancellation effective at"]).toBe(null);
     expect(call[0].fields[SERVICE_ACCESS_FIELD]).toBeUndefined();
   });
 

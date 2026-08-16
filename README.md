@@ -426,6 +426,7 @@ When Slack succeeds but Airtable tracking fails, the group status becomes `sent_
 | `npm run airtable:backfill-service-access` | Backfill `Service access until` from paid Stripe invoices (dry-run by default; `--apply` to write) |
 | `npm run airtable:reconcile-stripe-customers` | Fill missing `Stripe Customer ID` via strict email + billing match (dry-run default; `--apply` for auto_match only) |
 | `npm run airtable:historical-stripe-repair` | **One-time** historical repair: link/create paying Stripe customers in Airtable (not used by webhook) |
+| `npm run airtable:historical-stripe-repair -- --subscriptions` | Reconcile every active+trialing Stripe subscription (allowlist `price_` ids) to Airtable: access = `current_period_end`, links blank `Stripe Customer ID` via unique email, creates missing with `--apply --create-missing`. Monotonic — never shortens access. Dry-run by default |
 
 ### Member ownership (Memberstack + Make vs Stripe)
 

@@ -22,6 +22,8 @@ export const BILLING_LAST_SYNCED_AT_FIELD = "Billing last synced at";
 export const LAST_STRIPE_EVENT_ID_FIELD = "Last Stripe event ID";
 export const CANCEL_AT_PERIOD_END_FIELD = "Cancel at period end";
 export const CANCELLATION_EFFECTIVE_AT_FIELD = "Cancellation effective at";
+export const FIRST_NAME_FIELD = "First Name";
+export const LAST_NAME_FIELD = "Last Name";
 export const MEMBERS_TABLE = AIRTABLE_MEMBERS_TABLE;
 
 /** Deduplicate qualifying membership price ids (stable order). */
@@ -304,6 +306,8 @@ export type InvoiceBillingExtras = {
   stripeSubscriptionId?: string | null;
   stripeSubscriptionStatus?: string | null;
   invoiceStatus?: string | null;
+  /** Subscription cancel_at_period_end (default false). */
+  cancelAtPeriodEnd?: boolean | null;
 };
 
 export async function updateServiceAccessUntilForCustomer(input: {
@@ -316,6 +320,11 @@ export async function updateServiceAccessUntilForCustomer(input: {
   billing?: InvoiceBillingExtras;
   /** Allow reducing Service access until. Default false (monotonic). */
   allowServiceAccessReduction?: boolean;
+  /**
+   * Payment value to write. Pass null to leave Payment unchanged.
+   * Default "Paid".
+   */
+  paymentValue?: string | null;
 }): Promise<ServiceAccessSyncResult> {
   const {
     airtable,
@@ -326,6 +335,7 @@ export async function updateServiceAccessUntilForCustomer(input: {
     dryRun = false,
     billing,
     allowServiceAccessReduction = false,
+    paymentValue,
   } = input;
 
   const paidThroughIso = paidThrough.toISOString();
@@ -400,17 +410,21 @@ export async function updateServiceAccessUntilForCustomer(input: {
     const nativePriceIds = dedupePriceIds(billing?.qualifyingPriceIds || []);
     const primaryStripePriceId = nativePriceIds[0] || "";
 
+    const cancelAtPeriodEnd = billing?.cancelAtPeriodEnd === true;
     const fields: Record<string, unknown> = {
-      [PAYMENT_FIELD]: "Paid",
       [MEMBERSHIP_FIELD]: "Active",
       [STRIPE_CUSTOMER_ID_FIELD]: stripeCustomerId,
       [LAST_INVOICE_ID_FIELD]: stripeInvoiceId,
-      [LAST_INVOICE_STATUS_FIELD]: billing?.invoiceStatus || "paid",
+      [LAST_INVOICE_STATUS_FIELD]: billing?.invoiceStatus ?? "paid",
       [BILLING_LAST_SYNCED_AT_FIELD]: new Date().toISOString(),
       // Resubscribe / rejoin after cancel: drop stale cancel signals so UI returns to active.
-      [CANCEL_AT_PERIOD_END_FIELD]: false,
-      [CANCELLATION_EFFECTIVE_AT_FIELD]: "",
+      // Subscription-driven sync may pass the real cancel_at_period_end instead.
+      [CANCEL_AT_PERIOD_END_FIELD]: cancelAtPeriodEnd,
+      [CANCELLATION_EFFECTIVE_AT_FIELD]: cancelAtPeriodEnd ? paidThroughIso : null,
     };
+    if (paymentValue !== null) {
+      fields[PAYMENT_FIELD] = paymentValue ?? "Paid";
+    }
     if (stripeEventId) fields[LAST_STRIPE_EVENT_ID_FIELD] = stripeEventId;
     if (primaryStripePriceId) {
       fields[STRIPE_PRICE_ID_FIELD] = primaryStripePriceId;
