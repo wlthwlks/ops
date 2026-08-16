@@ -144,9 +144,14 @@ export interface PairEligibilityOptions {
   emailsInCycle: ReadonlySet<string>;
 }
 
+export type PairEligibilityMember = Pick<
+  MemberEligibilityInput,
+  "airtableRecordId" | "email" | "city" | "lat" | "lon"
+>;
+
 export function checkPairEligibility(
-  a: MemberEligibilityInput,
-  b: MemberEligibilityInput,
+  a: PairEligibilityMember,
+  b: PairEligibilityMember,
   options: PairEligibilityOptions
 ): PairEligibilityResult {
   const emailA = normalizeEmailKey(a.email);
