@@ -31,6 +31,7 @@ export const INTEGRATION_ERROR_CODES = [
   "CITY_COUNTRY_MISMATCH",
   "TIMEZONE_MISMATCH",
   "ONBOARDING_STATE_INVALID",
+  "KLAVIYO_SYNC_FAILED",
   "INTERNAL_UNEXPECTED_ERROR",
 ] as const;
 
@@ -42,6 +43,7 @@ export function redactSecrets(value: string): string {
     .replace(/sk_test_[A-Za-z0-9]+/g, "[redacted]")
     .replace(/whsec_[A-Za-z0-9]+/g, "[redacted]")
     .replace(/pat[A-Za-z0-9._-]{10,}/g, "[redacted]")
+    .replace(/pk_[A-Za-z0-9]{10,}/g, "[redacted]")
     .replace(/xox[baprs]-[A-Za-z0-9-]+/g, "[redacted]")
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
     .replace(/"password"\s*:\s*"[^"]*"/gi, '"password":"[redacted]"');

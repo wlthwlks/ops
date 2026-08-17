@@ -23,6 +23,7 @@ const SECRET_PATTERNS: Array<{ name: string; re: RegExp }> = [
   { name: "stripe_live_key", re: /sk_live_[A-Za-z0-9]{10,}/ },
   { name: "stripe_webhook", re: /whsec_[A-Za-z0-9]{10,}/ },
   { name: "slack_bot", re: /xoxb-[A-Za-z0-9-]{10,}/ },
+  { name: "klaviyo_private_key", re: /pk_[A-Za-z0-9]{16,}/ },
 ];
 
 function trackedFiles(): string[] {

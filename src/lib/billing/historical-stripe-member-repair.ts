@@ -480,6 +480,10 @@ export type ActiveMembershipSubscription = {
   customer: Stripe.Customer;
   priceIds: string[];
   currentPeriodEndUnix: number | null;
+  /** sub.ended_at — set for fully ended (canceled) subscriptions. */
+  endedAtUnix?: number | null;
+  /** sub.canceled_at — when the customer cancelled. */
+  canceledAtUnix?: number | null;
 };
 
 /** Extract price_… ids from a subscription's items (expanded or legacy shapes). */
@@ -525,15 +529,16 @@ export function subscriptionCustomerId(sub: Stripe.Subscription): string {
 }
 
 /**
- * Enumerate active + trialing Stripe subscriptions whose items contain a
- * configured membership price_ id, deduped to ONE best subscription per
- * customer (rank active > trialing, then latest current_period_end).
+ * Enumerate Stripe subscriptions whose items contain a configured membership
+ * price_ id, deduped to ONE best subscription per customer (rank active >
+ * trialing > canceled, then latest current_period_end). Used for the active
+ * census (active+trialing) and for the churn census (canceled).
  */
 export async function listActiveMembershipSubscriptions(
   stripe: StripeListClient,
   membershipPriceIds: Set<string>,
   options?: {
-    statuses?: Array<"active" | "trialing">;
+    statuses?: Array<"active" | "trialing" | "canceled">;
     /** Stop early after N qualifying customers. */
     limit?: number;
   }
@@ -576,6 +581,8 @@ export async function listActiveMembershipSubscriptions(
           customer: resolveExpandedCustomer(sub, customerId),
           priceIds,
           currentPeriodEndUnix,
+          endedAtUnix: typeof sub.ended_at === "number" ? sub.ended_at : null,
+          canceledAtUnix: typeof sub.canceled_at === "number" ? sub.canceled_at : null,
         };
 
         const prev = best.get(customerId);

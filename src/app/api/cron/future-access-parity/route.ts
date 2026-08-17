@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAirtableClient } from "@/lib/integrations/airtable";
+import { createKlaviyoClient } from "@/lib/integrations/klaviyo";
 import {
   getStripeClient,
   getStripeNativeMembershipPriceIds,
@@ -11,11 +12,15 @@ import {
   repairParityExtras,
   type ParityExtrasRepairResult,
 } from "@/lib/billing/future-access-parity";
+import {
+  runKlaviyoMembershipSync,
+  type KlaviyoMembershipSyncResult,
+} from "@/lib/billing/klaviyo-membership-sync";
 import { recordIntegrationError } from "@/lib/forms/webhooks/store";
 import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 /**
  * Daily future-access parity safety net.
@@ -36,6 +41,13 @@ export const maxDuration = 120;
  *   PARITY_CRON_MAX_HOLES           max holes auto-fixed per run (default 100)
  *   PARITY_CRON_AUTO_FIX_EXTRAS     default "true"; "false" makes extras alert-only
  *   PARITY_CRON_MAX_EXTRAS          max extras auto-fixed per run (default 50)
+ *
+ * Klaviyo membership-list sync (runs LAST, after both repairs):
+ *   KLAVIYO_SYNC_ENABLED            default "false"; enables the list reconcile
+ *   KLAVIYO_PRIVATE_API_KEY         private API key (pk_…)
+ *   KLAVIYO_ACTIVE_LIST_ID          list id for "WW Active members reliable"
+ *   KLAVIYO_CHURNED_LIST_ID         list id for churned members
+ *   KLAVIYO_API_REVISION            optional JSON:API revision (default 2025-04-15)
  */
 export async function POST(request: NextRequest) {
   const denied = rejectUnauthorizedCron(request);
@@ -147,6 +159,84 @@ export async function POST(request: NextRequest) {
       }).catch(() => undefined);
     }
 
+    // Klaviyo membership-list sync — runs LAST, after Airtable is reconciled.
+    const klaviyoEnabled =
+      process.env.KLAVIYO_SYNC_ENABLED === "true" ||
+      process.env.KLAVIYO_SYNC_ENABLED === "1";
+    const klaviyoApiKey = (process.env.KLAVIYO_PRIVATE_API_KEY || "").trim();
+    const klaviyoActiveListId = (process.env.KLAVIYO_ACTIVE_LIST_ID || "").trim();
+    const klaviyoChurnedListId = (process.env.KLAVIYO_CHURNED_LIST_ID || "").trim();
+    const klaviyoConfigured = Boolean(
+      klaviyoApiKey && klaviyoActiveListId && klaviyoChurnedListId
+    );
+
+    let klaviyo: {
+      success: boolean;
+      result?: KlaviyoMembershipSyncResult;
+      error?: string;
+      skipped?: boolean;
+      reason?: string;
+    } | null = null;
+
+    if (klaviyoEnabled && klaviyoConfigured) {
+      try {
+        const result = await runKlaviyoMembershipSync({
+          stripe,
+          airtable,
+          klaviyo: createKlaviyoClient({
+            apiKey: klaviyoApiKey,
+            revision: (process.env.KLAVIYO_API_REVISION || "").trim() || undefined,
+          }),
+          membershipPriceIds: allow,
+          activeListId: klaviyoActiveListId,
+          churnedListId: klaviyoChurnedListId,
+        });
+        klaviyo = { success: true, result };
+        console.log(
+          JSON.stringify({
+            event: "klaviyo_membership_sync",
+            ...result,
+          })
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        klaviyo = { success: false, error: msg.slice(0, 200) };
+        console.error(
+          JSON.stringify({ event: "klaviyo_membership_sync_failed", error: msg })
+        );
+        await recordIntegrationError({
+          code: "KLAVIYO_SYNC_FAILED",
+          source: "cron",
+          operation: "klaviyo-membership-sync",
+          title: "Klaviyo membership-list sync failed",
+          message: msg.slice(0, 2000),
+          severity: "error",
+          retryable: true,
+        }).catch(() => undefined);
+      }
+    } else if (klaviyoEnabled && !klaviyoConfigured) {
+      klaviyo = {
+        success: false,
+        error:
+          "Klaviyo config missing (KLAVIYO_PRIVATE_API_KEY / KLAVIYO_ACTIVE_LIST_ID / KLAVIYO_CHURNED_LIST_ID)",
+      };
+      await recordIntegrationError({
+        code: "KLAVIYO_SYNC_FAILED",
+        source: "cron",
+        operation: "klaviyo-membership-sync",
+        title: "Klaviyo membership-list sync config missing",
+        message: "KLAVIYO_SYNC_ENABLED is true but required Klaviyo env vars are missing",
+        severity: "error",
+        retryable: false,
+      }).catch(() => undefined);
+    } else {
+      klaviyo = {
+        success: true,
+        skipped: true,
+        reason: "KLAVIYO_SYNC_ENABLED is not true",
+      };
+    }
+
     console.log(
       JSON.stringify({
         event: "future_access_parity_cron",
@@ -166,6 +256,7 @@ export async function POST(request: NextRequest) {
         holesRemaining,
         autoFixHoles,
         autoFixExtras,
+        klaviyo,
       })
     );
 
@@ -194,6 +285,7 @@ export async function POST(request: NextRequest) {
         duplicates: parity.duplicates,
         autoFixHoles,
         autoFixExtras,
+        klaviyo,
       },
     });
   } catch (err) {
