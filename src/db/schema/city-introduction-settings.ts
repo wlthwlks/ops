@@ -40,6 +40,8 @@ export const cityIntroductionSettings = pgTable(
     autoApprove: boolean("auto_approve").notNull().default(false),
     autoApproveDeliveryMode: text("auto_approve_delivery_mode").notNull().default("simulation"),
     // "simulation" | "provider_test" | "canary" | "production"
+    meetupTime: text("meetup_time").notNull().default("10:00"),
+    // "HH:mm" local time used in the {{meetup_suggestion}} email placeholder
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

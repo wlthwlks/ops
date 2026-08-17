@@ -53,6 +53,18 @@ describe("validateTemplateContent", () => {
     expect(result.issues.join(" ")).toContain("{{members}}");
   });
 
+  it("publishes without the optional coordination placeholder", () => {
+    const custom = "<p>Hi {{first_name}}</p>{{members}}<p>Use WhatsApp to coordinate.</p>";
+    const result = validateTemplateContent(VALID_SUBJECT, custom);
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts the new meetup and group-size placeholders", () => {
+    const custom =
+      "<p>group of {{group_size_word}} — {{meetup_suggestion}}</p>{{members}}";
+    expect(validateTemplateContent(VALID_SUBJECT, custom).ok).toBe(true);
+  });
+
   it("rejects unknown placeholders", () => {
     const result = validateTemplateContent(
       VALID_SUBJECT,

@@ -69,6 +69,9 @@ export const PLAN_MEMBER_FIELDS = [
   MEMBER_FIELDS.helpWantedContext,
   MEMBER_FIELDS.expertise,
   MEMBER_FIELDS.expertiseContext,
+  MEMBER_FIELDS.phone,
+  MEMBER_FIELDS.socialMedia,
+  MEMBER_FIELDS.businessWebsite,
 ];
 
 export interface PlanMember extends ScorableMember {
@@ -76,6 +79,9 @@ export interface PlanMember extends ScorableMember {
   name: string | null;
   firstName: string | null;
   professionalHeadline: string | null;
+  phone: string | null;
+  socialMedia: string | null;
+  website: string | null;
   eligible: boolean;
   exclusionReason: MemberEligibilityReason | null;
 }
@@ -91,6 +97,9 @@ export interface PlanMemberRegistryEntry {
   industry: string | null;
   businessStage: string | null;
   professionalHeadline: string | null;
+  phone: string | null;
+  socialMedia: string | null;
+  website: string | null;
   helpWanted: string[];
   expertise: string[];
   connectionTypes: string[];
@@ -178,6 +187,9 @@ export function buildPlanMember(
     name,
     firstName,
     professionalHeadline: String(f[MEMBER_FIELDS.professionalHeadline] ?? "").trim() || null,
+    phone: String(f[MEMBER_FIELDS.phone] ?? "").trim() || null,
+    socialMedia: String(f[MEMBER_FIELDS.socialMedia] ?? "").trim() || null,
+    website: String(f[MEMBER_FIELDS.businessWebsite] ?? "").trim() || null,
     city: String(f["City"] ?? "").trim() || null,
     lat: opts.geo.lat,
     lon: opts.geo.lon,
@@ -330,6 +342,9 @@ function toRegistryEntry(member: PlanMember): PlanMemberRegistryEntry {
     industry: member.industry,
     businessStage: member.businessStage,
     professionalHeadline: member.professionalHeadline,
+    phone: member.phone,
+    socialMedia: member.socialMedia,
+    website: member.website,
     helpWanted: member.helpWanted,
     expertise: member.expertise,
     connectionTypes: member.connectionTypes,
@@ -946,6 +961,9 @@ export async function getRunDetail(db: AppDb, runId: string) {
           name: snapshot?.name ?? null,
           firstName: snapshot?.firstName ?? null,
           professionalHeadline: snapshot?.professionalHeadline ?? null,
+          phone: snapshot?.phone ?? null,
+          socialMedia: snapshot?.socialMedia ?? null,
+          website: snapshot?.website ?? null,
           city: snapshot?.city ?? null,
           postcode: snapshot?.postcode ?? null,
           industry: snapshot?.industry ?? null,

@@ -6,6 +6,7 @@ import {
   introductionGroups,
   introductionGroupMembers,
   introductionDeliveries,
+  cityIntroductionSettings,
   type IntroductionRun,
   type IntroductionGroup,
   type IntroductionGroupMember,
@@ -213,6 +214,23 @@ export async function freezeIntroductionRun(
   // ─── Render group emails + create deliveries ───
   const cityName = grouped[0]?.group.cityName ?? "your city";
 
+  // Meetup time comes from the city settings (default 10:00).
+  let cityCode: string | null = null;
+  try {
+    cityCode = (JSON.parse(run.cityCodesJson ?? "[]") as string[])[0] ?? null;
+  } catch {
+    cityCode = null;
+  }
+  let meetupTime = "10:00";
+  if (cityCode) {
+    const cityRows = await db
+      .select()
+      .from(cityIntroductionSettings)
+      .where(eq(cityIntroductionSettings.cityCode, cityCode))
+      .limit(1);
+    if (cityRows[0]?.meetupTime) meetupTime = cityRows[0].meetupTime;
+  }
+
   let deliveryCount = 0;
   let groupIndex = 0;
 
@@ -237,6 +255,7 @@ export async function freezeIntroductionRun(
       bodyHtml: template.bodyHtml,
       cityName: cityName ?? "your city",
       introductionDate: cycleDate ?? "",
+      meetupTime,
       members: members.map((m) => ({
         key: m.snapshot?.key ?? m.emailSnapshot,
         firstName: m.snapshot?.firstName ?? null,
@@ -247,6 +266,9 @@ export async function freezeIntroductionRun(
         businessStage: m.snapshot?.businessStage ?? null,
         helpWanted: m.snapshot?.helpWanted ?? [],
         expertise: m.snapshot?.expertise ?? [],
+        phone: m.snapshot?.phone ?? null,
+        socialMedia: m.snapshot?.socialMedia ?? null,
+        website: m.snapshot?.website ?? null,
       })),
       groupScoreBreakdown: scoreBreakdown,
     });

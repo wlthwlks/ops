@@ -45,6 +45,7 @@ interface CityRow {
   memberCooldownDays: number | null;
   autoApprove: boolean;
   autoApproveDeliveryMode: string;
+  meetupTime: string;
 }
 
 const COMPONENT_LABELS: Record<string, string> = {
@@ -224,6 +225,7 @@ export default function IntroductionsSettingsPage() {
           allowUnknownPostcode: cityEdit.allowUnknownPostcode,
           autoApprove: cityEdit.autoApprove,
           autoApproveDeliveryMode: cityEdit.autoApproveDeliveryMode,
+          meetupTime: cityEdit.meetupTime,
         }),
       });
       const body = await res.json();
@@ -543,6 +545,15 @@ export default function IntroductionsSettingsPage() {
                 placeholder='{"dayOfMonth":1,"localTime":"09:00","timezone":"Europe/London"}'
                 value={cityEdit.scheduleJson ?? ""}
                 onChange={(event) => setCityEdit({ ...cityEdit, scheduleJson: event.target.value || null })}
+              />
+            </Flex>
+            <Flex justify="space-between" align="center">
+              <Text>{"Meetup time ({{meetup_suggestion}})"}</Text>
+              <Input
+                style={{ width: 120 }}
+                placeholder="10:00"
+                value={cityEdit.meetupTime ?? "10:00"}
+                onChange={(event) => setCityEdit({ ...cityEdit, meetupTime: event.target.value })}
               />
             </Flex>
             <Flex justify="space-between" align="center">

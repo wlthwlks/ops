@@ -2,14 +2,19 @@ import { describe, it, expect } from "vitest";
 import {
   COMPONENT_PHRASES,
   esc,
+  formatClock12,
   formatIntroductionDate,
+  formatMeetupSuggestion,
+  groupSizeWord,
   joinNames,
   prettifyCode,
   renderCoordinationText,
   renderIntroductionEmail,
   renderMemberCard,
   renderWhyMatched,
+  secondWednesdayOfMonth,
   unknownPlaceholders,
+  websiteHref,
   type MemberCardData,
 } from "@/lib/introduction/render-email";
 import {
@@ -29,6 +34,9 @@ const members: MemberCardData[] = [
     businessStage: "EARLY_TRACTION",
     helpWanted: ["FUNDRAISING"],
     expertise: ["GROWTH_MARKETING"],
+    phone: "+44 7700 900123",
+    socialMedia: "@sarahsmith",
+    website: "www.sarahsmith.example",
   },
   {
     key: "at:rec_b",
@@ -40,6 +48,9 @@ const members: MemberCardData[] = [
     businessStage: "SCALING",
     helpWanted: [],
     expertise: ["FUNDRAISING"],
+    phone: null,
+    socialMedia: null,
+    website: null,
   },
 ];
 
@@ -84,6 +95,32 @@ describe("renderMemberCard", () => {
     expect(html).toContain("Can help with:");
   });
 
+  it("renders phone, social media and website links", () => {
+    const html = renderMemberCard(members[0]);
+    expect(html).toContain("Phone number:");
+    expect(html).toContain("+44 7700 900123");
+    expect(html).toContain("Social media:");
+    expect(html).toContain("@sarahsmith");
+    expect(html).toContain("Website:");
+    expect(html).toContain('href="https://www.sarahsmith.example"');
+    expect(html).toContain("www.sarahsmith.example");
+  });
+
+  it("normalizes and escapes website values safely", () => {
+    expect(websiteHref("example.com")).toBe("https://example.com");
+    expect(websiteHref("https://example.com")).toBe("https://example.com");
+    expect(websiteHref("javascript:alert(1)")).toBe("https://javascript:alert(1)");
+    expect(websiteHref(null)).toBeNull();
+    expect(websiteHref("  ")).toBeNull();
+
+    const html = renderMemberCard({
+      ...members[1],
+      website: '"><script>alert(1)</script>',
+    });
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
   it("escapes member-provided content", () => {
     const html = renderMemberCard({
       key: "at:rec_x",
@@ -95,6 +132,9 @@ describe("renderMemberCard", () => {
       businessStage: null,
       helpWanted: [],
       expertise: [],
+      phone: null,
+      socialMedia: null,
+      website: null,
     });
     expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
     expect(html).not.toContain("<img");
@@ -146,6 +186,31 @@ describe("renderIntroductionEmail", () => {
     expect(rendered.html).not.toContain("{{first_name}}");
   });
 
+  it("renders meetup suggestion and group size word placeholders", () => {
+    const rendered = renderIntroductionEmail({
+      subject: "Meetup",
+      bodyHtml: "<p>{{meetup_suggestion}} for {{group_size_word}} founders</p>{{members}}",
+      cityName: "Gold Coast",
+      introductionDate: "2026-01-16",
+      meetupTime: "10:00",
+      members,
+    });
+    expect(rendered.html).toContain("January 14th at 10 am");
+    expect(rendered.html).toContain("for two founders");
+  });
+
+  it("uses the provided meetup time for the suggestion", () => {
+    const rendered = renderIntroductionEmail({
+      subject: "Meetup",
+      bodyHtml: "<p>{{meetup_suggestion}}</p>{{members}}",
+      cityName: "London",
+      introductionDate: "2026-01-16",
+      meetupTime: "14:30",
+      members,
+    });
+    expect(rendered.html).toContain("January 14th at 2:30 pm");
+  });
+
   it("leaves unknown placeholders untouched", () => {
     const rendered = renderIntroductionEmail({
       subject: "Hello {{first_name}}",
@@ -159,10 +224,40 @@ describe("renderIntroductionEmail", () => {
 
   it("detects unknown placeholders", () => {
     expect(unknownPlaceholders("{{first_name}}", "{{members}} {{mystery}}")).toEqual(["{{mystery}}"]);
+    expect(unknownPlaceholders("{{meetup_suggestion}}", "{{group_size_word}}")).toEqual([]);
   });
 
   it("default template passes full validation", () => {
     expect(validateTemplateContent(DEFAULT_TEMPLATE_SUBJECT, DEFAULT_TEMPLATE_BODY).ok).toBe(true);
+  });
+});
+
+describe("meetup helpers", () => {
+  it("computes the second Wednesday of a month", () => {
+    expect(secondWednesdayOfMonth(2026, 1)).toBe(14);
+    expect(secondWednesdayOfMonth(2026, 8)).toBe(12);
+  });
+
+  it("formats 12-hour clocks", () => {
+    expect(formatClock12("10:00")).toBe("10 am");
+    expect(formatClock12("14:30")).toBe("2:30 pm");
+    expect(formatClock12("00:15")).toBe("12:15 am");
+    expect(formatClock12("12:00")).toBe("12 pm");
+    expect(formatClock12("00:00")).toBe("12 am");
+    expect(formatClock12("garbage")).toBe("garbage");
+  });
+
+  it("formats meetup suggestions", () => {
+    expect(formatMeetupSuggestion("2026-01-16", "10:00")).toBe("January 14th at 10 am");
+    expect(formatMeetupSuggestion("2026-08-16", "14:30")).toBe("August 12th at 2:30 pm");
+  });
+
+  it("spells group sizes", () => {
+    expect(groupSizeWord(2)).toBe("two");
+    expect(groupSizeWord(3)).toBe("three");
+    expect(groupSizeWord(6)).toBe("six");
+    expect(groupSizeWord(1)).toBe("one");
+    expect(groupSizeWord(13)).toBe("13");
   });
 });
 

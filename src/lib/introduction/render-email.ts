@@ -46,6 +46,61 @@ export function prettifyCode(code: string): string {
   return words.map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w)).join(" ");
 }
 
+export const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function ordinal(day: number): string {
+  if (day >= 11 && day <= 13) return `${day}th`;
+  const last = day % 10;
+  if (last === 1) return `${day}st`;
+  if (last === 2) return `${day}nd`;
+  if (last === 3) return `${day}rd`;
+  return `${day}th`;
+}
+
+/** Day-of-month of the second Wednesday in a month (UTC calendar math). */
+export function secondWednesdayOfMonth(year: number, month: number): number {
+  const firstDay = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+  const firstWednesday = 1 + ((3 - firstDay + 7) % 7);
+  return firstWednesday + 7;
+}
+
+/** "14:30" → "2:30 pm", "10:00" → "10 am", "00:15" → "12:15 am", "12:00" → "12 pm". */
+export function formatClock12(time: string): string {
+  const [hourRaw, minuteRaw] = time.split(":");
+  const hour = Number.parseInt(hourRaw ?? "", 10);
+  const minute = Number.parseInt(minuteRaw ?? "", 10);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return time;
+  const suffix = hour >= 12 ? "pm" : "am";
+  let displayHour = hour % 12;
+  if (displayHour === 0) displayHour = 12;
+  const displayMinute = minute === 0 ? "" : `:${String(minute).padStart(2, "0")}`;
+  return `${displayHour}${displayMinute} ${suffix}`;
+}
+
+/** "2026-01" + "10:00" → "January 14th at 10 am" (second Wednesday). */
+export function formatMeetupSuggestion(dateStr: string, time: string): string {
+  const date = new Date(`${dateStr}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) {
+    return `${dateStr} at ${formatClock12(time)}`;
+  }
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth() + 1;
+  const day = secondWednesdayOfMonth(year, month);
+  return `${MONTH_NAMES[month - 1]} ${ordinal(day)} at ${formatClock12(time)}`;
+}
+
+const GROUP_SIZE_WORDS = [
+  "", "one", "two", "three", "four", "five", "six",
+  "seven", "eight", "nine", "ten", "eleven", "twelve",
+];
+
+export function groupSizeWord(count: number): string {
+  return GROUP_SIZE_WORDS[count] ?? String(count);
+}
+
 export interface MemberCardData {
   key: string;
   firstName: string | null;
@@ -56,6 +111,17 @@ export interface MemberCardData {
   businessStage: string | null;
   helpWanted: string[];
   expertise: string[];
+  phone: string | null;
+  socialMedia: string | null;
+  website: string | null;
+}
+
+/** Normalize a website value into a safe https link target. */
+export function websiteHref(value: string | null | undefined): string | null {
+  const raw = (value ?? "").trim();
+  if (!raw) return null;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `https://${raw}`;
 }
 
 export function renderMemberCard(member: MemberCardData): string {
@@ -72,6 +138,23 @@ export function renderMemberCard(member: MemberCardData): string {
   if (member.businessStage) meta.push(esc(prettifyCode(member.businessStage)));
   if (meta.length > 0) {
     lines.push(`<p style="margin: 0 0 4px 0; color: #555;">${meta.join(" · ")}</p>`);
+  }
+  if (member.phone) {
+    lines.push(
+      `<p style="margin: 0 0 4px 0;"><strong>Phone number:</strong> ${esc(member.phone)}</p>`
+    );
+  }
+  if (member.socialMedia) {
+    lines.push(
+      `<p style="margin: 0 0 4px 0;"><strong>Social media:</strong> ${esc(member.socialMedia)}</p>`
+    );
+  }
+  const href = websiteHref(member.website);
+  if (member.website && href) {
+    lines.push(
+      `<p style="margin: 0 0 4px 0;"><strong>Website:</strong> ` +
+        `<a href="${esc(href)}" rel="noopener noreferrer">${esc(member.website)}</a></p>`
+    );
   }
   if (member.helpWanted.length > 0) {
     lines.push(
@@ -134,6 +217,8 @@ export interface RenderIntroductionEmailInput {
   introductionDate: string;
   members: MemberCardData[];
   groupScoreBreakdown?: Partial<Record<ScoreComponent, number>> | null;
+  /** "HH:mm" local time for {{meetup_suggestion}}; defaults to 10:00. */
+  meetupTime?: string;
 }
 
 export interface RenderedEmail {
@@ -157,6 +242,10 @@ export function renderIntroductionEmail(input: RenderIntroductionEmailInput): Re
     "{{members}}": membersBlock,
     "{{why_you_matched}}": whyBlock,
     "{{coordination_text}}": esc(coordination),
+    "{{meetup_suggestion}}": esc(
+      formatMeetupSuggestion(input.introductionDate, input.meetupTime ?? "10:00")
+    ),
+    "{{group_size_word}}": esc(groupSizeWord(input.members.length)),
   };
 
   const replace = (template: string) => {
@@ -194,6 +283,9 @@ export const SAMPLE_MEMBER_CARDS: MemberCardData[] = [
     businessStage: "EARLY_TRACTION",
     helpWanted: ["FUNDRAISING"],
     expertise: ["GROWTH_MARKETING"],
+    phone: "+44 7700 900123",
+    socialMedia: "@sarahsmith",
+    website: "www.sarahsmith.example",
   },
   {
     key: "sample-2",
@@ -205,6 +297,9 @@ export const SAMPLE_MEMBER_CARDS: MemberCardData[] = [
     businessStage: "SCALING",
     helpWanted: ["HIRING"],
     expertise: ["FUNDRAISING", "FINANCE"],
+    phone: "+44 7700 900456",
+    socialMedia: "@priyapatel",
+    website: "www.priyapatel.example",
   },
   {
     key: "sample-3",
@@ -216,6 +311,9 @@ export const SAMPLE_MEMBER_CARDS: MemberCardData[] = [
     businessStage: "VALIDATING",
     helpWanted: ["SALES"],
     expertise: ["PRODUCT"],
+    phone: "+44 7700 900789",
+    socialMedia: "@jamesokafor",
+    website: "www.jamesokafor.example",
   },
 ];
 
@@ -226,6 +324,7 @@ export function renderSampleEmail(subject: string, bodyHtml: string): RenderedEm
     cityName: "London",
     introductionDate: new Date().toISOString().slice(0, 10),
     members: SAMPLE_MEMBER_CARDS,
+    meetupTime: "10:00",
     groupScoreBreakdown: {
       proximity: 0.94,
       ai_correlation: 0.81,

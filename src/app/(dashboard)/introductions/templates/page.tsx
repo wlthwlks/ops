@@ -39,6 +39,8 @@ const PLACEHOLDER_HINTS = [
   "{{members}}",
   "{{why_you_matched}}",
   "{{coordination_text}}",
+  "{{meetup_suggestion}}",
+  "{{group_size_word}}",
 ];
 
 export default function IntroductionsTemplatesPage() {

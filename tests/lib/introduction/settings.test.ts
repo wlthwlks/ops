@@ -81,6 +81,18 @@ describe("upsertCitySettings", () => {
       upsertCitySettings(db, "rec_x", { targetGroupSize: 7, maxGroupSize: 6 })
     ).rejects.toThrow();
   });
+
+  it("stores and validates the meetup time", async () => {
+    const created = await upsertCitySettings(db, "rec_mt", {
+      cityName: "Meetup",
+      meetupTime: "14:30",
+    });
+    expect(created.meetupTime).toBe("14:30");
+
+    await expect(
+      upsertCitySettings(db, "rec_mt", { meetupTime: "25:99" })
+    ).rejects.toThrow();
+  });
 });
 
 describe("resolveEffectiveCitySettings", () => {
@@ -92,7 +104,17 @@ describe("resolveEffectiveCitySettings", () => {
     expect(effective.constraints.requireSameCity).toBe(true);
     expect(effective.constraints.repeatPairDays).toBe(60);
     expect(effective.constraints.allowUnknownPostcode).toBe(true);
+    expect(effective.meetupTime).toBe("10:00");
     expect(effective.profileVersionId).toBeNull();
+  });
+
+  it("resolves the city meetup time override", async () => {
+    await upsertCitySettings(db, "rec_late", {
+      cityName: "Late",
+      meetupTime: "15:45",
+    });
+    const effective = await resolveEffectiveCitySettings(db, "rec_late");
+    expect(effective.meetupTime).toBe("15:45");
   });
 
   it("merges profile defaults with city overrides", async () => {

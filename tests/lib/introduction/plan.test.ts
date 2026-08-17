@@ -79,6 +79,9 @@ function memberRecord(id: string, overrides: Record<string, unknown> = {}): Airt
       "Help wanted context": `Help context ${id}`,
       Expertise: ["GROWTH_MARKETING"],
       "Expertise context": `Exp context ${id}`,
+      "phone number": "+61 400 000 000",
+      "social media": "@member",
+      "Business website": "www.example.com",
       ...overrides,
     },
   };
@@ -187,6 +190,9 @@ describe("buildPlanMember", () => {
     expect(member.industry).toBe("TECH_SAAS");
     expect(member.businessStage).toBe("EARLY_TRACTION");
     expect(member.connectionTypes).toEqual(["SIMILAR_STAGE_PEER"]);
+    expect(member.phone).toBe("+61 400 000 000");
+    expect(member.socialMedia).toBe("@member");
+    expect(member.website).toBe("www.example.com");
     expect(member.profileVector).toEqual([1, 0, 0]);
     expect(member.helpVector).toEqual([0, 1, 0]);
     expect(member.goalText).toBe("Goal rec_x");
@@ -304,6 +310,10 @@ describe("runIntroductionPreview", () => {
     expect(members).toHaveLength(4);
     for (const member of members) {
       expect(member.memberSnapshotJson).not.toBeNull();
+      const snapshot = JSON.parse(member.memberSnapshotJson!) as Record<string, unknown>;
+      expect(snapshot.phone).toBe("+61 400 000 000");
+      expect(snapshot.socialMedia).toBe("@member");
+      expect(snapshot.website).toBe("www.example.com");
     }
 
     const pairScores = await db.select().from(introductionPairScores);

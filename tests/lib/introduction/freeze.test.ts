@@ -14,8 +14,8 @@ import {
   matchEvents,
   matchEventMatches,
 } from "@/db/schema";
-import { setGlobalIntroductionConfig } from "@/lib/introduction/settings";
-import { ensureDefaultTemplate } from "@/lib/introduction/templates";
+import { setGlobalIntroductionConfig, upsertCitySettings } from "@/lib/introduction/settings";
+import { ensureDefaultTemplate, createEmailTemplate, publishEmailTemplate } from "@/lib/introduction/templates";
 import { eq } from "drizzle-orm";
 import type { AirtableClient, AirtableRecord } from "@/lib/integrations/airtable";
 import type { PineconeClient, VectorRecord } from "@/lib/integrations/pinecone";
@@ -73,6 +73,9 @@ function memberRecord(id: string): AirtableRecord {
       "Help wanted context": "Context",
       Expertise: ["GROWTH_MARKETING"],
       "Expertise context": "Context",
+      "phone number": "+61 400 000 000",
+      "social media": "@member",
+      "Business website": "www.example.com",
     },
   };
 }
@@ -172,6 +175,11 @@ describe("freezeIntroductionRun", () => {
       expect(group.emailSubjectSnapshot).toContain("London");
       expect(group.emailHtmlSnapshot).toContain("reply-all");
       expect(group.emailHtmlSnapshot).not.toContain("{{");
+      // Member cards carry phone/social/website.
+      expect(group.emailHtmlSnapshot).toContain("Phone number:");
+      expect(group.emailHtmlSnapshot).toContain("+61 400 000 000");
+      expect(group.emailHtmlSnapshot).toContain("@member");
+      expect(group.emailHtmlSnapshot).toContain("https://www.example.com");
     }
 
     const deliveries = await db.select().from(introductionDeliveries).where(eq(introductionDeliveries.runId, runId));
@@ -183,6 +191,42 @@ describe("freezeIntroductionRun", () => {
     }
     const keys = new Set(deliveries.map((d) => d.deliveryKey));
     expect(keys.size).toBe(4);
+  });
+
+  async function seedMeetupTemplate() {
+    await ensureDefaultTemplate(db);
+    const { template } = await createEmailTemplate(db, {
+      name: "Meetup template",
+      subject: "Meet {{city}}",
+      bodyHtml: "<p>{{members}}</p><p>Second Wednesday: {{meetup_suggestion}}</p>",
+    });
+    await publishEmailTemplate(db, template.id);
+    await setGlobalIntroductionConfig(db, { defaultTemplateId: template.id });
+  }
+
+  it("defaults the meetup time to 10 am", async () => {
+    await seedMeetupTemplate();
+    const runId = await makePlan();
+    await freezeIntroductionRun(db, { runId, deliveryMode: "simulation" });
+
+    const groups = await db
+      .select()
+      .from(introductionGroups)
+      .where(eq(introductionGroups.runId, runId));
+    expect(groups[0].emailHtmlSnapshot).toContain("August 12th at 10 am");
+  });
+
+  it("uses the city meetup time in the rendered snapshot", async () => {
+    await seedMeetupTemplate();
+    await upsertCitySettings(db, "rec_city_london", { cityName: "London", meetupTime: "14:30" });
+    const runId = await makePlan();
+    await freezeIntroductionRun(db, { runId, deliveryMode: "simulation" });
+
+    const groups = await db
+      .select()
+      .from(introductionGroups)
+      .where(eq(introductionGroups.runId, runId));
+    expect(groups[0].emailHtmlSnapshot).toContain("August 12th at 2:30 pm");
   });
 
   it("rejects re-freezing an approved run", async () => {

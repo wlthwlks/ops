@@ -1,0 +1,1 @@
+ALTER TABLE "city_introduction_settings" ADD COLUMN "meetup_time" text DEFAULT '10:00' NOT NULL;

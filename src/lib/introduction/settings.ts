@@ -62,6 +62,10 @@ export const citySettingsInputSchema = z
     autoApproveDeliveryMode: z
       .enum(["simulation", "provider_test", "canary", "production"])
       .optional(),
+    meetupTime: z
+      .string()
+      .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "meetupTime must be HH:mm")
+      .optional(),
   })
   .superRefine((input, ctx) => {
     if (input.scheduleJson !== undefined && input.scheduleJson !== null) {
@@ -160,6 +164,7 @@ export async function upsertCitySettings(
     memberCooldownDays: parsed.memberCooldownDays,
     autoApprove: parsed.autoApprove,
     autoApproveDeliveryMode: parsed.autoApproveDeliveryMode,
+    meetupTime: parsed.meetupTime,
     updatedAt: new Date(),
   };
   const rows = await db
@@ -193,6 +198,8 @@ export interface EffectiveCitySettings {
   schedule: CitySchedule | null;
   nextRunAt: Date | null;
   autoApprove: boolean;
+  /** "HH:mm" local meetup time for the {{meetup_suggestion}} placeholder. */
+  meetupTime: string;
   profileId: string | null;
   profileVersionId: string | null;
   profileVersionNumber: number | null;
@@ -264,6 +271,7 @@ export async function resolveEffectiveCitySettings(
     schedule,
     nextRunAt: city?.nextRunAt ?? null,
     autoApprove: city?.autoApprove ?? false,
+    meetupTime: city?.meetupTime ?? "10:00",
     profileId: profile.profile?.id ?? null,
     profileVersionId: profile.version?.id ?? null,
     profileVersionNumber: profile.version?.version ?? null,

@@ -86,6 +86,15 @@ Legacy systems run untouched until the cutover steps below.
   ungeocodable postcode stay eligible (proximity scores 0 for them, the
   max-distance check is skipped). Set `allowUnknownPostcode=false` on a
   profile version or per city to enforce strict postcodes.
+- Meetup time: per-city `meetup_time` (HH:mm) feeds the
+  `{{meetup_suggestion}}` email placeholder (second Wednesday of the cycle
+  month, e.g. "January 14th at 10 am"); defaults to `10:00`.
+- Email placeholders: `{{first_name}}`, `{{city}}`, `{{introduction_date}}`,
+  `{{members}}`, `{{why_you_matched}}`, `{{coordination_text}}` (optional),
+  `{{meetup_suggestion}}`, `{{group_size_word}}`. Publishing requires
+  `{{members}}` only.
+- Member email cards include name, headline, city/industry/stage,
+  phone number, social media, website (safe links) and help/expertise.
 
 ## 3. DB migrations
 

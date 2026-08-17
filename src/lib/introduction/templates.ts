@@ -35,12 +35,11 @@ export const KNOWN_PLACEHOLDERS = [
   "{{members}}",
   "{{why_you_matched}}",
   "{{coordination_text}}",
+  "{{meetup_suggestion}}",
+  "{{group_size_word}}",
 ] as const;
 
-export const REQUIRED_BODY_PLACEHOLDERS: readonly string[] = [
-  "{{members}}",
-  "{{coordination_text}}",
-];
+export const REQUIRED_BODY_PLACEHOLDERS: readonly string[] = ["{{members}}"];
 
 const PLACEHOLDER_PATTERN = /\{\{\s*[a-z_]+\s*\}\}/gi;
 
