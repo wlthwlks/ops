@@ -18,7 +18,7 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { PlusOutlined, ReloadOutlined } from "@ant-design/icons";
+import { PlusOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 
 const { Title, Text } = Typography;
 
@@ -104,6 +104,27 @@ export default function IntroductionsSettingsPage() {
 
   const [cityEdit, setCityEdit] = useState<CityRow | null>(null);
   const [configSaving, setConfigSaving] = useState(false);
+  const [syncingCities, setSyncingCities] = useState(false);
+
+  const syncCities = async () => {
+    setSyncingCities(true);
+    try {
+      const res = await fetch("/api/introductions/cities/sync", { method: "POST" });
+      const body = await res.json();
+      if (!res.ok) {
+        message.error(body.message ?? "City sync failed");
+        return;
+      }
+      message.success(
+        `City sync: ${body.created} added, ${body.nameUpdated} renamed, ${body.unchanged} unchanged, ${body.stale} stale`
+      );
+      await load();
+    } catch {
+      message.error("City sync request failed");
+    } finally {
+      setSyncingCities(false);
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -436,7 +457,20 @@ export default function IntroductionsSettingsPage() {
         </Card>
       )}
 
-      <Card size="small" title="City settings">
+      <Card
+        size="small"
+        title="City settings"
+        extra={
+          <Button
+            size="small"
+            icon={<SyncOutlined />}
+            loading={syncingCities}
+            onClick={() => void syncCities()}
+          >
+            Sync cities from Airtable
+          </Button>
+        }
+      >
         <Table<CityRow>
           rowKey="cityCode"
           loading={loading}

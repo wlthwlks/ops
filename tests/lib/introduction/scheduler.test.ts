@@ -95,6 +95,7 @@ beforeEach(async () => {
   airtableGetRecord.mockResolvedValue({ id: "rec_city_london", fields: { City: "London" } });
   airtableList.mockImplementation(async (table: string) => {
     if (table === "MATCHING OPTIONS") return [];
+    if (table === "ALL CITIES") return [];
     return [memberRecord("rec_a"), memberRecord("rec_b"), memberRecord("rec_c"), memberRecord("rec_d")];
   });
   pineconeFetch.mockImplementation(async (ids: string[]) => {

@@ -5,6 +5,7 @@ import {
   introductionGroups,
   introductionGroupMembers,
   introductionPairScores,
+  cityIntroductionSettings,
 } from "@/db/schema";
 import type { AirtableClient, AirtableRecord } from "@/lib/integrations/airtable";
 import type { PineconeClient, VectorRecord } from "@/lib/integrations/pinecone";
@@ -401,6 +402,18 @@ export async function runIntroductionPreview(
   const cityName = await resolveCityName(deps, cityCode, effective);
   if (!cityName) {
     validationFailures.push(`City ${cityCode} has no configured name`);
+  }
+
+  // Keep the city settings table in sync: previews auto-create the row for
+  // a city that has never been synced (config overrides are untouched).
+  if (cityName) {
+    await db
+      .insert(cityIntroductionSettings)
+      .values({ id: crypto.randomUUID(), cityCode, cityName })
+      .onConflictDoUpdate({
+        target: cityIntroductionSettings.cityCode,
+        set: { cityName, updatedAt: new Date() },
+      });
   }
 
   const now = deps.now ?? new Date();

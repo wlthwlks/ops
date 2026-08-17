@@ -7,6 +7,7 @@ import {
   type CityIntroductionSettings,
 } from "@/db/schema";
 import { cityScheduleSchema, type CitySchedule } from "./settings";
+import { syncCitiesFromAirtable } from "./city-sync";
 import { runIntroductionPreview, type IntroductionPlanDeps } from "./plan";
 import { freezeIntroductionRun, type DeliveryMode } from "./freeze";
 
@@ -108,6 +109,16 @@ export async function runCityIntroductionScheduler(
 ): Promise<SchedulerRunResult> {
   const now = deps.now ?? new Date();
   const live = deps.live ?? false;
+
+  // Light city sync before checking due cities (best-effort).
+  try {
+    await syncCitiesFromAirtable(deps.db, deps.airtable, deps.log);
+  } catch (err) {
+    deps.log(
+      `City sync failed before scheduler tick: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
   const due = await listDueCities(deps.db, now);
   const results: SchedulerCityResult[] = [];
 

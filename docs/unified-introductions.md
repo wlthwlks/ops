@@ -99,6 +99,13 @@ Legacy systems run untouched until the cutover steps below.
   `{{members}}` only.
 - Member email cards include name, headline, city/industry/stage,
   phone number, social media, website (safe links) and help/expertise.
+- City list synchronization: the city list comes from Airtable ALL CITIES
+  (city code = Airtable record id — no "City Code" field needed). The
+  cities endpoints sync on read (5-minute TTL), the scheduler syncs hourly,
+  previews auto-create rows, and Matching Settings has a manual
+  "Sync cities from Airtable" button. Sync only adds cities and refreshes
+  names — admin configuration is never overwritten, and stale rows are
+  reported but kept.
 
 ## 3. DB migrations
 

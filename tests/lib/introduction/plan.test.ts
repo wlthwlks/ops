@@ -16,6 +16,7 @@ import {
   introductionGroups,
   introductionGroupMembers,
   introductionPairScores,
+  cityIntroductionSettings,
 } from "@/db/schema";
 import * as schema from "@/db/schema";
 import type { AirtableClient, AirtableRecord } from "@/lib/integrations/airtable";
@@ -319,6 +320,12 @@ describe("runIntroductionPreview", () => {
 
     const pairScores = await db.select().from(introductionPairScores);
     expect(pairScores.length).toBeGreaterThan(0);
+
+    // Preview auto-creates the city settings row (sync-by-use).
+    const cityRows = await db.select().from(cityIntroductionSettings);
+    expect(
+      cityRows.some((c) => c.cityCode === "rec_city_london" && c.cityName === "London")
+    ).toBe(true);
   });
 
   it("is deterministic for the same input and cycle date", async () => {
