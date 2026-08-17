@@ -38,8 +38,10 @@ export async function syncCitiesFromAirtable(
   airtable: AirtableClient,
   log: (message: string) => void = () => {}
 ): Promise<CitySyncResult> {
+  // ALL CITIES has no "Name" field — requesting unknown fields makes
+  // Airtable reject the entire request with 422 UNKNOWN_FIELD_NAME.
   const records = await airtable.listRecords(CITIES_TABLE, {
-    fields: ["City", "Name", "name"],
+    fields: ["City"],
   });
 
   const incoming = new Map<string, string | null>();

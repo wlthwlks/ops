@@ -57,6 +57,9 @@ describe("syncCitiesFromAirtable", () => {
     expect(result.total).toBe(2);
     expect(result.stale).toBe(0);
 
+    // Only the canonical "City" field is requested (ALL CITIES has no "Name").
+    expect(airtableList).toHaveBeenCalledWith("ALL CITIES", { fields: ["City"] });
+
     const rows = await db.select().from(cityIntroductionSettings);
     expect(rows).toHaveLength(2);
     const london = rows.find((r) => r.cityCode === "rec_c1")!;
