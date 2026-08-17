@@ -22,7 +22,7 @@
     },
     {
       "path": "/api/cron/future-access-parity",
-      "schedule": "0 6 * * *"
+      "schedule": "0 * * * *"
     }
   ]
 }
