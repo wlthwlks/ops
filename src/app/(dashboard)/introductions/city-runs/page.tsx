@@ -76,13 +76,9 @@ interface Report {
   canaryRedirectCount: number;
   validationFailures: string[];
   queue: { batchSize: number; batches: number; workerTicks: number };
+  minEligibleMembers: number;
+  blockedReason: string | null;
 }
-
-const SAFETY_COLORS: Record<string, string> = {
-  none: "default",
-  internal: "gold",
-  production: "red",
-};
 
 const COMPONENT_LABELS: Record<string, string> = {
   proximity: "Proximity",
@@ -303,7 +299,15 @@ export default function CityRunsPage() {
         )}
       </Flex>
 
-      {report && (
+      {report && report.blockedReason && (
+        <Alert
+          type="warning"
+          showIcon
+          message={`City blocked: ${report.blockedReason} — ${report.eligibleMembers} eligible member(s), minimum ${report.minEligibleMembers} required`}
+        />
+      )}
+
+      {report && !report.blockedReason && (
         <Alert
           type={report.safety.level === "production" ? "error" : report.safety.level === "internal" ? "warning" : "info"}
           showIcon

@@ -98,6 +98,8 @@ export interface SimulationReport {
   canaryRedirectCount: number;
   queue: QueueSizeEstimate;
   validationFailures: string[];
+  minEligibleMembers: number;
+  blockedReason: string | null;
 }
 
 export async function buildSimulationReport(
@@ -129,12 +131,18 @@ export async function buildSimulationReport(
     .where(eq(introductionDeliveries.runId, runId));
 
   let snapshotMembers: Array<{ key: string; email: string }> = [];
+  let snapshotBlockedReason: string | null = null;
+  let snapshotMinEligibleMembers = 0;
   if (run.snapshotJson) {
     try {
       const snapshot = JSON.parse(run.snapshotJson) as {
         members?: Array<{ key: string; email: string }>;
+        blockedReason?: string | null;
+        minEligibleMembers?: number | null;
       };
       snapshotMembers = snapshot.members ?? [];
+      snapshotBlockedReason = snapshot.blockedReason ?? null;
+      snapshotMinEligibleMembers = snapshot.minEligibleMembers ?? 0;
     } catch {
       snapshotMembers = [];
     }
@@ -187,6 +195,8 @@ export async function buildSimulationReport(
     canaryRedirectCount,
     queue: estimateQueueSizes(groups.length, deliveries.length),
     validationFailures,
+    minEligibleMembers: snapshotMinEligibleMembers,
+    blockedReason: snapshotBlockedReason,
   };
 }
 

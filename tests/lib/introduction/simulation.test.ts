@@ -7,6 +7,7 @@ import {
   listRunDeliveries,
 } from "@/lib/introduction/simulation";
 import {
+  introductionRuns,
   introductionDeliveries,
   matchEvents,
   matchEventMatches,
@@ -197,6 +198,26 @@ describe("buildSimulationReport", () => {
 
   it("returns null for unknown runs", async () => {
     expect(await buildSimulationReport(db, "missing")).toBeNull();
+  });
+
+  it("reports blocked runs with the min-eligible reason", async () => {
+    await db.insert(introductionRuns).values({
+      id: "run-blocked",
+      requestId: "req-blocked",
+      source: "city",
+      mode: "preview",
+      dryRun: true,
+      status: "blocked",
+      snapshotJson: JSON.stringify({
+        blockedReason: "insufficient_eligible_members",
+        minEligibleMembers: 3,
+        members: [],
+      }),
+    });
+    const report = await buildSimulationReport(db, "run-blocked");
+    expect(report!.status).toBe("blocked");
+    expect(report!.blockedReason).toBe("insufficient_eligible_members");
+    expect(report!.minEligibleMembers).toBe(3);
   });
 });
 

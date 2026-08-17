@@ -37,6 +37,7 @@ export const cityIntroductionSettings = pgTable(
     allowUnknownPostcode: boolean("allow_unknown_postcode"),
     repeatPairDays: integer("repeat_pair_days"),
     memberCooldownDays: integer("member_cooldown_days"),
+    minEligibleMembers: integer("min_eligible_members"),
     autoApprove: boolean("auto_approve").notNull().default(false),
     autoApproveDeliveryMode: text("auto_approve_delivery_mode").notNull().default("simulation"),
     // "simulation" | "provider_test" | "canary" | "production"

@@ -71,6 +71,13 @@
       "when": 1786941307722,
       "tag": "0009_meetup_time",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786943597942,
+      "tag": "0010_min_eligible_members",
+      "breakpoints": true
     }
   ]
 }

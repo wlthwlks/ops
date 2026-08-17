@@ -82,6 +82,10 @@ Legacy systems run untouched until the cutover steps below.
 - Repeat-pair window 60 days, member cooldown 14 days (profile default +
   per-city override, env vars as fallback).
 - Same-city required by default.
+- **Minimum eligible members (city gate)**: cities need at least
+  `minEligibleMembers` eligible members to run (profile default 0 = off,
+  per-city override). Below the minimum, the preview creates a blocked run
+  (visible in City Runs) and scheduled cities skip the month.
 - **Unknown postcode is allowed by default**: members with a missing or
   ungeocodable postcode stay eligible (proximity scores 0 for them, the
   max-distance check is skipped). Set `allowUnknownPostcode=false` on a

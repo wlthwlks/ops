@@ -58,6 +58,7 @@ export const citySettingsInputSchema = z
     allowUnknownPostcode: z.boolean().nullable().optional(),
     repeatPairDays: z.number().int().min(1).nullable().optional(),
     memberCooldownDays: z.number().int().min(0).nullable().optional(),
+    minEligibleMembers: z.number().int().min(0).max(1000).nullable().optional(),
     autoApprove: z.boolean().optional(),
     autoApproveDeliveryMode: z
       .enum(["simulation", "provider_test", "canary", "production"])
@@ -162,6 +163,7 @@ export async function upsertCitySettings(
     allowUnknownPostcode: parsed.allowUnknownPostcode,
     repeatPairDays: parsed.repeatPairDays,
     memberCooldownDays: parsed.memberCooldownDays,
+    minEligibleMembers: parsed.minEligibleMembers,
     autoApprove: parsed.autoApprove,
     autoApproveDeliveryMode: parsed.autoApproveDeliveryMode,
     meetupTime: parsed.meetupTime,
@@ -181,6 +183,7 @@ export interface ResolvedConstraints {
   allowUnknownPostcode: boolean;
   repeatPairDays: number;
   memberCooldownDays: number;
+  minEligibleMembers: number;
 }
 
 export interface EffectiveGroupSizes {
@@ -229,6 +232,7 @@ export async function resolveEffectiveCitySettings(
     allowUnknownPostcode: city?.allowUnknownPostcode ?? c.allowUnknownPostcode,
     repeatPairDays: city?.repeatPairDays ?? c.repeatPairDays,
     memberCooldownDays: city?.memberCooldownDays ?? c.memberCooldownDays,
+    minEligibleMembers: city?.minEligibleMembers ?? c.minEligibleMembers,
   };
 
   const groupSizes: EffectiveGroupSizes = {

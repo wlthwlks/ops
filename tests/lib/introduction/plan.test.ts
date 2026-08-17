@@ -22,7 +22,7 @@ import type { AirtableClient, AirtableRecord } from "@/lib/integrations/airtable
 import type { PineconeClient, VectorRecord } from "@/lib/integrations/pinecone";
 import type { MatchingOptionsCatalog } from "@/lib/forms/reference-data/matching-options-catalog";
 import { loadPairHistory } from "@/lib/introduction/pair-history";
-import { normalizeWeights } from "@/lib/introduction/profiles";
+import { normalizeWeights, createMatchingProfile, createMatchingProfileVersion } from "@/lib/introduction/profiles";
 import { eq } from "drizzle-orm";
 
 vi.mock("@/lib/geo/geocode", () => ({
@@ -252,6 +252,7 @@ describe("computePairMatrix", () => {
       allowUnknownPostcode: false,
       repeatPairDays: 60,
       memberCooldownDays: 14,
+      minEligibleMembers: 0,
     };
     const weights = normalizeWeights({ proximity: 100 });
 
@@ -369,6 +370,77 @@ describe("runIntroductionPreview", () => {
     const reasons = Object.fromEntries(result.report.excluded.map((e) => [e.email, e.reason]));
     expect(reasons["unpaid@example.com"]).toBe("no_service_access");
     expect(reasons["excluded@example.com"]).toBe("excluded");
+  });
+
+  it("blocks the city when eligible members are below the configured minimum", async () => {
+    const profile = await createMatchingProfile(db, { name: "Gate", isDefault: true });
+    await createMatchingProfileVersion(db, {
+      profileId: profile.id,
+      constraints: {
+        requireSameCity: true,
+        maxDistanceKm: null,
+        allowUnknownPostcode: true,
+        repeatPairDays: 60,
+        memberCooldownDays: 14,
+        minEligibleMembers: 3,
+        targetGroupSize: 3,
+        minGroupSize: 2,
+        maxGroupSize: 6,
+        strictGroupSize: false,
+      },
+    });
+    airtableList.mockImplementation(async (table: string) => {
+      if (table === "MATCHING OPTIONS") return [];
+      return [memberRecords[0], memberRecords[1]];
+    });
+
+    const result = await runIntroductionPreview(makeDeps(), {
+      cityCode: "rec_city_london",
+      cycleDate: "2026-08-16",
+    });
+    expect(result.success).toBe(true);
+    expect(result.report.blockedReason).toBe("insufficient_eligible_members");
+    expect(result.report.minEligibleMembers).toBe(3);
+    expect(result.report.eligibleMembers).toBe(2);
+    expect(result.report.groups).toBe(0);
+    expect(result.report.renderedEmailCount).toBe(0);
+
+    const runs = await db.select().from(introductionRuns);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].status).toBe("blocked");
+    expect(runs[0].totalGroups).toBe(0);
+
+    const groups = await db.select().from(introductionGroups);
+    expect(groups).toHaveLength(0);
+    const pairs = await db.select().from(introductionPairScores);
+    expect(pairs).toHaveLength(0);
+  });
+
+  it("runs normally when eligible members meet the configured minimum", async () => {
+    const profile = await createMatchingProfile(db, { name: "Gate", isDefault: true });
+    await createMatchingProfileVersion(db, {
+      profileId: profile.id,
+      constraints: {
+        requireSameCity: true,
+        maxDistanceKm: null,
+        allowUnknownPostcode: true,
+        repeatPairDays: 60,
+        memberCooldownDays: 14,
+        minEligibleMembers: 3,
+        targetGroupSize: 3,
+        minGroupSize: 2,
+        maxGroupSize: 6,
+        strictGroupSize: false,
+      },
+    });
+
+    const result = await runIntroductionPreview(makeDeps(), {
+      cityCode: "rec_city_london",
+      cycleDate: "2026-08-16",
+    });
+    expect(result.report.blockedReason).toBeNull();
+    expect(result.report.eligibleMembers).toBe(4);
+    expect(result.report.groups).toBeGreaterThanOrEqual(1);
   });
 
   it("includes members without a postcode under the lenient default", async () => {

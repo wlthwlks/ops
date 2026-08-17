@@ -18,6 +18,7 @@ const constraints: ResolvedConstraints = {
   allowUnknownPostcode: false,
   repeatPairDays: 60,
   memberCooldownDays: 14,
+  minEligibleMembers: 0,
 };
 
 const emptyHistory: PairHistory = {

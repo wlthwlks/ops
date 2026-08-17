@@ -43,6 +43,7 @@ interface CityRow {
   allowUnknownPostcode: boolean | null;
   repeatPairDays: number | null;
   memberCooldownDays: number | null;
+  minEligibleMembers: number | null;
   autoApprove: boolean;
   autoApproveDeliveryMode: string;
   meetupTime: string;
@@ -93,6 +94,7 @@ export default function IntroductionsSettingsPage() {
     allowUnknownPostcode: true,
     repeatPairDays: 60,
     memberCooldownDays: 14,
+    minEligibleMembers: 0,
     targetGroupSize: 3,
     minGroupSize: 2,
     maxGroupSize: 6,
@@ -216,6 +218,7 @@ export default function IntroductionsSettingsPage() {
           scheduleJson: cityEdit.scheduleJson,
           repeatPairDays: cityEdit.repeatPairDays,
           memberCooldownDays: cityEdit.memberCooldownDays,
+          minEligibleMembers: cityEdit.minEligibleMembers,
           targetGroupSize: cityEdit.targetGroupSize,
           minGroupSize: cityEdit.minGroupSize,
           maxGroupSize: cityEdit.maxGroupSize,
@@ -384,6 +387,16 @@ export default function IntroductionsSettingsPage() {
                       min={0}
                       value={constraints.memberCooldownDays}
                       onChange={(v) => setConstraints((c) => ({ ...c, memberCooldownDays: Number(v) || 14 }))}
+                      style={{ width: 110 }}
+                    />
+                  </Flex>
+                  <Flex justify="space-between" align="center">
+                    <Text>Min eligible members (city gate, 0 = off)</Text>
+                    <InputNumber
+                      min={0}
+                      max={1000}
+                      value={constraints.minEligibleMembers}
+                      onChange={(v) => setConstraints((c) => ({ ...c, minEligibleMembers: Number(v) || 0 }))}
                       style={{ width: 110 }}
                     />
                   </Flex>
@@ -591,6 +604,15 @@ export default function IntroductionsSettingsPage() {
                 min={0}
                 value={cityEdit.memberCooldownDays ?? undefined}
                 onChange={(v) => setCityEdit({ ...cityEdit, memberCooldownDays: v == null ? null : Number(v) })}
+              />
+            </Flex>
+            <Flex justify="space-between" align="center">
+              <Text>Min eligible members (override)</Text>
+              <InputNumber
+                min={0}
+                max={1000}
+                value={cityEdit.minEligibleMembers ?? undefined}
+                onChange={(v) => setCityEdit({ ...cityEdit, minEligibleMembers: v == null ? null : Number(v) })}
               />
             </Flex>
             <Flex justify="space-between" align="center">

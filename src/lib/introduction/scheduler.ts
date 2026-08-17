@@ -1,5 +1,5 @@
 import { DateTime } from "luxon";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { AppDb } from "@/db";
 import {
   cityIntroductionSettings,
@@ -79,7 +79,13 @@ export async function cycleIdExists(db: AppDb, cycleId: string): Promise<boolean
 export interface SchedulerCityResult {
   cityCode: string;
   cycleDate: string;
-  outcome: "previewed" | "approved" | "skipped_duplicate" | "skipped_no_auto_approve_freeze" | "failed";
+  outcome:
+    | "previewed"
+    | "approved"
+    | "blocked"
+    | "skipped_duplicate"
+    | "skipped_no_auto_approve_freeze"
+    | "failed";
   runId: string | null;
   error: string | null;
   nextRunAt: string | null;
@@ -148,7 +154,14 @@ export async function runCityIntroductionScheduler(
       let outcome: SchedulerCityResult["outcome"] = "previewed";
       let error: string | null = null;
 
-      if (city.autoApprove) {
+      if (preview.report.blockedReason) {
+        // Below the minimum-eligible-member gate: log clearly, skip the
+        // month (next_run_at advances below), and never freeze.
+        outcome = "blocked";
+        deps.log(
+          `City ${city.cityCode}: blocked — ${preview.report.eligibleMembers} eligible member(s), minimum ${preview.report.minEligibleMembers} required`
+        );
+      } else if (city.autoApprove) {
         if (autoMode === "production" && !live) {
           deps.log(
             `City ${city.cityCode}: auto-approve wants production but mode is read-only — preview only`

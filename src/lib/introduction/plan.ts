@@ -111,6 +111,8 @@ interface PlanSnapshot {
   cycleDate: string;
   profileVersionId: string | null;
   templateVersionId: string | null;
+  blockedReason?: string | null;
+  minEligibleMembers?: number | null;
   members: PlanMemberRegistryEntry[];
 }
 
@@ -323,6 +325,8 @@ export interface IntroductionPreviewResult {
     renderedEmailCount: number;
     recipientCount: number;
     validationFailures: string[];
+    minEligibleMembers: number;
+    blockedReason: string | null;
   };
 }
 
@@ -490,6 +494,74 @@ export async function runIntroductionPreview(
   }
   deps.log(`Eligible: ${eligible.length}, excluded: ${excluded.length}`);
 
+  // ─── Minimum-eligible-members city gate ───
+  const minEligibleMembers = effective.constraints.minEligibleMembers;
+  if (minEligibleMembers > 0 && eligible.length < minEligibleMembers) {
+    const blockedReason = "insufficient_eligible_members";
+    const runId = crypto.randomUUID();
+    const snapshot: PlanSnapshot = {
+      seed,
+      cycleId,
+      cycleDate: cycleDateStr,
+      profileVersionId: effective.profileVersionId,
+      templateVersionId: effective.emailTemplateVersionId,
+      blockedReason,
+      minEligibleMembers,
+      members: eligible.map(toRegistryEntry),
+    };
+    await db.insert(introductionRuns).values({
+      id: runId,
+      requestId: runId,
+      source: "city",
+      cycleDate: cycleDateStr,
+      mode: "preview",
+      dryRun: true,
+      status: "blocked",
+      dueOnly: false,
+      initiatedBy: options.createdBy ?? null,
+      matchingProfileVersionId: effective.profileVersionId,
+      emailTemplateVersionId: effective.emailTemplateVersionId,
+      cityCodesJson: JSON.stringify([cityCode]),
+      deliveryMode,
+      snapshotJson: JSON.stringify(snapshot),
+      createdByClerkUserId: options.createdBy ?? null,
+      totalGroups: 0,
+      summary: `${cityName ?? cityCode}: blocked — ${eligible.length} eligible member(s), minimum ${minEligibleMembers} required`,
+    });
+    deps.log(
+      `City blocked: ${eligible.length} eligible member(s) < required ${minEligibleMembers}`
+    );
+    return {
+      success: true,
+      runId,
+      cityCode,
+      cityName,
+      cycleId,
+      cycleDate: cycleDateStr,
+      seed,
+      profileVersionId: effective.profileVersionId,
+      deliveryMode,
+      report: {
+        eligibleMembers: eligible.length,
+        matchedMembers: 0,
+        groups: 0,
+        unmatched: 0,
+        excluded,
+        repeatedPairsBlocked: 0,
+        invalidEmails,
+        missingPostcode: eligible.filter((m) => !(m.postcode ?? "").trim()).length,
+        allowedPairs: 0,
+        avgGroupScore: null,
+        minGroupScore: null,
+        renderedEmailCount: 0,
+        recipientCount: 0,
+        validationFailures,
+        minEligibleMembers,
+        blockedReason,
+      },
+    };
+  }
+
   // ─── Pair matrix ───
   const matrixResult = computePairMatrix(eligible, {
     cycleDate,
@@ -632,6 +704,8 @@ export async function runIntroductionPreview(
       renderedEmailCount: grouped.groups.length,
       recipientCount: matchedMembers.length,
       validationFailures,
+      minEligibleMembers,
+      blockedReason: null,
     },
   };
 }

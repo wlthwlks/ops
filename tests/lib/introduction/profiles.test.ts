@@ -87,6 +87,8 @@ describe("default constraints", () => {
     expect(c.maxDistanceKm).toBeNull();
     // Lenient default: members without a geocodable postcode stay eligible.
     expect(c.allowUnknownPostcode).toBe(true);
+    // City gate off by default.
+    expect(c.minEligibleMembers).toBe(0);
   });
 
   it("preserves an explicit strict unknown-postcode setting", () => {
@@ -96,12 +98,14 @@ describe("default constraints", () => {
       allowUnknownPostcode: false,
       repeatPairDays: 60,
       memberCooldownDays: 14,
+      minEligibleMembers: 3,
       targetGroupSize: 3,
       minGroupSize: 2,
       maxGroupSize: 6,
       strictGroupSize: false,
     });
     expect(c.allowUnknownPostcode).toBe(false);
+    expect(c.minEligibleMembers).toBe(3);
   });
 
   it("falls back to env cooldown defaults when set", () => {

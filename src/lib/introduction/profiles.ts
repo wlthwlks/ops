@@ -77,6 +77,11 @@ export const matchingConstraintsSchema = z
     allowUnknownPostcode: z.boolean().default(true),
     repeatPairDays: z.number().int().min(1).default(envPairCooldownDays),
     memberCooldownDays: z.number().int().min(0).default(envMemberCooldownDays),
+    /**
+     * City gate: a city only runs when it has at least this many eligible
+     * members. 0 disables the gate. Overridable per city.
+     */
+    minEligibleMembers: z.number().int().min(0).max(1000).default(0),
     targetGroupSize: groupSizeValue.default(3),
     minGroupSize: groupSizeValue.default(2),
     maxGroupSize: groupSizeValue.default(6),

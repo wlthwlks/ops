@@ -73,6 +73,8 @@ const basePreview = {
     renderedEmailCount: 2,
     recipientCount: 4,
     validationFailures: [],
+    minEligibleMembers: 0,
+    blockedReason: null,
   },
 };
 

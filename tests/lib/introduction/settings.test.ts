@@ -104,8 +104,47 @@ describe("resolveEffectiveCitySettings", () => {
     expect(effective.constraints.requireSameCity).toBe(true);
     expect(effective.constraints.repeatPairDays).toBe(60);
     expect(effective.constraints.allowUnknownPostcode).toBe(true);
+    expect(effective.constraints.minEligibleMembers).toBe(0);
     expect(effective.meetupTime).toBe("10:00");
     expect(effective.profileVersionId).toBeNull();
+  });
+
+  it("resolves the min-eligible-members gate from the profile with a city override", async () => {
+    const profile = await createMatchingProfile(db, { name: "Gate", isDefault: true });
+    await createMatchingProfileVersion(db, {
+      profileId: profile.id,
+      constraints: {
+        requireSameCity: true,
+        maxDistanceKm: null,
+        allowUnknownPostcode: true,
+        repeatPairDays: 60,
+        memberCooldownDays: 14,
+        minEligibleMembers: 3,
+        targetGroupSize: 3,
+        minGroupSize: 2,
+        maxGroupSize: 6,
+        strictGroupSize: false,
+      },
+    });
+
+    const inherited = await resolveEffectiveCitySettings(db, "rec_inherit");
+    expect(inherited.constraints.minEligibleMembers).toBe(3);
+
+    await upsertCitySettings(db, "rec_override", {
+      cityName: "Override",
+      minEligibleMembers: 5,
+    });
+    const overridden = await resolveEffectiveCitySettings(db, "rec_override");
+    expect(overridden.constraints.minEligibleMembers).toBe(5);
+  });
+
+  it("rejects invalid min-eligible values", async () => {
+    await expect(
+      upsertCitySettings(db, "rec_x", { minEligibleMembers: -1 })
+    ).rejects.toThrow();
+    await expect(
+      upsertCitySettings(db, "rec_x", { minEligibleMembers: 2000 })
+    ).rejects.toThrow();
   });
 
   it("resolves the city meetup time override", async () => {
@@ -127,6 +166,7 @@ describe("resolveEffectiveCitySettings", () => {
         allowUnknownPostcode: false,
         repeatPairDays: 60,
         memberCooldownDays: 14,
+        minEligibleMembers: 0,
         targetGroupSize: 3,
         minGroupSize: 2,
         maxGroupSize: 6,
@@ -196,6 +236,7 @@ describe("resolveEffectiveCitySettings", () => {
         allowUnknownPostcode: false,
         repeatPairDays: 60,
         memberCooldownDays: 14,
+        minEligibleMembers: 0,
         targetGroupSize: 3,
         minGroupSize: 2,
         maxGroupSize: 6,

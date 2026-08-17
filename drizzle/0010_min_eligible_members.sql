@@ -1,0 +1,1 @@
+ALTER TABLE "city_introduction_settings" ADD COLUMN "min_eligible_members" integer;

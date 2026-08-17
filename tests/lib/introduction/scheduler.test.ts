@@ -9,6 +9,7 @@ import {
   type CitySchedulerDeps,
 } from "@/lib/introduction/scheduler";
 import { upsertCitySettings } from "@/lib/introduction/settings";
+import { createMatchingProfile, createMatchingProfileVersion } from "@/lib/introduction/profiles";
 import {
   cityIntroductionSettings,
   introductionRuns,
@@ -270,6 +271,35 @@ describe("runCityIntroductionScheduler", () => {
 
     const city = await db.select().from(cityIntroductionSettings);
     expect(new Date(city[0].nextRunAt!).toISOString()).toBe("2026-08-15T00:00:00.000Z");
+  });
+
+  it("marks below-minimum cities as blocked and advances the schedule", async () => {
+    const profile = await createMatchingProfile(db, { name: "Gate", isDefault: true });
+    await createMatchingProfileVersion(db, {
+      profileId: profile.id,
+      constraints: {
+        requireSameCity: true,
+        maxDistanceKm: null,
+        allowUnknownPostcode: true,
+        repeatPairDays: 60,
+        memberCooldownDays: 14,
+        minEligibleMembers: 99,
+        targetGroupSize: 3,
+        minGroupSize: 2,
+        maxGroupSize: 6,
+        strictGroupSize: false,
+      },
+    });
+    await seedDueCity();
+
+    const result = await runCityIntroductionScheduler(makeDeps(true));
+    expect(result.results[0].outcome).toBe("blocked");
+    expect(result.results[0].nextRunAt).toBe("2026-09-01T08:00:00.000Z");
+
+    const runs = await db.select().from(introductionRuns);
+    expect(runs[0].status).toBe("blocked");
+    const deliveries = await db.select().from(introductionDeliveries);
+    expect(deliveries).toHaveLength(0);
   });
 });
 
