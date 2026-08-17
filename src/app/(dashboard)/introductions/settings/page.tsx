@@ -89,7 +89,7 @@ export default function IntroductionsSettingsPage() {
   const [constraints, setConstraints] = useState({
     requireSameCity: true,
     maxDistanceKm: null as number | null,
-    allowUnknownPostcode: false,
+    allowUnknownPostcode: true,
     repeatPairDays: 60,
     memberCooldownDays: 14,
     targetGroupSize: 3,
@@ -615,7 +615,7 @@ export default function IntroductionsSettingsPage() {
             <Flex justify="space-between" align="center">
               <Text>Allow unknown postcode</Text>
               <Switch
-                checked={cityEdit.allowUnknownPostcode ?? false}
+                checked={cityEdit.allowUnknownPostcode ?? true}
                 onChange={(v) => setCityEdit({ ...cityEdit, allowUnknownPostcode: v })}
               />
             </Flex>

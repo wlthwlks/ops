@@ -361,6 +361,25 @@ describe("runIntroductionPreview", () => {
     expect(reasons["excluded@example.com"]).toBe("excluded");
   });
 
+  it("includes members without a postcode under the lenient default", async () => {
+    airtableList.mockImplementation(async (table: string) => {
+      if (table === "MATCHING OPTIONS") return [];
+      return [
+        memberRecords[0],
+        memberRecords[1],
+        memberRecord("rec_nopc", { "post code": "" }),
+      ];
+    });
+
+    const result = await runIntroductionPreview(makeDeps(), {
+      cityCode: "rec_city_london",
+      cycleDate: "2026-08-16",
+    });
+    expect(result.report.eligibleMembers).toBe(3);
+    expect(result.report.missingPostcode).toBe(1);
+    expect(result.report.excluded.find((e) => e.email === "nopc@example.com")).toBeUndefined();
+  });
+
   it("blocks recent pairs and reports them", async () => {
     // Seed a sent introduction between rec_a and rec_b inside the window.
     const runId = "run-history";

@@ -73,6 +73,20 @@ Legacy systems run untouched until the cutover steps below.
 - `vercel.json` (crons: `intro-deliveries` every 5 min, `intro-city-scheduler` hourly)
 - `tests/helpers/test-db.ts`, `.env.example`, `package.json`
 
+## 2b. Behavioural defaults
+
+- Matching profile defaults: proximity 30, AI correlation 25,
+  help/expertise 20, 90-day goal 10, connection type 5, industry 5,
+  business stage 5 (weights are stored raw and auto-normalized to 100%).
+- Group sizes: target 3, min 2, max 6, non-strict (per-city overridable).
+- Repeat-pair window 60 days, member cooldown 14 days (profile default +
+  per-city override, env vars as fallback).
+- Same-city required by default.
+- **Unknown postcode is allowed by default**: members with a missing or
+  ungeocodable postcode stay eligible (proximity scores 0 for them, the
+  max-distance check is skipped). Set `allowUnknownPostcode=false` on a
+  profile version or per city to enforce strict postcodes.
+
 ## 3. DB migrations
 
 - `drizzle/0007_unified_introductions.sql` — 11 new tables + additive columns on

@@ -6,6 +6,7 @@ import {
   normalizeWeights,
   defaultNormalizedWeights,
   defaultConstraints,
+  matchingConstraintsSchema,
   weightsToJson,
   weightsFromJson,
   constraintsFromJson,
@@ -84,6 +85,22 @@ describe("default constraints", () => {
     expect(c.strictGroupSize).toBe(false);
     expect(c.requireSameCity).toBe(true);
     expect(c.maxDistanceKm).toBeNull();
+    // Lenient default: members without a geocodable postcode stay eligible.
+    expect(c.allowUnknownPostcode).toBe(true);
+  });
+
+  it("preserves an explicit strict unknown-postcode setting", () => {
+    const c = matchingConstraintsSchema.parse({
+      requireSameCity: true,
+      maxDistanceKm: null,
+      allowUnknownPostcode: false,
+      repeatPairDays: 60,
+      memberCooldownDays: 14,
+      targetGroupSize: 3,
+      minGroupSize: 2,
+      maxGroupSize: 6,
+      strictGroupSize: false,
+    });
     expect(c.allowUnknownPostcode).toBe(false);
   });
 

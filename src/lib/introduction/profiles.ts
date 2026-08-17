@@ -72,7 +72,9 @@ export const matchingConstraintsSchema = z
   .object({
     requireSameCity: z.boolean().default(true),
     maxDistanceKm: z.number().positive().nullable().default(null),
-    allowUnknownPostcode: z.boolean().default(false),
+    // Lenient by default: members without a (geocodable) postcode stay in the
+    // pool with proximity 0 rather than being excluded. Set false for strict.
+    allowUnknownPostcode: z.boolean().default(true),
     repeatPairDays: z.number().int().min(1).default(envPairCooldownDays),
     memberCooldownDays: z.number().int().min(0).default(envMemberCooldownDays),
     targetGroupSize: groupSizeValue.default(3),

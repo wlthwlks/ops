@@ -91,6 +91,7 @@ describe("resolveEffectiveCitySettings", () => {
     expect(effective.groupSizes).toEqual({ target: 3, min: 2, max: 6, strict: false });
     expect(effective.constraints.requireSameCity).toBe(true);
     expect(effective.constraints.repeatPairDays).toBe(60);
+    expect(effective.constraints.allowUnknownPostcode).toBe(true);
     expect(effective.profileVersionId).toBeNull();
   });
 
