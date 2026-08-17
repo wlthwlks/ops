@@ -3,9 +3,14 @@ import type { AirtableClient } from "@/lib/integrations/airtable";
 import {
   computeFutureAccessParity,
   repairParityHoles,
+  repairParityExtras,
   type ParityHole,
+  type ParityExtraRow,
 } from "@/lib/billing/future-access-parity";
-import { STRIPE_CUSTOMER_ID_FIELD, SERVICE_ACCESS_FIELD } from "@/lib/billing/service-access-sync";
+import {
+  STRIPE_CUSTOMER_ID_FIELD,
+  SERVICE_ACCESS_FIELD,
+} from "@/lib/billing/service-access-sync";
 
 const periodEnd = Math.floor(new Date("2026-09-01T00:00:00.000Z").getTime() / 1000);
 
@@ -35,13 +40,26 @@ function mockStripe(subs: unknown[]) {
 function mockAirtable(records: Array<{ id: string; fields: Record<string, unknown> }>) {
   const listRecords = vi.fn(async (_t: string, o?: { filterByFormula?: string }) => {
     const f = o?.filterByFormula || "";
-    const m = f.match(/IS_AFTER\([^,]+,\s*"(\d{4}-\d{2}-\d{2})"\)/);
-    if (m) {
-      const cutoff = new Date(`${m[1]}T00:00:00.000Z`).getTime();
+    const future = f.match(/IS_AFTER\([^,]+,\s*"(\d{4}-\d{2}-\d{2})"\)/);
+    if (future) {
+      const cutoff = new Date(`${future[1]}T00:00:00.000Z`).getTime();
       return records.filter((r) => {
         const v = r.fields[SERVICE_ACCESS_FIELD];
         return typeof v === "string" && new Date(v).getTime() > cutoff;
       });
+    }
+    const cusMatch = f.match(/\{Stripe Customer ID\}\s*=\s*"([^"]+)"/);
+    if (cusMatch) {
+      return records.filter(
+        (r) => String(r.fields[STRIPE_CUSTOMER_ID_FIELD] ?? "").trim() === cusMatch[1]
+      );
+    }
+    const emailMatch = f.match(/LOWER\(\{email\}\)\s*=\s*"([^"]+)"/);
+    if (emailMatch) {
+      const want = emailMatch[1].toLowerCase();
+      return records.filter(
+        (r) => String(r.fields.email ?? "").trim().toLowerCase() === want
+      );
     }
     return records;
   });
@@ -52,17 +70,23 @@ function mockAirtable(records: Array<{ id: string; fields: Record<string, unknow
     async (_t: string, recs: Array<{ fields: Record<string, unknown> }>) =>
       recs.map((r, i) => ({ id: `rec_new_${i}`, fields: r.fields }))
   );
+  const getRecord = vi.fn(async (_t: string, id: string) => {
+    const r = records.find((x) => x.id === id);
+    if (!r) throw new Error(`record ${id} not found`);
+    return { ...r, createdTime: "2026-01-01T00:00:00.000Z" };
+  });
   return {
     listRecords,
     updateRecordsBatched,
     updateRecords: vi.fn(),
-    getRecord: vi.fn(),
+    getRecord,
     createRecords,
     createRecordsBatched: vi.fn(),
   } as unknown as AirtableClient & {
     listRecords: ReturnType<typeof vi.fn>;
     updateRecordsBatched: ReturnType<typeof vi.fn>;
     createRecords: ReturnType<typeof vi.fn>;
+    getRecord: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -208,5 +232,312 @@ describe("repairParityHoles", () => {
     const r = await repairParityHoles({ airtable, holes, maxHoles: 2 });
     expect(r.fixed).toBe(2);
     expect(airtable.createRecords).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("repairParityExtras", () => {
+  function extra(overrides: Partial<ParityExtraRow> = {}): ParityExtraRow {
+    return {
+      airtableRecordId: "rec2",
+      email: "",
+      name: "",
+      stripeCustomerId: "cus_zzz",
+      accessUntil: "2026-12-01T00:00:00.000Z",
+      payment: "",
+      membership: "",
+      reason: "cus_id_not_in_qualifying_set",
+      ...overrides,
+    };
+  }
+
+  function membership(overrides: Record<string, unknown> = {}) {
+    return {
+      subscriptionId: "sub_1",
+      subscriptionStatus: "active",
+      cancelAtPeriodEnd: false,
+      stripeCustomerId: "cus_1",
+      customer: {
+        id: "cus_1",
+        object: "customer",
+        email: "pay@example.com",
+        name: "Pay User",
+      } as never,
+      priceIds: ["price_mem"],
+      currentPeriodEndUnix: periodEnd,
+      ...overrides,
+    } as never;
+  }
+
+  function mockExtrasStripe(invoices: unknown[] = [], lines: unknown[] = []) {
+    return {
+      invoices: {
+        list: vi.fn(async () => ({ data: invoices, has_more: false })),
+        listLineItems: vi.fn(async () => ({ data: lines, has_more: false })),
+      },
+      subscriptions: {
+        list: vi.fn(async () => ({ data: [], has_more: false })),
+      },
+    } as never;
+  }
+
+  it("clears future access when Stripe has no entitlement for the cus id", async () => {
+    const stripe = mockExtrasStripe();
+    const airtable = mockAirtable([
+      {
+        id: "rec2",
+        fields: {
+          [STRIPE_CUSTOMER_ID_FIELD]: "cus_zzz",
+          [SERVICE_ACCESS_FIELD]: "2026-12-01T00:00:00.000Z",
+        },
+      },
+    ]);
+    const r = await repairParityExtras({
+      stripe,
+      airtable,
+      extras: [extra()],
+      qualifyingMemberships: [membership()],
+      membershipPriceIds: new Set(["price_mem"]),
+    });
+    expect(r.cleared).toBe(1);
+    expect(r.corrected).toBe(0);
+    expect(r.fixed).toBe(1);
+    const written = airtable.updateRecordsBatched.mock.calls[0][1];
+    expect(written[0].id).toBe("rec2");
+    expect(written[0].fields[SERVICE_ACCESS_FIELD]).toBeNull();
+  });
+
+  it("corrects future access to Stripe paid-through (reduction allowed)", async () => {
+    const invoiceEnd = Math.floor(new Date("2026-08-01T00:00:00.000Z").getTime() / 1000);
+    const stripe = mockExtrasStripe(
+      [{ id: "in_1" }],
+      [{ pricing: { price_details: { price: "price_mem" } }, period: { end: invoiceEnd } }]
+    );
+    const airtable = mockAirtable([
+      {
+        id: "rec2",
+        fields: {
+          [STRIPE_CUSTOMER_ID_FIELD]: "cus_zzz",
+          [SERVICE_ACCESS_FIELD]: "2026-12-01T00:00:00.000Z",
+        },
+      },
+    ]);
+    const r = await repairParityExtras({
+      stripe,
+      airtable,
+      extras: [extra()],
+      qualifyingMemberships: [membership()],
+      membershipPriceIds: new Set(["price_mem"]),
+    });
+    expect(r.corrected).toBe(1);
+    expect(r.cleared).toBe(0);
+    const written = airtable.updateRecordsBatched.mock.calls[0][1];
+    expect(written[0].fields[SERVICE_ACCESS_FIELD]).toBe("2026-08-01T00:00:00.000Z");
+  });
+
+  it("links a blank customer id via unique email to a qualifying membership", async () => {
+    const stripe = mockExtrasStripe();
+    const airtable = mockAirtable([
+      {
+        id: "rec2",
+        fields: {
+          email: "pay@example.com",
+          [SERVICE_ACCESS_FIELD]: "2026-12-01T00:00:00.000Z",
+        },
+      },
+    ]);
+    const r = await repairParityExtras({
+      stripe,
+      airtable,
+      extras: [
+        extra({
+          stripeCustomerId: "",
+          reason: "no_stripe_customer_id",
+          email: "pay@example.com",
+        }),
+      ],
+      qualifyingMemberships: [membership()],
+      membershipPriceIds: new Set(["price_mem"]),
+    });
+    expect(r.linked).toBe(1);
+    expect(r.fixed).toBe(1);
+    expect(r.failed).toEqual([]);
+  });
+
+  it("clears a blank customer id with no qualifying email match", async () => {
+    const stripe = mockExtrasStripe();
+    const airtable = mockAirtable([
+      {
+        id: "rec2",
+        fields: {
+          email: "ghost@example.com",
+          [SERVICE_ACCESS_FIELD]: "2026-12-01T00:00:00.000Z",
+        },
+      },
+    ]);
+    const r = await repairParityExtras({
+      stripe,
+      airtable,
+      extras: [
+        extra({
+          stripeCustomerId: "",
+          reason: "no_stripe_customer_id",
+          email: "ghost@example.com",
+        }),
+      ],
+      qualifyingMemberships: [membership()],
+      membershipPriceIds: new Set(["price_mem"]),
+    });
+    expect(r.cleared).toBe(1);
+    expect(r.linked).toBe(0);
+    const written = airtable.updateRecordsBatched.mock.calls[0][1];
+    expect(written[0].fields[SERVICE_ACCESS_FIELD]).toBeNull();
+  });
+
+  it("keeps one duplicate row (email match preferred) and clears the others", async () => {
+    const stripe = mockExtrasStripe();
+    const airtable = mockAirtable([
+      {
+        id: "rec_a",
+        fields: {
+          email: "a@example.com",
+          [STRIPE_CUSTOMER_ID_FIELD]: "cus_1",
+          [SERVICE_ACCESS_FIELD]: "2026-10-01T00:00:00.000Z",
+        },
+      },
+      {
+        id: "rec_b",
+        fields: {
+          email: "pay@example.com",
+          [STRIPE_CUSTOMER_ID_FIELD]: "cus_1",
+          [SERVICE_ACCESS_FIELD]: "2026-09-01T00:00:00.000Z",
+        },
+      },
+    ]);
+    const r = await repairParityExtras({
+      stripe,
+      airtable,
+      extras: [
+        extra({
+          airtableRecordId: "rec_a",
+          stripeCustomerId: "cus_1",
+          reason: "duplicate_airtable_record",
+          email: "a@example.com",
+          accessUntil: "2026-10-01T00:00:00.000Z",
+        }),
+        extra({
+          airtableRecordId: "rec_b",
+          stripeCustomerId: "cus_1",
+          reason: "duplicate_airtable_record",
+          email: "pay@example.com",
+          accessUntil: "2026-09-01T00:00:00.000Z",
+        }),
+      ],
+      qualifyingMemberships: [membership()],
+      membershipPriceIds: new Set(["price_mem"]),
+    });
+    expect(r.cleared).toBe(1);
+    expect(r.skipped).toBe(1);
+    const written = airtable.updateRecordsBatched.mock.calls[0][1];
+    expect(written).toHaveLength(1);
+    expect(written[0].id).toBe("rec_a");
+    expect(written[0].fields[SERVICE_ACCESS_FIELD]).toBeNull();
+  });
+
+  it("skips rows that changed since the parity scan", async () => {
+    const stripe = mockExtrasStripe();
+    const airtable = mockAirtable([
+      {
+        id: "rec2",
+        fields: {
+          [STRIPE_CUSTOMER_ID_FIELD]: "cus_zzz",
+          [SERVICE_ACCESS_FIELD]: "2027-01-01T00:00:00.000Z",
+        },
+      },
+    ]);
+    const r = await repairParityExtras({
+      stripe,
+      airtable,
+      extras: [extra()],
+      qualifyingMemberships: [membership()],
+      membershipPriceIds: new Set(["price_mem"]),
+    });
+    expect(r.skipped).toBe(1);
+    expect(r.fixed).toBe(0);
+    expect(airtable.updateRecordsBatched).not.toHaveBeenCalled();
+  });
+
+  it("respects maxExtras", async () => {
+    const stripe = mockExtrasStripe();
+    const airtable = mockAirtable([
+      {
+        id: "rec2",
+        fields: {
+          [STRIPE_CUSTOMER_ID_FIELD]: "cus_zzz",
+          [SERVICE_ACCESS_FIELD]: "2026-12-01T00:00:00.000Z",
+        },
+      },
+      {
+        id: "rec3",
+        fields: {
+          [STRIPE_CUSTOMER_ID_FIELD]: "cus_yyy",
+          [SERVICE_ACCESS_FIELD]: "2026-12-02T00:00:00.000Z",
+        },
+      },
+      {
+        id: "rec4",
+        fields: {
+          [STRIPE_CUSTOMER_ID_FIELD]: "cus_xxx",
+          [SERVICE_ACCESS_FIELD]: "2026-12-03T00:00:00.000Z",
+        },
+      },
+    ]);
+    const r = await repairParityExtras({
+      stripe,
+      airtable,
+      extras: [
+        extra(),
+        extra({ airtableRecordId: "rec3", stripeCustomerId: "cus_yyy", accessUntil: "2026-12-02T00:00:00.000Z" }),
+        extra({ airtableRecordId: "rec4", stripeCustomerId: "cus_xxx", accessUntil: "2026-12-03T00:00:00.000Z" }),
+      ],
+      qualifyingMemberships: [membership()],
+      membershipPriceIds: new Set(["price_mem"]),
+      maxExtras: 2,
+    });
+    expect(r.fixed).toBe(2);
+    const written = airtable.updateRecordsBatched.mock.calls[0][1];
+    expect(written).toHaveLength(2);
+  });
+
+  it("reports entitlement lookup failures without throwing", async () => {
+    const stripe = {
+      invoices: {
+        list: vi.fn(async () => {
+          throw new Error("stripe down");
+        }),
+        listLineItems: vi.fn(async () => ({ data: [], has_more: false })),
+      },
+      subscriptions: {
+        list: vi.fn(async () => ({ data: [], has_more: false })),
+      },
+    } as never;
+    const airtable = mockAirtable([
+      {
+        id: "rec2",
+        fields: {
+          [STRIPE_CUSTOMER_ID_FIELD]: "cus_zzz",
+          [SERVICE_ACCESS_FIELD]: "2026-12-01T00:00:00.000Z",
+        },
+      },
+    ]);
+    const r = await repairParityExtras({
+      stripe,
+      airtable,
+      extras: [extra()],
+      qualifyingMemberships: [membership()],
+      membershipPriceIds: new Set(["price_mem"]),
+    });
+    expect(r.fixed).toBe(0);
+    expect(r.failed).toHaveLength(1);
+    expect(r.failed[0].reason).toContain("stripe down");
   });
 });

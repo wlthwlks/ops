@@ -432,7 +432,11 @@ When Slack succeeds but Airtable tracking fails, the group status becomes `sent_
 
 #### Daily parity cron
 
-`/api/cron/future-access-parity` (Vercel cron, daily 06:00) runs the same computation as the audit CLI. Holes are auto-fixed with the monotonic repair (`repairParityHoles` — extends access only); extras are alert-only via `recordIntegrationError`. Env gates: `PARITY_CRON_ENABLED=true`, optional `PARITY_CRON_AUTO_FIX_HOLES=false` (alert-only) and `PARITY_CRON_MAX_HOLES` (default 100).
+`/api/cron/future-access-parity` (Vercel cron, daily 06:00) runs the same computation as the audit CLI and repairs drift in **both** directions so Airtable future `Service access until` stays aligned with the Stripe listed-price census:
+- **Holes** (paying member without future access) are auto-fixed with the monotonic repair (`repairParityHoles` — extends access only).
+- **Extras** (future access without a listed-price active sub) are auto-fixed with the corrective repair (`repairParityExtras`): Stripe's authoritative paid-through is written when known (reduction allowed), unsupported future access is cleared, blank `Stripe Customer ID`s are linked via unique primary email, and duplicate rows sharing a customer id are collapsed to one keeper. Extras that cannot be resolved are alerted via `recordIntegrationError`.
+
+Env gates: `PARITY_CRON_ENABLED=true`; optional `PARITY_CRON_AUTO_FIX_HOLES=false` (holes alert-only), `PARITY_CRON_AUTO_FIX_EXTRAS=false` (extras alert-only), `PARITY_CRON_MAX_HOLES` (default 100) and `PARITY_CRON_MAX_EXTRAS` (default 50).
 
 ### Member ownership (Memberstack + Make vs Stripe)
 

@@ -192,7 +192,11 @@ async function runActiveSubscriptionSync(
     console.log(`Delta (Airtable - Stripe): ${airtableFutureAccess - memberships.length}`);
   }
   console.log(
-    "(monotonic mode — access is never shortened; a negative delta closes as members are added/fixed)"
+    "(a positive delta = extras (future access without a qualifying active sub); " +
+      "a negative delta = holes (qualifying member without future access). " +
+      "The daily /api/cron/future-access-parity cron fixes both directions automatically: " +
+      "holes are extended, extras are corrected/cleared/linked. Run " +
+      "`npm run airtable:audit-future-access-parity` for the per-row breakdown.)"
   );
 
   mkdirSync(dirname(args.output), { recursive: true });
