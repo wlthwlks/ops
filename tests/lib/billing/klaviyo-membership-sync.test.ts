@@ -10,7 +10,7 @@ import {
   syncKlaviyoMembershipLists,
   mergePhoneNumber,
 } from "@/lib/billing/klaviyo-membership-sync";
-import { CITIES_TABLE } from "@/lib/ops/airtable-fields";
+import { MEMBERS_TABLE, CITIES_TABLE } from "@/lib/ops/airtable-fields";
 
 const periodEnd = Math.floor(new Date("2026-09-01T00:00:00.000Z").getTime() / 1000);
 
@@ -81,13 +81,31 @@ function mockAirtable(records: AirtableRecord[]) {
 
 function mockKlaviyo() {
   return {
-    profileImport: vi.fn(async (profiles: unknown[]) => ({ requested: profiles.length, jobs: 1 })),
-    bulkSubscribe: vi.fn(async (_listId: string, emails: string[]) => ({ requested: emails.length, jobs: 1 })),
-    bulkUnsubscribe: vi.fn(async (_listId: string, emails: string[]) => ({ requested: emails.length, jobs: 1 })),
+    importProfiles: vi.fn(async (profiles: unknown[]) => ({
+      requested: profiles.length,
+      jobs: 1,
+      jobIds: ["job1"],
+    })),
+    waitForImportJobs: vi.fn(async () => undefined),
+    listProfileIdsByEmails: vi.fn(async (emails: string[]) => {
+      const map = new Map<string, string>();
+      emails.forEach((email, i) => map.set(email, `prof_${i}`));
+      return map;
+    }),
+    addProfilesToList: vi.fn(async (_listId: string, ids: string[]) => ({
+      requested: ids.length,
+      calls: 1,
+    })),
+    removeProfilesFromList: vi.fn(async (_listId: string, ids: string[]) => ({
+      requested: ids.length,
+      calls: 1,
+    })),
   } as unknown as KlaviyoClient & {
-    profileImport: ReturnType<typeof vi.fn>;
-    bulkSubscribe: ReturnType<typeof vi.fn>;
-    bulkUnsubscribe: ReturnType<typeof vi.fn>;
+    importProfiles: ReturnType<typeof vi.fn>;
+    waitForImportJobs: ReturnType<typeof vi.fn>;
+    listProfileIdsByEmails: ReturnType<typeof vi.fn>;
+    addProfilesToList: ReturnType<typeof vi.fn>;
+    removeProfilesFromList: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -127,6 +145,41 @@ describe("computeKlaviyoCensus", () => {
     expect(census.active[0].cancelAtPeriodEnd).toBe(true);
     expect(census.churned).toHaveLength(0);
   });
+
+  it("caps each Stripe listing when limit is set", async () => {
+    const stripe = mockStripe({
+      active: [
+        stripeSub({ id: "sub_a1", customer: { id: "cus_a1", email: "a1@x.com" } }),
+        stripeSub({ id: "sub_a2", customer: { id: "cus_a2", email: "a2@x.com" } }),
+      ],
+    });
+    const census = await computeKlaviyoCensus({
+      stripe,
+      membershipPriceIds: new Set(["price_mem"]),
+      limit: 1,
+    });
+    expect(census.active).toHaveLength(1);
+  });
+});
+
+describe("parseKlaviyoSyncArgs (via dynamic import of script logic)", () => {
+  it("defaults to dry-run with no limit", async () => {
+    const { parseKlaviyoSyncArgs } = await import("../../../scripts/sync-klaviyo-members");
+    expect(parseKlaviyoSyncArgs([])).toEqual({ apply: false, limit: undefined });
+  });
+
+  it("parses --apply and --limit", async () => {
+    const { parseKlaviyoSyncArgs } = await import("../../../scripts/sync-klaviyo-members");
+    expect(parseKlaviyoSyncArgs(["--apply"]).apply).toBe(true);
+    expect(parseKlaviyoSyncArgs(["--limit=25"]).limit).toBe(25);
+    expect(parseKlaviyoSyncArgs(["--apply", "--limit=25"])).toEqual({ apply: true, limit: 25 });
+  });
+
+  it("rejects unknown flags and bad limits", async () => {
+    const { parseKlaviyoSyncArgs } = await import("../../../scripts/sync-klaviyo-members");
+    expect(() => parseKlaviyoSyncArgs(["--bogus"])).toThrow("Unknown flag");
+    expect(() => parseKlaviyoSyncArgs(["--limit=0"])).toThrow("Invalid --limit");
+  });
 });
 
 describe("mergePhoneNumber", () => {
@@ -145,7 +198,7 @@ describe("mergePhoneNumber", () => {
 });
 
 describe("fetchMemberEnrichment", () => {
-  it("fetches in chunks and indexes by normalized email", async () => {
+  it("reads members once without a filter formula and indexes only wanted emails", async () => {
     const airtable = mockAirtable([
       {
         id: "rec1",
@@ -163,16 +216,23 @@ describe("fetchMemberEnrichment", () => {
           "Cancellation effective at": "",
         },
       },
+      {
+        id: "rec2",
+        fields: { email: "other@x.com", "First Name": "Other", "Last Name": "User" },
+      },
     ]);
     const map = await fetchMemberEnrichment(airtable, ["dina@x.com", "ghost@x.com"]);
     expect(map.size).toBe(1);
+    expect(map.get("other@x.com")).toBeUndefined();
     const e = map.get("dina@x.com");
     expect(e?.phone).toBe("+13105551234");
     expect(e?.city).toBe("Santa Monica");
     expect(airtable.listRecords).toHaveBeenCalledTimes(1);
-    const formula = airtable.listRecords.mock.calls[0][1].filterByFormula;
-    expect(formula).toContain("OR(");
-    expect(formula).toContain('LOWER({email}) = "dina@x.com"');
+    const [table, opts] = airtable.listRecords.mock.calls[0];
+    expect(table).toBe(MEMBERS_TABLE);
+    expect(opts.filterByFormula).toBeUndefined();
+    expect(opts.fields).toContain("email");
+    expect(opts.fields).toContain("phone number");
   });
 });
 
@@ -269,7 +329,7 @@ describe("buildKlaviyoProfiles", () => {
 });
 
 describe("syncKlaviyoMembershipLists", () => {
-  it("imports profiles then reconciles both lists in full", async () => {
+  it("imports profiles, waits, resolves ids and reconciles both lists in full", async () => {
     const klaviyo = mockKlaviyo();
     const result = await syncKlaviyoMembershipLists({
       klaviyo,
@@ -284,24 +344,48 @@ describe("syncKlaviyoMembershipLists", () => {
       skippedNoEmail: 0,
     });
 
-    expect(klaviyo.profileImport).toHaveBeenCalledTimes(1);
-    expect(klaviyo.bulkSubscribe).toHaveBeenCalledWith("list_active", ["a@x.com"]);
-    expect(klaviyo.bulkUnsubscribe).toHaveBeenCalledWith("list_active", ["c@x.com"]);
-    expect(klaviyo.bulkSubscribe).toHaveBeenCalledWith("list_churned", ["c@x.com"]);
-    expect(klaviyo.bulkUnsubscribe).toHaveBeenCalledWith("list_churned", ["a@x.com"]);
+    expect(klaviyo.importProfiles).toHaveBeenCalledTimes(1);
+    expect(klaviyo.waitForImportJobs).toHaveBeenCalledWith(["job1"]);
+    expect(klaviyo.listProfileIdsByEmails).toHaveBeenCalledWith(["a@x.com", "c@x.com"]);
+    expect(klaviyo.addProfilesToList).toHaveBeenCalledWith("list_active", ["prof_0"]);
+    expect(klaviyo.removeProfilesFromList).toHaveBeenCalledWith("list_active", ["prof_1"]);
+    expect(klaviyo.addProfilesToList).toHaveBeenCalledWith("list_churned", ["prof_1"]);
+    expect(klaviyo.removeProfilesFromList).toHaveBeenCalledWith("list_churned", ["prof_0"]);
 
     expect(result).toEqual({
       profilesImported: 2,
       importJobs: 1,
       activeSubscribed: 1,
-      activeSubscribeJobs: 1,
+      activeSubscribeCalls: 1,
       activeUnsubscribed: 1,
-      activeUnsubscribeJobs: 1,
+      activeUnsubscribeCalls: 1,
       churnedSubscribed: 1,
-      churnedSubscribeJobs: 1,
+      churnedSubscribeCalls: 1,
       churnedUnsubscribed: 1,
-      churnedUnsubscribeJobs: 1,
+      churnedUnsubscribeCalls: 1,
+      skippedNoEmail: 0,
+      unresolvedProfiles: 0,
+    });
+  });
+
+  it("counts unresolved profiles when email lookup misses", async () => {
+    const klaviyo = mockKlaviyo();
+    klaviyo.listProfileIdsByEmails.mockResolvedValueOnce(new Map([["a@x.com", "prof_0"]]));
+    const result = await syncKlaviyoMembershipLists({
+      klaviyo,
+      activeListId: "list_active",
+      churnedListId: "list_churned",
+      profiles: [
+        { email: "a@x.com", properties: { membership_status: "active" } },
+        { email: "c@x.com", properties: { membership_status: "churned" } },
+      ],
+      activeEmails: ["a@x.com"],
+      churnedEmails: ["c@x.com"],
       skippedNoEmail: 0,
     });
+    expect(klaviyo.addProfilesToList).toHaveBeenCalledWith("list_churned", []);
+    expect(klaviyo.removeProfilesFromList).toHaveBeenCalledWith("list_active", []);
+    expect(result.unresolvedProfiles).toBe(1);
+    expect(result.churnedSubscribed).toBe(0);
   });
 });

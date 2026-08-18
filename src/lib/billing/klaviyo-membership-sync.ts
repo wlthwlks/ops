@@ -30,7 +30,6 @@ import {
   MEMBERS_TABLE,
   PAID_PLANS_FIELD,
   SERVICE_ACCESS_FIELD,
-  escapeAirtableFormulaString,
 } from "@/lib/billing/service-access-sync";
 import {
   PRIMARY_EMAIL_FIELD,
@@ -58,7 +57,6 @@ const MEMBER_ENRICHMENT_FIELDS = [
   CANCELLATION_EFFECTIVE_AT_FIELD,
 ] as const;
 
-const EMAIL_CHUNK_SIZE = 40;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function normalizeEmailForIndex(email: string): string {
@@ -101,16 +99,20 @@ export type KlaviyoCensus = {
 export async function computeKlaviyoCensus(input: {
   stripe: KlaviyoStripeClient;
   membershipPriceIds: Set<string>;
+  /** Stop each Stripe listing after N qualifying customers (CLI sanity runs). */
+  limit?: number;
 }): Promise<KlaviyoCensus> {
-  const { stripe, membershipPriceIds } = input;
+  const { stripe, membershipPriceIds, limit } = input;
 
   const active = await listActiveMembershipSubscriptions(stripe, membershipPriceIds, {
     statuses: ["active", "trialing"],
+    limit,
   });
   const activeCusIds = new Set(active.map((m) => m.stripeCustomerId));
 
   const canceled = await listActiveMembershipSubscriptions(stripe, membershipPriceIds, {
     statuses: ["canceled"],
+    limit,
   });
   const churned = canceled.filter((m) => !activeCusIds.has(m.stripeCustomerId));
 
@@ -145,33 +147,26 @@ function extractEnrichment(record: AirtableRecord): MemberEnrichment {
 }
 
 /**
- * Fetch MEMBERS enrichment rows for the given emails via chunked OR formulas
- * (keeps the filter formula under the URL length limit for large lists).
- * Indexed by normalized email.
+ * Fetch MEMBERS enrichment rows for the given emails via ONE paginated full
+ * read of MEMBERS (field-projected, no filter formula). Formula scans with
+ * dozens of OR'd email clauses are far slower than plain paginated reads;
+ * rows are filtered to the wanted emails locally. Indexed by normalized email.
  */
 export async function fetchMemberEnrichment(
   airtable: AirtableClient,
   emails: string[]
 ): Promise<Map<string, MemberEnrichment>> {
   const map = new Map<string, MemberEnrichment>();
-  const unique = [...new Set(emails.map(normalizeEmailForIndex).filter(Boolean))];
-  if (unique.length === 0) return map;
+  const wanted = new Set(emails.map(normalizeEmailForIndex).filter(Boolean));
+  if (wanted.size === 0) return map;
 
-  for (let i = 0; i < unique.length; i += EMAIL_CHUNK_SIZE) {
-    const chunk = unique.slice(i, i + EMAIL_CHUNK_SIZE);
-    const clauses = chunk.map(
-      (email) =>
-        `LOWER({${PRIMARY_EMAIL_FIELD}}) = "${escapeAirtableFormulaString(email)}"`
-    );
-    const records = await airtable.listRecords(MEMBERS_TABLE, {
-      filterByFormula: `OR(${clauses.join(",")})`,
-      fields: [...MEMBER_ENRICHMENT_FIELDS],
-    });
-    for (const rec of records) {
-      const email = normalizeEmailForIndex(fieldStr(rec.fields, PRIMARY_EMAIL_FIELD));
-      if (!email) continue;
-      map.set(email, extractEnrichment(rec));
-    }
+  const records = await airtable.listRecords(MEMBERS_TABLE, {
+    fields: [...MEMBER_ENRICHMENT_FIELDS],
+  });
+  for (const rec of records) {
+    const email = normalizeEmailForIndex(fieldStr(rec.fields, PRIMARY_EMAIL_FIELD));
+    if (!email || !wanted.has(email)) continue;
+    map.set(email, extractEnrichment(rec));
   }
   return map;
 }
@@ -315,21 +310,26 @@ export type KlaviyoMembershipSyncResult = {
   profilesImported: number;
   importJobs: number;
   activeSubscribed: number;
-  activeSubscribeJobs: number;
+  activeSubscribeCalls: number;
   activeUnsubscribed: number;
-  activeUnsubscribeJobs: number;
+  activeUnsubscribeCalls: number;
   churnedSubscribed: number;
-  churnedSubscribeJobs: number;
+  churnedSubscribeCalls: number;
   churnedUnsubscribed: number;
-  churnedUnsubscribeJobs: number;
+  churnedUnsubscribeCalls: number;
   skippedNoEmail: number;
+  /** Emails present in the census but not found as Klaviyo profiles after import. */
+  unresolvedProfiles: number;
 };
 
 /**
  * Full reconcile of the two Klaviyo lists:
- *   1. Upsert profiles (identity + columns + custom properties).
- *   2. Active list: subscribe actives, unsubscribe churned.
- *   3. Churned list: subscribe churned, unsubscribe actives.
+ *   1. Bulk-upsert profiles (identity + columns + custom properties) and wait
+ *      for the import jobs to complete.
+ *   2. Resolve profile ids by email.
+ *   3. Active list: add actives, remove churned.
+ *   4. Churned list: add churned, remove actives.
+ * List membership moves never touch email consent.
  */
 export async function syncKlaviyoMembershipLists(input: {
   klaviyo: KlaviyoClient;
@@ -342,24 +342,40 @@ export async function syncKlaviyoMembershipLists(input: {
 }): Promise<KlaviyoMembershipSyncResult> {
   const { klaviyo, activeListId, churnedListId } = input;
 
-  const imported = await klaviyo.profileImport(input.profiles);
-  const activeSub = await klaviyo.bulkSubscribe(activeListId, input.activeEmails);
-  const activeUnsub = await klaviyo.bulkUnsubscribe(activeListId, input.churnedEmails);
-  const churnedSub = await klaviyo.bulkSubscribe(churnedListId, input.churnedEmails);
-  const churnedUnsub = await klaviyo.bulkUnsubscribe(churnedListId, input.activeEmails);
+  const imported = await klaviyo.importProfiles(input.profiles);
+  await klaviyo.waitForImportJobs(imported.jobIds);
+
+  const idsByEmail = await klaviyo.listProfileIdsByEmails([
+    ...input.activeEmails,
+    ...input.churnedEmails,
+  ]);
+
+  const activeIds = input.activeEmails
+    .map((email) => idsByEmail.get(email))
+    .filter((id): id is string => Boolean(id));
+  const churnedIds = input.churnedEmails
+    .map((email) => idsByEmail.get(email))
+    .filter((id): id is string => Boolean(id));
+
+  const activeAdd = await klaviyo.addProfilesToList(activeListId, activeIds);
+  const activeRemove = await klaviyo.removeProfilesFromList(activeListId, churnedIds);
+  const churnedAdd = await klaviyo.addProfilesToList(churnedListId, churnedIds);
+  const churnedRemove = await klaviyo.removeProfilesFromList(churnedListId, activeIds);
 
   return {
     profilesImported: imported.requested,
     importJobs: imported.jobs,
-    activeSubscribed: activeSub.requested,
-    activeSubscribeJobs: activeSub.jobs,
-    activeUnsubscribed: activeUnsub.requested,
-    activeUnsubscribeJobs: activeUnsub.jobs,
-    churnedSubscribed: churnedSub.requested,
-    churnedSubscribeJobs: churnedSub.jobs,
-    churnedUnsubscribed: churnedUnsub.requested,
-    churnedUnsubscribeJobs: churnedUnsub.jobs,
+    activeSubscribed: activeAdd.requested,
+    activeSubscribeCalls: activeAdd.calls,
+    activeUnsubscribed: activeRemove.requested,
+    activeUnsubscribeCalls: activeRemove.calls,
+    churnedSubscribed: churnedAdd.requested,
+    churnedSubscribeCalls: churnedAdd.calls,
+    churnedUnsubscribed: churnedRemove.requested,
+    churnedUnsubscribeCalls: churnedRemove.calls,
     skippedNoEmail: input.skippedNoEmail,
+    unresolvedProfiles:
+      input.activeEmails.length + input.churnedEmails.length - activeIds.length - churnedIds.length,
   };
 }
 

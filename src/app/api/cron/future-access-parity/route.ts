@@ -47,7 +47,7 @@ export const maxDuration = 300;
  *   KLAVIYO_PRIVATE_API_KEY         private API key (pk_…)
  *   KLAVIYO_ACTIVE_LIST_ID          list id for "WW Active members reliable"
  *   KLAVIYO_CHURNED_LIST_ID         list id for churned members
- *   KLAVIYO_API_REVISION            optional JSON:API revision (default 2025-04-15)
+ *   KLAVIYO_API_REVISION            optional JSON:API revision (default 2026-07-15)
  */
 export async function POST(request: NextRequest) {
   const denied = rejectUnauthorizedCron(request);
