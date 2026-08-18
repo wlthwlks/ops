@@ -780,6 +780,17 @@ export function SignupApp(props: { apiBase: string }) {
     setError(null);
     setAsyncState(BUSY.account);
     scrollSignupToTop();
+
+    void api(props.apiBase, "/api/onboarding/analytics", {
+      method: "POST",
+      body: JSON.stringify({
+        eventType: "ACCOUNT_STARTED",
+        utm_source: attribution.utm_source,
+        utm_medium: attribution.utm_medium,
+        utm_campaign: attribution.utm_campaign,
+      }),
+    }).catch(() => undefined);
+
     try {
       logMemberstackDiagnostics("account_submit_start");
       const auth = await authenticateEmailPassword({
@@ -828,6 +839,11 @@ export function SignupApp(props: { apiBase: string }) {
           attribution,
         }),
       });
+
+      void api(props.apiBase, "/api/onboarding/analytics", {
+        method: "POST",
+        body: JSON.stringify({ eventType: "ACCOUNT_COMPLETED" }),
+      }).catch(() => undefined);
 
       setAsyncState(BUSY.next);
       try {
@@ -881,6 +897,10 @@ export function SignupApp(props: { apiBase: string }) {
     scrollSignupToTop();
     try {
       await saveStep("LOCATION", values);
+      void api(props.apiBase, "/api/onboarding/analytics", {
+        method: "POST",
+        body: JSON.stringify({ eventType: "LOCATION_COMPLETED" }),
+      }).catch(() => undefined);
       setAsyncState(BUSY.next);
       stepper.setComplete("location");
       await stepper.next();
@@ -908,6 +928,10 @@ export function SignupApp(props: { apiBase: string }) {
         socialLinks: socialLinks.filter((l) => l.url.trim()),
       });
       await saveStep("PAYMENT_PENDING", {});
+      void api(props.apiBase, "/api/onboarding/analytics", {
+        method: "POST",
+        body: JSON.stringify({ eventType: "BUSINESS_COMPLETED" }),
+      }).catch(() => undefined);
       setAsyncState(BUSY.next);
       stepper.setComplete("business");
       await stepper.next();

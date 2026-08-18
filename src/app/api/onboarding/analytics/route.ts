@@ -17,6 +17,7 @@ const schema = z.object({
     "LOCATION_COMPLETED",
     "BUSINESS_COMPLETED",
     "CHECKOUT_STARTED",
+    "CHECKOUT_ELIGIBLE",
     "PAYMENT_RETURNED",
     "PROFILE_ENRICHMENT_STARTED",
     "ONBOARDING_COMPLETED",
@@ -73,8 +74,14 @@ export async function POST(request: Request) {
         utmCampaign: d.utm_campaign || null,
         metadataJson: d.metadata ? JSON.stringify(d.metadata).slice(0, 4000) : null,
       });
-    } catch {
-      /* table may not exist — still acknowledge */
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          event: "form_analytics_insert_failed",
+          eventType: d.eventType,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
     }
     return withCors(NextResponse.json({ success: true, recorded: true }), request);
   } catch (err) {
