@@ -1,209 +1,169 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAirtableClient } from "@/lib/integrations/airtable";
-import { CITIES, CityGroup } from "@/lib/constants";
 import { requireOpsViewer } from "@/lib/ops/auth";
 import { handleOpsApiError } from "@/lib/ops/api-response";
+import {
+  CITIES_TABLE,
+  CITY_FIELDS,
+  MEMBER_FIELDS,
+  MEMBERS_TABLE,
+  toAirtableSchemaError,
+} from "@/lib/ops/airtable-fields";
+import { linkedRecordIds } from "@/lib/ops/city-relation-repair";
+import { normalizeCityKey } from "@/lib/ops/city-normalize";
+import { hasServiceAccess } from "@/lib/introduction/service-access";
 
-interface SublocationBreakdown {
-  sublocation: string;
-  emails: string[];
-}
-
-interface CustomerRecord {
+interface NewMemberRow {
+  id: string;
   name: string;
-  surname: string;
   email: string;
+  dateJoined: string;
+  country: string;
   city: string;
-  phone: string;
+  postCode: string;
+  stripeCustomerId: string;
 }
 
-interface CityExport {
-  city: string;
-  filename: string;
-  emails: string[];
-  csv: string;
-  customers: CustomerRecord[];
-  breakdown: SublocationBreakdown[];
+function fieldStr(fields: Record<string, unknown>, key: string): string {
+  const v = fields[key];
+  if (v == null) return "";
+  return String(v).trim();
 }
 
-function buildCityFilter(cityGroup: CityGroup): string {
-  const allNames = [cityGroup.label, ...cityGroup.alternatives];
-  const conditions = allNames.map(
-    (name) => `FIND(LOWER("${name}"), LOWER({City}))`
-  );
-  return `OR(${conditions.join(", ")})`;
+function localIso(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
-function buildExcludeAllCitiesFilter(): string {
-  const conditions = CITIES.flatMap((group) => {
-    const allNames = [group.label, ...group.alternatives];
-    return allNames.map(
-      (name) => `FIND(LOWER("${name}"), LOWER({City}))`
-    );
-  });
-  return `AND(NOT(OR(${conditions.join(", ")})))`;
-}
-
-function matchSublocation(city: string, cityGroup: CityGroup): string {
-  const cityLower = (city || "").toLowerCase();
-  const allNames = [cityGroup.label, ...cityGroup.alternatives];
-  for (const name of allNames) {
-    if (cityLower.includes(name.toLowerCase())) {
-      return name;
-    }
-  }
-  return city || "Other";
+/** Date-only key from an Airtable date value (date or datetime). */
+function dateKey(value: string): string | null {
+  const raw = value.trim();
+  if (!raw) return null;
+  const key = raw.slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : null;
 }
 
 export async function GET(request: NextRequest) {
   try {
-  await requireOpsViewer();
-  const token = process.env.AIRTABLE_GET_DATA_TOKEN;
-  const baseId = process.env.AIRTABLE_BASE_ID;
+    await requireOpsViewer();
+    const token = process.env.AIRTABLE_GET_DATA_TOKEN;
+    const baseId = process.env.AIRTABLE_BASE_ID;
 
-  if (!token || !baseId) {
-    return NextResponse.json(
-      { success: false, error: "Missing Airtable credentials" },
-      { status: 500 }
+    if (!token || !baseId) {
+      return NextResponse.json(
+        { success: false, error: "Missing Airtable credentials" },
+        { status: 500 }
+      );
+    }
+
+    const today = new Date();
+    const defaultStart = localIso(new Date(today.getTime() - 6 * 86400000));
+    const defaultEnd = localIso(today);
+    const rawStart = request.nextUrl.searchParams.get("startDate");
+    const rawEnd = request.nextUrl.searchParams.get("endDate");
+    const effectiveStart =
+      rawStart && /^\d{4}-\d{2}-\d{2}$/.test(rawStart) ? rawStart : defaultStart;
+    const effectiveEnd =
+      rawEnd && /^\d{4}-\d{2}-\d{2}$/.test(rawEnd) ? rawEnd : defaultEnd;
+
+    const client = createAirtableClient({ apiKey: token, baseId });
+
+    const memberFields = [
+      MEMBER_FIELDS.name,
+      MEMBER_FIELDS.email,
+      MEMBER_FIELDS.dateJoined,
+      MEMBER_FIELDS.city,
+      MEMBER_FIELDS.cityRelation,
+      MEMBER_FIELDS.postCode,
+      MEMBER_FIELDS.stripeCustomerId,
+      MEMBER_FIELDS.membership,
+      MEMBER_FIELDS.payment,
+      MEMBER_FIELDS.serviceAccessUntil,
+    ];
+
+    let memberRecords;
+    try {
+      memberRecords = await client.listRecords(MEMBERS_TABLE, {
+        fields: memberFields,
+      });
+    } catch (e) {
+      const schema = toAirtableSchemaError(MEMBERS_TABLE, e);
+      if (schema?.field === MEMBER_FIELDS.cityRelation) {
+        memberRecords = await client.listRecords(MEMBERS_TABLE, {
+          fields: memberFields.filter((f) => f !== MEMBER_FIELDS.cityRelation),
+        });
+      } else {
+        throw e;
+      }
+    }
+
+    const cityRecords = await client.listRecords(CITIES_TABLE, {
+      fields: [CITY_FIELDS.city, CITY_FIELDS.country],
+    });
+    const citiesById = new Map(cityRecords.map((c) => [c.id, c]));
+    const countryByCityName = new Map<string, string>();
+    for (const c of cityRecords) {
+      const key = normalizeCityKey(fieldStr(c.fields, CITY_FIELDS.city));
+      const country = fieldStr(c.fields, CITY_FIELDS.country);
+      if (key && country && !countryByCityName.has(key)) {
+        countryByCityName.set(key, country);
+      }
+    }
+
+    const referenceDate = new Date();
+    const members: NewMemberRow[] = [];
+
+    for (const r of memberRecords) {
+      const membership = fieldStr(r.fields, MEMBER_FIELDS.membership);
+      const payment = fieldStr(r.fields, MEMBER_FIELDS.payment);
+      const until = fieldStr(r.fields, MEMBER_FIELDS.serviceAccessUntil) || null;
+      if (!hasServiceAccess(membership, payment, until, referenceDate)) continue;
+
+      const joined = dateKey(fieldStr(r.fields, MEMBER_FIELDS.dateJoined));
+      if (!joined || joined < effectiveStart || joined > effectiveEnd) continue;
+
+      const linkIds = linkedRecordIds(r.fields, MEMBER_FIELDS.cityRelation);
+      let city = fieldStr(r.fields, MEMBER_FIELDS.city);
+      let country = "";
+      for (const id of linkIds) {
+        const rec = citiesById.get(id);
+        if (!rec) continue;
+        const name = fieldStr(rec.fields, CITY_FIELDS.city);
+        if (name) city = name;
+        const ct = fieldStr(rec.fields, CITY_FIELDS.country);
+        if (ct) country = ct;
+        break;
+      }
+      if (!country) {
+        country = countryByCityName.get(normalizeCityKey(city)) || "";
+      }
+
+      members.push({
+        id: r.id,
+        name: fieldStr(r.fields, MEMBER_FIELDS.name),
+        email: fieldStr(r.fields, MEMBER_FIELDS.email),
+        dateJoined: joined,
+        country,
+        city,
+        postCode: fieldStr(r.fields, MEMBER_FIELDS.postCode),
+        stripeCustomerId: fieldStr(r.fields, MEMBER_FIELDS.stripeCustomerId),
+      });
+    }
+
+    members.sort(
+      (a, b) =>
+        b.dateJoined.localeCompare(a.dateJoined) || a.name.localeCompare(b.name)
     );
-  }
 
-  const cityParam = request.nextUrl.searchParams.get("city");
-  const format = request.nextUrl.searchParams.get("format");
-  const startDate = request.nextUrl.searchParams.get("startDate");
-  const endDate = request.nextUrl.searchParams.get("endDate");
-  const client = createAirtableClient({ apiKey: token, baseId });
-
-  const today = new Date().toISOString().slice(0, 10);
-  const effectiveStart = startDate || today;
-  const effectiveEnd = endDate || today;
-
-  const dateLabel =
-    effectiveStart === effectiveEnd
-      ? effectiveStart.replace(/-/g, "")
-      : `${effectiveStart.replace(/-/g, "")}-${effectiveEnd.replace(/-/g, "")}`;
-
-  const dateFilter =
-    effectiveStart === effectiveEnd
-      ? `IS_SAME(CREATED_TIME(), "${effectiveStart}", "day")`
-      : `AND(IS_AFTER(CREATED_TIME(), DATEADD("${effectiveStart}", -1, "days")), IS_BEFORE(CREATED_TIME(), DATEADD("${effectiveEnd}", 1, "days")))`;
-
-  const citiesToFetch = cityParam
-    ? CITIES.filter((c) => c.label.toLowerCase() === cityParam.toLowerCase())
-    : [...CITIES];
-
-  const results: CityExport[] = [];
-
-  for (const cityGroup of citiesToFetch) {
-    const cityFilter = buildCityFilter(cityGroup);
-
-    const records = await client.listRecords("MEMBERS", {
-      filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", ${cityFilter}, ${dateFilter})`,
-      sort: [{ field: "Date joined", direction: "desc" }],
+    return NextResponse.json({
+      success: true,
+      startDate: effectiveStart,
+      endDate: effectiveEnd,
+      total: members.length,
+      members,
     });
-
-    // Build sublocation breakdown
-    const sublocationMap = new Map<string, string[]>();
-    const allEmails: string[] = [];
-    const allCustomers: CustomerRecord[] = [];
-
-    for (const r of records) {
-      const email = r.fields["email"] as string;
-      if (!email) continue;
-
-      allEmails.push(email);
-      const recordCity = r.fields["City"] as string;
-      const sublocation = matchSublocation(recordCity, cityGroup);
-
-      allCustomers.push({
-        name: (r.fields["First Name"] as string) || "",
-        surname: (r.fields["Last Name"] as string) || "",
-        email,
-        city: recordCity || "",
-        phone: (r.fields["phone number"] as string) || "",
-      });
-
-      const existing = sublocationMap.get(sublocation) ?? [];
-      sublocationMap.set(sublocation, [...existing, email]);
-    }
-
-    const breakdown: SublocationBreakdown[] = Array.from(sublocationMap.entries())
-      .map(([sublocation, emails]) => ({ sublocation, emails }))
-      .sort((a, b) => b.emails.length - a.emails.length);
-
-    const slug = cityGroup.label.toLowerCase().replace(/\s+/g, "-");
-    const filename = `${dateLabel}-${slug}-new-customers.csv`;
-    const csv = allEmails.join(",");
-
-    results.push({ city: cityGroup.label, filename, emails: allEmails, csv, customers: allCustomers, breakdown });
-  }
-
-  // Fetch "Other" members: get ALL active+paid for the date range, then exclude already-matched emails
-  if (!cityParam) {
-    const allRecords = await client.listRecords("MEMBERS", {
-      filterByFormula: `AND({Membership} = "Active", {Payment} = "Paid", ${dateFilter})`,
-      sort: [{ field: "Date joined", direction: "desc" }],
-    });
-
-    const matchedEmails = new Set(results.flatMap((r) => r.emails));
-
-    const otherEmails: string[] = [];
-    const otherCustomers: CustomerRecord[] = [];
-    const otherSublocationMap = new Map<string, string[]>();
-
-    for (const r of allRecords) {
-      const email = r.fields["email"] as string;
-      if (!email || matchedEmails.has(email)) continue;
-
-      const recordCity = (r.fields["City"] as string) || "Unknown";
-      otherEmails.push(email);
-      otherCustomers.push({
-        name: (r.fields["First Name"] as string) || "",
-        surname: (r.fields["Last Name"] as string) || "",
-        email,
-        city: recordCity,
-        phone: (r.fields["phone number"] as string) || "",
-      });
-
-      const existing = otherSublocationMap.get(recordCity) ?? [];
-      otherSublocationMap.set(recordCity, [...existing, email]);
-    }
-
-    const breakdown: SublocationBreakdown[] = Array.from(otherSublocationMap.entries())
-      .map(([sublocation, emails]) => ({ sublocation, emails }))
-      .sort((a, b) => b.emails.length - a.emails.length);
-
-    const filename = `${dateLabel}-other-new-customers.csv`;
-    const csv = otherEmails.join(",");
-    results.push({ city: "Other", filename, emails: otherEmails, csv, customers: otherCustomers, breakdown });
-  }
-
-  if (cityParam && format === "csv" && results.length === 1) {
-    const { filename, csv } = results[0];
-    return new NextResponse(csv, {
-      headers: {
-        "Content-Type": "text/csv",
-        "Content-Disposition": `attachment; filename="${filename}"`,
-      },
-    });
-  }
-
-  console.log("[API] cities returned:", results.map(r => `${r.city}(${r.emails.length})`).join(", "));
-
-  return NextResponse.json({
-    success: true,
-    startDate: effectiveStart,
-    endDate: effectiveEnd,
-    data: results.map(({ city, filename, emails, csv, customers, breakdown }) => ({
-      city,
-      filename,
-      count: emails.length,
-      emails,
-      csv,
-      customers,
-      breakdown,
-    })),
-  });
   } catch (err) {
     const ops = handleOpsApiError(err);
     if (ops.status === 401 || ops.status === 403) return ops;

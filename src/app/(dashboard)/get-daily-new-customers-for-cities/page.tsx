@@ -1,72 +1,86 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { Button, Card, DatePicker, Empty, Spin, Table, Tag, Typography, Space, message } from "antd";
-import { DownloadOutlined, CopyOutlined, SearchOutlined, ExportOutlined } from "@ant-design/icons";
+import { useCallback, useEffect, useState } from "react";
+import { Button, DatePicker, Empty, Space, Spin, Table, Typography, message } from "antd";
+import { DownloadOutlined, SearchOutlined } from "@ant-design/icons";
 import dayjs, { Dayjs } from "dayjs";
+import { OpsPageHeader } from "@/components/ops/OpsPageHeader";
+import { ErrorState } from "@/components/ops/ErrorState";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { RangePicker } = DatePicker;
 
-interface SublocationBreakdown {
-  sublocation: string;
-  emails: string[];
-}
-
-interface CustomerRecord {
+interface NewMemberRow {
+  id: string;
   name: string;
-  surname: string;
   email: string;
+  dateJoined: string;
+  country: string;
   city: string;
-  phone: string;
-}
-
-interface CityData {
-  city: string;
-  filename: string;
-  count: number;
-  emails: string[];
-  csv: string;
-  customers: CustomerRecord[];
-  breakdown: SublocationBreakdown[];
+  postCode: string;
+  stripeCustomerId: string;
 }
 
 interface ApiResponse {
   success: boolean;
+  error?: string;
   startDate: string;
   endDate: string;
-  data: CityData[];
+  total: number;
+  members: NewMemberRow[];
 }
 
-type RangePreset = {
-  label: string;
-  value: [Dayjs, Dayjs];
-};
+const PAGE_SIZE_OPTIONS = [30, 50, 100, 200];
 
-const presets: RangePreset[] = [
+const presets: Array<{ label: string; value: [Dayjs, Dayjs] }> = [
   { label: "Today", value: [dayjs(), dayjs()] },
   { label: "Last 3 Days", value: [dayjs().subtract(2, "day"), dayjs()] },
   { label: "Last 7 Days", value: [dayjs().subtract(6, "day"), dayjs()] },
   { label: "Last 10 Days", value: [dayjs().subtract(9, "day"), dayjs()] },
+  { label: "Last 30 Days", value: [dayjs().subtract(29, "day"), dayjs()] },
 ];
+
+function copyableCell(value: string | undefined) {
+  if (!value) return <Text type="secondary">—</Text>;
+  return (
+    <Text copyable style={{ wordBreak: "break-all" }}>
+      {value}
+    </Text>
+  );
+}
 
 export default function DailyNewCustomersPage() {
   const [loading, setLoading] = useState(true);
-  const [response, setResponse] = useState<ApiResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>([dayjs(), dayjs()]);
+  const [members, setMembers] = useState<NewMemberRow[]>([]);
+  const [rangeLabel, setRangeLabel] = useState<string>("");
+  const [dateRange, setDateRange] = useState<[Dayjs, Dayjs]>([
+    dayjs().subtract(6, "day"),
+    dayjs(),
+  ]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(30);
 
   const fetchData = useCallback(async (range: [Dayjs, Dayjs]) => {
     setLoading(true);
     setError(null);
     try {
-      const startDate = range[0].format("YYYY-MM-DD");
-      const endDate = range[1].format("YYYY-MM-DD");
-      const params = new URLSearchParams({ startDate, endDate });
+      const params = new URLSearchParams({
+        startDate: range[0].format("YYYY-MM-DD"),
+        endDate: range[1].format("YYYY-MM-DD"),
+      });
       const res = await fetch(`/api/get-daily-new-customers-for-cities?${params}`);
-      if (!res.ok) throw new Error(`API error: ${res.status}`);
-      const data: ApiResponse = await res.json();
-      setResponse(data);
+      const json: ApiResponse = await res.json();
+      if (!res.ok || json.success === false) {
+        throw new Error(json.error || `API error: ${res.status}`);
+      }
+      setMembers(json.members || []);
+      setPage(1);
+      setRangeLabel(
+        json.startDate === json.endDate
+          ? json.startDate
+          : `${json.startDate} to ${json.endDate}`
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch");
     } finally {
@@ -76,7 +90,8 @@ export default function DailyNewCustomersPage() {
 
   useEffect(() => {
     fetchData(dateRange);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function handleDateChange(dates: [Dayjs | null, Dayjs | null] | null) {
     if (dates && dates[0] && dates[1]) {
@@ -84,188 +99,130 @@ export default function DailyNewCustomersPage() {
     }
   }
 
-  function downloadCsv(item: CityData) {
-    const blob = new Blob([item.csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = item.filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  function copyEmails(item: CityData) {
-    navigator.clipboard.writeText(item.csv);
-    message.success(`Copied ${item.count} email(s) for ${item.city}`);
-  }
-
-  function exportAllCustomersCsv() {
-    if (!response?.data) return;
-
-    const allCustomers = response.data.flatMap((city) => city.customers ?? []);
-    if (allCustomers.length === 0) {
-      message.warning("No customers to export");
+  function exportCsv() {
+    if (members.length === 0) {
+      message.warning("No members to export");
       return;
     }
-
+    const start = (page - 1) * pageSize;
+    const slice = members.slice(start, start + pageSize);
     const escapeField = (val: string) => {
       if (val.includes(",") || val.includes('"') || val.includes("\n")) {
         return `"${val.replace(/"/g, '""')}"`;
       }
       return val;
     };
-
-    const header = "Name,Surname,Email,City,Phone";
-    const rows = allCustomers.map((c) =>
-      [c.name, c.surname, c.email, c.city, c.phone].map(escapeField).join(",")
+    const header = "Name,Email,Date joined,Country,City,Post code,Stripe Customer ID";
+    const rows = slice.map((m) =>
+      [m.name, m.email, m.dateJoined, m.country, m.city, m.postCode, m.stripeCustomerId]
+        .map(escapeField)
+        .join(",")
     );
     const csvContent = [header, ...rows].join("\n");
-
-    const dateLabel =
-      response.startDate === response.endDate
-        ? response.startDate.replace(/-/g, "")
-        : `${response.startDate.replace(/-/g, "")}-${response.endDate.replace(/-/g, "")}`;
-
     const blob = new Blob([csvContent], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${dateLabel}-all-cities-new-customers.csv`;
+    a.download = `new-members-${rangeLabel.replace(/\s+/g, "-")}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+    message.success("CSV exported (current page)");
   }
 
-  const totalNew = response?.data.reduce((sum, d) => sum + d.count, 0) ?? 0;
-
-  const dateLabel =
-    response?.startDate === response?.endDate
-      ? response?.startDate
-      : `${response?.startDate} to ${response?.endDate}`;
-
   const columns = [
+    { title: "Name", dataIndex: "name", key: "name", width: 180, render: copyableCell },
+    { title: "Email", dataIndex: "email", key: "email", width: 240, render: copyableCell },
     {
-      title: "City",
-      dataIndex: "city",
-      key: "city",
-      render: (city: string) => <Text strong>{city}</Text>,
+      title: "Date joined",
+      dataIndex: "dateJoined",
+      key: "dateJoined",
+      width: 130,
+      render: copyableCell,
+    },
+    { title: "Country", dataIndex: "country", key: "country", width: 130, render: copyableCell },
+    { title: "City", dataIndex: "city", key: "city", width: 150, render: copyableCell },
+    {
+      title: "Post code",
+      dataIndex: "postCode",
+      key: "postCode",
+      width: 120,
+      render: copyableCell,
     },
     {
-      title: "New Customers",
-      dataIndex: "count",
-      key: "count",
-      render: (count: number) =>
-        count > 0 ? <Tag color="green">{count}</Tag> : <Tag>{count}</Tag>,
-    },
-    {
-      title: "File",
-      dataIndex: "filename",
-      key: "filename",
-      render: (filename: string) => <Text code>{filename}</Text>,
-    },
-    {
-      title: "Actions",
-      key: "actions",
-      render: (_: unknown, record: CityData) => (
-        <Space>
-          <Button
-            size="small"
-            icon={<DownloadOutlined />}
-            disabled={record.count === 0}
-            onClick={() => downloadCsv(record)}
-          >
-            CSV
-          </Button>
-          <Button
-            size="small"
-            icon={<CopyOutlined />}
-            disabled={record.count === 0}
-            onClick={() => copyEmails(record)}
-          >
-            Copy
-          </Button>
-        </Space>
-      ),
+      title: "Stripe Customer ID",
+      dataIndex: "stripeCustomerId",
+      key: "stripeCustomerId",
+      width: 200,
+      render: copyableCell,
     },
   ];
 
   return (
-    <div style={{ maxWidth: 1100 }}>
-      <style>{`.other-row td { background: #fff2e8 !important; } .other-row:hover td { background: #ffe7d6 !important; } .other-row td .ant-typography { color: #d4380d !important; }`}</style>
-      <Space orientation="vertical" size="middle" style={{ width: "100%", marginBottom: 16 }}>
-        <Space style={{ width: "100%", justifyContent: "space-between" }}>
-          <div>
-            <Title level={3} style={{ margin: 0 }}>
-              Get New Customers by City
-            </Title>
-            <Text type="secondary">
-              Pick start and end date to get Get New Members in target cities
-            </Text>
-          </div>
-        </Space>
+    <div style={{ maxWidth: 1400, margin: "0 auto" }}>
+      <OpsPageHeader
+        title="New Members"
+        description="New active members (current service access) ordered by Date joined, newest first."
+        breadcrumbs={[
+          { title: "Members", href: "/members" },
+          { title: "New Members" },
+        ]}
+        onRefresh={() => fetchData(dateRange)}
+        refreshing={loading}
+        extra={
+          <Button
+            icon={<DownloadOutlined />}
+            onClick={exportCsv}
+            disabled={loading || members.length === 0}
+          >
+            Export CSV
+          </Button>
+        }
+      />
 
-        <Space>
-          <RangePicker
-            value={dateRange}
-            onChange={handleDateChange}
-            presets={presets}
-            disabledDate={(current) => current && current.isAfter(dayjs(), "day")}
-            allowClear={false}
-          />
-          <Button
-            type="primary"
-            icon={<SearchOutlined />}
-            onClick={() => fetchData(dateRange)}
-            loading={loading}
-          >
-            Get New Customers
-          </Button>
-          <Button
-            icon={<ExportOutlined />}
-            onClick={exportAllCustomersCsv}
-            disabled={loading || !response?.data || totalNew === 0}
-          >
-            Export New Cities Customers
-          </Button>
-        </Space>
+      <Space wrap style={{ marginBottom: 12 }}>
+        <RangePicker
+          value={dateRange}
+          onChange={handleDateChange}
+          presets={presets}
+          disabledDate={(current) => current && current.isAfter(dayjs(), "day")}
+          allowClear={false}
+        />
+        <Button
+          type="primary"
+          icon={<SearchOutlined />}
+          onClick={() => fetchData(dateRange)}
+          loading={loading}
+        >
+          Get New Members
+        </Button>
+        <Text type="secondary">{members.length} member(s)</Text>
       </Space>
 
-      {error && (
-        <Card style={{ marginBottom: 16 }}>
-          <Text type="danger">{error}</Text>
-        </Card>
-      )}
+      {error && <ErrorState message={error} onRetry={() => fetchData(dateRange)} />}
 
       {loading ? (
         <div style={{ textAlign: "center", padding: 48 }}>
           <Spin size="large" />
         </div>
-      ) : response?.data.length === 0 ? (
-        <Empty description="No data" />
+      ) : members.length === 0 && !error ? (
+        <Empty description="No new members in this range" />
       ) : (
         <Table
-          dataSource={response?.data.filter((d) => d.count > 0)}
+          size="small"
+          rowKey={(r) => r.id || r.email}
+          dataSource={members}
           columns={columns}
-          rowKey="city"
-          pagination={false}
-          size="middle"
-          rowClassName={(record) => record.city === "Other" ? "other-row" : ""}
-          expandable={{
-            expandedRowRender: (record: CityData) => (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {(record.breakdown ?? []).map((sub) => (
-                  <div key={sub.sublocation}>
-                    <Text strong>{sub.sublocation}</Text>
-                    <Tag style={{ marginLeft: 8 }}>{sub.emails.length}</Tag>
-                    <div style={{ marginTop: 4 }}>
-                      <Text type="secondary" style={{ wordBreak: "break-all" }}>
-                        {sub.emails.join(", ")}
-                      </Text>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ),
-            rowExpandable: (record: CityData) => record.count > 0,
+          scroll={{ x: 1150 }}
+          pagination={{
+            current: page,
+            pageSize,
+            showSizeChanger: true,
+            pageSizeOptions: PAGE_SIZE_OPTIONS.map(String),
+            showTotal: (t, range) => `${range[0]}–${range[1]} of ${t} members`,
+            onChange: (p, ps) => {
+              setPage(p);
+              setPageSize(ps || pageSize);
+            },
           }}
         />
       )}
