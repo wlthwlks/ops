@@ -10,7 +10,7 @@ import {
   syncKlaviyoMembershipLists,
   mergePhoneNumber,
 } from "@/lib/billing/klaviyo-membership-sync";
-import { MEMBERS_TABLE, CITIES_TABLE } from "@/lib/ops/airtable-fields";
+import { MEMBERS_TABLE, CITIES_TABLE, COUNTRIES_TABLE } from "@/lib/ops/airtable-fields";
 
 const periodEnd = Math.floor(new Date("2026-09-01T00:00:00.000Z").getTime() / 1000);
 
@@ -60,6 +60,9 @@ function mockAirtable(records: AirtableRecord[]) {
     const f = o?.filterByFormula || "";
     if (table === CITIES_TABLE) {
       return records.filter((r) => r.fields.City || r.fields.Country);
+    }
+    if (table === COUNTRIES_TABLE) {
+      return records.filter((r) => r.fields.Name);
     }
     const emails = [...f.matchAll(/LOWER\(\{email\}\) = "([^"]+)"/g)].map((m) => m[1].toLowerCase());
     if (emails.length > 0) {
@@ -237,17 +240,38 @@ describe("fetchMemberEnrichment", () => {
 });
 
 describe("fetchCityCountries", () => {
-  it("maps city record ids to city + country", async () => {
+  it("maps city record ids to city name + resolved country name (Country is a linked field)", async () => {
     const airtable = mockAirtable([
-      { id: "recCityLA", fields: { City: "Los Angeles", Country: "United States" } },
-      { id: "recCityLON", fields: { City: "London", Country: "United Kingdom" } },
+      { id: "recCountryUS", fields: { Name: "United States" } },
+      { id: "recCountryUK", fields: { Name: "United Kingdom" } },
+      { id: "recCityLA", fields: { City: "Los Angeles", Country: ["recCountryUS"] } },
+      { id: "recCityLON", fields: { City: "London", Country: ["recCountryUK"] } },
     ]);
     const map = await fetchCityCountries(airtable);
     expect(map.get("recCityLA")).toEqual({ city: "Los Angeles", country: "United States" });
     expect(map.get("recCityLON")).toEqual({ city: "London", country: "United Kingdom" });
+    expect(airtable.listRecords).toHaveBeenCalledWith(COUNTRIES_TABLE, { fields: ["Name"] });
     expect(airtable.listRecords).toHaveBeenCalledWith(CITIES_TABLE, {
       fields: ["City", "Country"],
     });
+  });
+
+  it("leaves country empty when the linked country record is missing", async () => {
+    const airtable = mockAirtable([
+      { id: "recCountryUS", fields: { Name: "United States" } },
+      { id: "recCityLA", fields: { City: "Los Angeles", Country: ["recDeletedCountry"] } },
+    ]);
+    const map = await fetchCityCountries(airtable);
+    expect(map.get("recCityLA")).toEqual({ city: "Los Angeles", country: "" });
+  });
+
+  it("never returns Airtable record ids as city or country values", async () => {
+    const airtable = mockAirtable([
+      { id: "recCountryUS", fields: { Name: "recXyzDeadBeef012" } },
+      { id: "recCityLA", fields: { City: "recAbc1234567890", Country: ["recCountryUS"] } },
+    ]);
+    const map = await fetchCityCountries(airtable);
+    expect(map.get("recCityLA")).toEqual({ city: "", country: "" });
   });
 });
 
@@ -325,6 +349,69 @@ describe("buildKlaviyoProfiles", () => {
     expect(result.activeEmails).toEqual([]);
     expect(result.profiles).toEqual([]);
     expect(result.skippedNoEmail).toBe(1);
+  });
+
+  it("blanks Airtable record ids in location columns", () => {
+    const dirtyEnrichment = new Map([
+      [
+        "rec@x.com",
+        {
+          firstName: "Rex",
+          lastName: "Id",
+          phone: "",
+          zip: "90401",
+          city: "recCity1111111111",
+          cityLinkId: "recCityLON",
+          planPriceIds: "price_mem",
+          serviceAccessUntil: "",
+          cancellationEffectiveAt: "",
+        },
+      ],
+    ]);
+    const dirtyCities = new Map([
+      ["recCityLON", { city: "London", country: "reccnnjiVkL28NBgV" }],
+    ]);
+    const result = buildKlaviyoProfiles({
+      active: [
+        membership({ customer: { id: "cus_1", email: "rec@x.com" } as never }),
+      ],
+      churned: [],
+      enrichmentByEmail: dirtyEnrichment,
+      citiesById: dirtyCities,
+    });
+    const profile = result.profiles[0];
+    expect(profile.city).toBe("London");
+    expect(profile.country).toBe("");
+  });
+
+  it("falls back to member City text and never leaks record ids", () => {
+    const noLinkEnrichment = new Map([
+      [
+        "legacy@x.com",
+        {
+          firstName: "Legacy",
+          lastName: "User",
+          phone: "",
+          zip: "",
+          city: "recCityLegacy12345",
+          cityLinkId: "recMissingCity",
+          planPriceIds: "",
+          serviceAccessUntil: "",
+          cancellationEffectiveAt: "",
+        },
+      ],
+    ]);
+    const result = buildKlaviyoProfiles({
+      active: [
+        membership({ customer: { id: "cus_1", email: "legacy@x.com" } as never }),
+      ],
+      churned: [],
+      enrichmentByEmail: noLinkEnrichment,
+      citiesById: new Map(),
+    });
+    const profile = result.profiles[0];
+    expect(profile.city).toBe("");
+    expect(profile.country).toBe("");
   });
 });
 

@@ -35,7 +35,7 @@ import {
   PRIMARY_EMAIL_FIELD,
   extractStripeCustomerEmail,
 } from "@/lib/billing/webhook-invoice-sync";
-import { CITIES_TABLE } from "@/lib/ops/airtable-fields";
+import { CITIES_TABLE, COUNTRIES_TABLE } from "@/lib/ops/airtable-fields";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type KlaviyoStripeClient = any;
@@ -77,6 +77,14 @@ function firstLinkId(value: unknown): string | null {
   }
   if (typeof value === "string" && value.startsWith("rec")) return value;
   return null;
+}
+
+const AIRTABLE_RECORD_ID_RE = /^rec[a-zA-Z0-9]{10,}$/;
+
+/** Blank any Airtable record id so it can never reach a Klaviyo column. */
+function stripAirtableRecordId(value: string): string {
+  const v = (value || "").trim();
+  return AIRTABLE_RECORD_ID_RE.test(v) ? "" : v;
 }
 
 /** Best-effort E.164 merge of the validated signup phone parts. */
@@ -171,18 +179,32 @@ export async function fetchMemberEnrichment(
   return map;
 }
 
-/** ALL CITIES record id → { city, country } map for city-relation resolution. */
+/**
+ * ALL CITIES record id → { city, country } map for city-relation resolution.
+ * CITIES.Country is a linked field to COUNTRIES — the API returns record ids,
+ * so the country is resolved to its COUNTRIES.Name label here. Anything that
+ * still looks like a record id is blanked before it can reach Klaviyo.
+ */
 export async function fetchCityCountries(
   airtable: AirtableClient
 ): Promise<Map<string, { city: string; country: string }>> {
-  const records = await airtable.listRecords(CITIES_TABLE, {
-    fields: ["City", "Country"],
-  });
+  const [countryRecs, cityRecs] = await Promise.all([
+    airtable.listRecords(COUNTRIES_TABLE, { fields: ["Name"] }),
+    airtable.listRecords(CITIES_TABLE, { fields: ["City", "Country"] }),
+  ]);
+
+  const countryNamesById = new Map<string, string>();
+  for (const rec of countryRecs) {
+    const name = stripAirtableRecordId(fieldStr(rec.fields, "Name"));
+    if (name) countryNamesById.set(rec.id, name);
+  }
+
   const map = new Map<string, { city: string; country: string }>();
-  for (const rec of records) {
+  for (const rec of cityRecs) {
+    const countryId = firstLinkId(rec.fields["Country"]) ?? "";
     map.set(rec.id, {
-      city: fieldStr(rec.fields, "City"),
-      country: fieldStr(rec.fields, "Country"),
+      city: stripAirtableRecordId(fieldStr(rec.fields, "City")),
+      country: countryId ? (countryNamesById.get(countryId) ?? "") : "",
     });
   }
   return map;
@@ -203,11 +225,11 @@ function resolveLocation(
   const linked = enrichment.cityLinkId ? citiesById.get(enrichment.cityLinkId) : undefined;
   if (linked) {
     return {
-      city: linked.city || enrichment.city,
-      country: linked.country,
+      city: stripAirtableRecordId(linked.city) || stripAirtableRecordId(enrichment.city),
+      country: stripAirtableRecordId(linked.country),
     };
   }
-  return { city: enrichment.city, country: "" };
+  return { city: stripAirtableRecordId(enrichment.city), country: "" };
 }
 
 function buildProfilesFor(
