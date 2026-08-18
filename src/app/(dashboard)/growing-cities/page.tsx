@@ -117,7 +117,7 @@ export default function GrowingCitiesPage() {
               See Growing Cities
             </Title>
             <Text type="secondary">
-              Track which cities are growing fastest across listed and unlisted cities
+              Track which cities are growing fastest — only members with current service access
             </Text>
           </div>
           <Button
