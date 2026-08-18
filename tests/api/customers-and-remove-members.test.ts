@@ -55,7 +55,7 @@ describe("GET /api/get-daily-new-customers-for-cities", () => {
   it("response JSON has required top-level fields: success, startDate, endDate, total, members", async () => {
     vi.mocked(createAirtableClient).mockReturnValue({
       listRecords: vi.fn().mockResolvedValue([SAMPLE_RECORD]),
-    } as any);
+    } as unknown as ReturnType<typeof createAirtableClient>);
 
     const res = await getCustomers(
       req(
@@ -74,7 +74,7 @@ describe("GET /api/get-daily-new-customers-for-cities", () => {
   it("each member has the contract fields: id, name, email, dateJoined, country, city, postCode, stripeCustomerId", async () => {
     vi.mocked(createAirtableClient).mockReturnValue({
       listRecords: vi.fn().mockResolvedValue([SAMPLE_RECORD]),
-    } as any);
+    } as unknown as ReturnType<typeof createAirtableClient>);
 
     const res = await getCustomers(
       req(
@@ -111,7 +111,7 @@ describe("GET /api/get-daily-new-customers-for-cities", () => {
           },
         },
       ]),
-    } as any);
+    } as unknown as ReturnType<typeof createAirtableClient>);
 
     const res = await getCustomers(
       req(
@@ -140,7 +140,7 @@ describe("GET /api/get-daily-new-customers-for-cities", () => {
           },
         },
       ]),
-    } as any);
+    } as unknown as ReturnType<typeof createAirtableClient>);
 
     const res = await getCustomers(
       req(
