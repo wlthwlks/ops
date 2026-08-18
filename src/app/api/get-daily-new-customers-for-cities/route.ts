@@ -5,6 +5,7 @@ import { handleOpsApiError } from "@/lib/ops/api-response";
 import {
   CITIES_TABLE,
   CITY_FIELDS,
+  COUNTRIES_TABLE,
   MEMBER_FIELDS,
   MEMBERS_TABLE,
   toAirtableSchemaError,
@@ -99,14 +100,36 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const cityRecords = await client.listRecords(CITIES_TABLE, {
-      fields: [CITY_FIELDS.city, CITY_FIELDS.country],
-    });
+    const [cityRecords, countryRecords] = await Promise.all([
+      client.listRecords(CITIES_TABLE, {
+        fields: [CITY_FIELDS.city, CITY_FIELDS.country],
+      }),
+      client.listRecords(COUNTRIES_TABLE, { fields: ["Name"] }),
+    ]);
+
+    const countryNamesById = new Map<string, string>();
+    for (const c of countryRecords) {
+      const name = fieldStr(c.fields, "Name");
+      if (name) countryNamesById.set(c.id, name);
+    }
+
+    // CITIES.Country is a linked field to COUNTRIES — the API returns record ids.
+    function resolveCountry(fields: Record<string, unknown>): string {
+      const ids = linkedRecordIds(fields, CITY_FIELDS.country);
+      for (const id of ids) {
+        const name = countryNamesById.get(id);
+        if (name) return name;
+      }
+      const raw = fieldStr(fields, CITY_FIELDS.country);
+      if (raw && !raw.startsWith("rec")) return raw;
+      return "";
+    }
+
     const citiesById = new Map(cityRecords.map((c) => [c.id, c]));
     const countryByCityName = new Map<string, string>();
     for (const c of cityRecords) {
       const key = normalizeCityKey(fieldStr(c.fields, CITY_FIELDS.city));
-      const country = fieldStr(c.fields, CITY_FIELDS.country);
+      const country = resolveCountry(c.fields);
       if (key && country && !countryByCityName.has(key)) {
         countryByCityName.set(key, country);
       }
@@ -132,7 +155,7 @@ export async function GET(request: NextRequest) {
         if (!rec) continue;
         const name = fieldStr(rec.fields, CITY_FIELDS.city);
         if (name) city = name;
-        const ct = fieldStr(rec.fields, CITY_FIELDS.country);
+        const ct = resolveCountry(rec.fields);
         if (ct) country = ct;
         break;
       }

@@ -154,6 +154,40 @@ describe("GET /api/get-daily-new-customers-for-cities", () => {
       "alice@test.com",
     ]);
   });
+
+  it("resolves linked Country record ids to COUNTRIES.Name labels", async () => {
+    vi.mocked(createAirtableClient).mockReturnValue({
+      listRecords: vi.fn().mockImplementation((table: string) => {
+        if (table === "ALL CITIES") {
+          return Promise.resolve([
+            {
+              id: "city_1",
+              fields: { City: "London", Country: ["rec_country_uk"] },
+            },
+          ]);
+        }
+        if (table === "COUNTRIES") {
+          return Promise.resolve([
+            { id: "rec_country_uk", fields: { Name: "United Kingdom" } },
+          ]);
+        }
+        return Promise.resolve([
+          {
+            ...SAMPLE_RECORD,
+            fields: { ...SAMPLE_RECORD.fields, "City relation": ["city_1"] },
+          },
+        ]);
+      }),
+    } as unknown as ReturnType<typeof createAirtableClient>);
+
+    const res = await getCustomers(
+      req(
+        "http://localhost/api/get-daily-new-customers-for-cities?startDate=2026-01-01&endDate=2026-01-01"
+      )
+    );
+    const body = await res.json();
+    expect(body.members[0].country).toBe("United Kingdom");
+  });
 });
 
 describe("GET /api/remove-members (deprecated)", () => {

@@ -49,6 +49,11 @@ function copyableCell(value: string | undefined) {
   );
 }
 
+function plainCell(value: string | undefined) {
+  if (!value) return <Text type="secondary">—</Text>;
+  return <Text style={{ wordBreak: "break-all" }}>{value}</Text>;
+}
+
 export default function DailyNewCustomersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -130,23 +135,23 @@ export default function DailyNewCustomersPage() {
   }
 
   const columns = [
-    { title: "Name", dataIndex: "name", key: "name", width: 180, render: copyableCell },
+    { title: "Name", dataIndex: "name", key: "name", width: 180, render: plainCell },
     { title: "Email", dataIndex: "email", key: "email", width: 240, render: copyableCell },
     {
       title: "Date joined",
       dataIndex: "dateJoined",
       key: "dateJoined",
       width: 130,
-      render: copyableCell,
+      render: plainCell,
     },
-    { title: "Country", dataIndex: "country", key: "country", width: 130, render: copyableCell },
-    { title: "City", dataIndex: "city", key: "city", width: 150, render: copyableCell },
+    { title: "Country", dataIndex: "country", key: "country", width: 130, render: plainCell },
+    { title: "City", dataIndex: "city", key: "city", width: 150, render: plainCell },
     {
       title: "Post code",
       dataIndex: "postCode",
       key: "postCode",
       width: 120,
-      render: copyableCell,
+      render: plainCell,
     },
     {
       title: "Stripe Customer ID",
