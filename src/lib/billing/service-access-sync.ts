@@ -530,6 +530,25 @@ export async function updateServiceAccessUntilForCustomer(input: {
       billingValueChanged(key, value, rec.fields[key])
     );
 
+    if (billingFieldsChanged) {
+      const changedFields: Record<string, { from: unknown; to: unknown }> = {};
+      for (const [key, value] of Object.entries(fields)) {
+        if (String(rec.fields[key] ?? "") !== String(value ?? "")) {
+          changedFields[key] = { from: rec.fields[key] ?? null, to: value ?? null };
+        }
+      }
+      console.error(
+        JSON.stringify({
+          event: "billing_write",
+          source: "service_access_sync",
+          stripeCustomerId,
+          stripeInvoiceId,
+          airtableRecordId: rec.id,
+          changed: changedFields,
+        })
+      );
+    }
+
     if (comparison.invalidCurrent) {
       results.push({
         airtableRecordId: rec.id,

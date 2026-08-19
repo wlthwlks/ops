@@ -917,6 +917,37 @@ export async function updateMemberBilling(
     );
   }
   const existing = matches[0];
+  const billingFields = [
+    "Membership",
+    "Payment",
+    "Service access until",
+    "Stripe Price ID",
+    "Stripe Subscription ID",
+    "Stripe subscription status",
+    "Cancel at period end",
+    "Cancellation effective at",
+    "Memberstack Plan ID",
+  ];
+  const changed: Record<string, { from: unknown; to: unknown }> = {};
+  for (const f of billingFields) {
+    if (Object.prototype.hasOwnProperty.call(input.patch, f)) {
+      const to = input.patch[f];
+      if (String(existing.fields[f] ?? "") !== String(to ?? "")) {
+        changed[f] = { from: existing.fields[f] ?? null, to: to ?? null };
+      }
+    }
+  }
+  if (Object.keys(changed).length > 0) {
+    console.error(
+      JSON.stringify({
+        event: "billing_write",
+        source: "update_member_billing",
+        stripeCustomerId: input.stripeCustomerId,
+        airtableRecordId: existing.id,
+        changed,
+      })
+    );
+  }
   if (!canWriteBillingToAirtable()) {
     return { record: existing, status: "shadowed" };
   }
@@ -1005,6 +1036,39 @@ export async function applyTrustedPaymentByMemberstackId(
   // members (blank legacy or COMPLETE) must never be reset into the signup form.
   if (isInProgressOnboarding(currentStatus)) {
     patch[MEMBER_FIELDS.onboardingStatus] = "PAYMENT_CONFIRMED";
+  }
+
+  const billingFields = [
+    "Membership",
+    "Payment",
+    "Service access until",
+    "Stripe Price ID",
+    "Stripe Subscription ID",
+    "Stripe subscription status",
+    "Cancel at period end",
+    "Cancellation effective at",
+    "Memberstack Plan ID",
+  ];
+  const changed: Record<string, { from: unknown; to: unknown }> = {};
+  for (const f of billingFields) {
+    if (Object.prototype.hasOwnProperty.call(patch, f)) {
+      const to = patch[f];
+      if (String(existing.fields[f] ?? "") !== String(to ?? "")) {
+        changed[f] = { from: existing.fields[f] ?? null, to: to ?? null };
+      }
+    }
+  }
+  if (Object.keys(changed).length > 0) {
+    console.error(
+      JSON.stringify({
+        event: "billing_write",
+        source: "apply_trusted_payment",
+        memberstackId: msId,
+        stripeCustomerId: cus,
+        airtableRecordId: existing.id,
+        changed,
+      })
+    );
   }
 
   if (!canWriteBillingToAirtable()) {
