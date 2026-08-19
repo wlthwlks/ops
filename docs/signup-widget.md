@@ -28,6 +28,11 @@ Embed: `#wlth-signup-root` + `public/widgets/signup/v1/signup.js`.
 - **Client never sets Payment=Paid or Membership=Active**
 - Billing authority: signed Stripe `invoice.paid` (qualifying price) or Memberstack plan webhook
 - Checkout cancel / close restores Payment without the confirmed animation
+- **Slack notification**: on the first successful payment of a mid-signup member
+  (`confirm-checkout` write, previous `Payment` ≠ Paid), a message is posted to
+  the `ww-new-members` channel on wlthwlks.slack.com via a dedicated bot
+  (`SLACK_WW_BOT_TOKEN` / `SLACK_WW_NEW_MEMBERS_CHANNEL`), gated by
+  `BILLING_ALERTS_TO_SLACK_ENABLED`. Failures never block checkout confirmation.
 
 ## Location
 

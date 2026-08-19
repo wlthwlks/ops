@@ -35,6 +35,7 @@ import {
 import { getMemberstackPlanIdForStripePrice } from "@/lib/billing/catalog";
 import { FormsError } from "@/lib/forms/errors";
 import { isInProgressOnboarding } from "@/lib/forms/onboarding/onboarding-status";
+import { notifySignupPaidMemberOnSlack } from "@/lib/forms/billing/slack-paid-notify";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -912,6 +913,23 @@ export async function confirmCheckoutForMember(input: {
     stripeCustomerId,
     patch,
   });
+
+  // First-time signup-widget payment → notify the dedicated Slack workspace.
+  // Mid-signup only (in-progress onboarding), and only when the member was
+  // not already Paid (renewal / revived access must not re-notify).
+  const previousPayment = String(
+    existingRows[0]?.fields[MEMBER_FIELDS.payment] ?? ""
+  )
+    .trim()
+    .toLowerCase();
+  if (
+    result.status === "updated" &&
+    result.record &&
+    previousPayment !== "paid" &&
+    isInProgressOnboarding(currentOnboardingStatus)
+  ) {
+    await notifySignupPaidMemberOnSlack(result.record);
+  }
 
   return {
     paymentConfirmed: result.status === "updated" || result.status === "shadowed",
