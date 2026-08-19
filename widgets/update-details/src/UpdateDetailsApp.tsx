@@ -928,7 +928,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
             <p className="wlth-muted" style={{ marginBottom: 12 }}>
               {billing.hasServiceAccess
                 ? "Your payment needs attention but you still have access. Update your card below or try your payment again."
-                : "No worries — you can try your payment again. You&apos;ll review the plan and price on Stripe before you&apos;re charged."}
+                : "No worries — you can try your payment again. You'll review the plan and price on Stripe before you're charged."}
             </p>
             {promoBlock}
             <div className="wlth-actions">
