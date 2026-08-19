@@ -1582,7 +1582,9 @@ export function SignupApp(props: { apiBase: string }) {
             />
 
             <div className="wlth-promo">
-              <label htmlFor="wlth-promo-code">Promo code (optional)</label>
+              <label htmlFor="wlth-promo-code">
+                Have a trial code? Paste it here — it changes your price
+              </label>
               <div className="wlth-promo-row">
                 <input
                   id="wlth-promo-code"

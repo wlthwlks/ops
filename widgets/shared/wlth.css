@@ -356,14 +356,18 @@
 .wlth-widget .wlth-promo {
   margin: 14px 0 18px;
   text-align: left;
+  padding: 14px 16px;
+  border: 1.5px solid oklch(0.52 0.19 26 / 45%);
+  border-radius: var(--wlth-radius-sm);
+  background: oklch(0.52 0.19 26 / 9%);
 }
 
 .wlth-widget .wlth-promo label {
   display: block;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--wlth-text);
-  margin-bottom: 6px;
+  font-size: 15px;
+  font-weight: 700;
+  color: oklch(0.74 0.15 26);
+  margin-bottom: 8px;
 }
 
 .wlth-widget .wlth-promo-row {
@@ -375,9 +379,9 @@
 .wlth-widget .wlth-promo-row input {
   flex: 1;
   min-width: 0;
-  padding: 10px 12px;
-  font-size: 14px;
-  border: 1px solid var(--wlth-border);
+  padding: 12px 14px;
+  font-size: 15px;
+  border: 1px solid oklch(1 0 0 / 22%);
   border-radius: var(--wlth-radius-sm);
   background: var(--wlth-surface);
   color: var(--wlth-text);
@@ -386,13 +390,13 @@
 
 .wlth-widget .wlth-promo-row input:focus {
   outline: none;
-  border-color: var(--wlth-accent, #0f766e);
+  border-color: oklch(0.52 0.19 26);
 }
 
 .wlth-widget .wlth-promo-ok {
-  margin: 8px 0 0;
+  margin: 10px 0 0;
   font-size: 13px;
-  color: var(--wlth-text);
+  color: var(--wlth-success);
 }
 
 .wlth-widget .wlth-promo-err {
