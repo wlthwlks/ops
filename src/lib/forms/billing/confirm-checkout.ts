@@ -701,9 +701,11 @@ export async function confirmCheckoutForMember(input: {
         });
         // Mid-signup: any live sub is the first membership payment.
         // Established: only recently created subs (resubscribe charge).
+        // past_due / unpaid / incomplete are NOT payment evidence — a failed
+        // payment must never mark the member Paid/Active.
         const pick =
           subs.data.find((s) => {
-            if (!["active", "trialing", "past_due"].includes(s.status)) return false;
+            if (!["active", "trialing"].includes(s.status)) return false;
             if (midSignupPayment) return true;
             return isRecentStripeTimestamp(s.created);
           }) || null;
@@ -718,7 +720,7 @@ export async function confirmCheckoutForMember(input: {
             nativeAllow,
             previewCommerceMode,
           });
-          if (gate.ok && ["active", "trialing", "past_due"].includes(pick.status)) {
+          if (gate.ok && ["active", "trialing"].includes(pick.status)) {
             verifiedPaid = true;
             priceIds = dedupePriceIds([...priceIds, ...gate.qualifying]);
             qualificationMode = gate.mode;
@@ -748,7 +750,8 @@ export async function confirmCheckoutForMember(input: {
         if (gate.ok) {
           priceIds = dedupePriceIds([...priceIds, ...gate.qualifying]);
           qualificationMode = qualificationMode || gate.mode;
-          if (["active", "trialing", "past_due"].includes(live.status)) {
+          // Only paid/trialing subs are payment evidence — never past_due.
+          if (["active", "trialing"].includes(live.status)) {
             verifiedPaid = true;
           }
         }

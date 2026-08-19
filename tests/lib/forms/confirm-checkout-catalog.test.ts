@@ -226,6 +226,64 @@ describe("confirmCheckoutForMember with billing catalog", () => {
     expect(patch[MEMBER_FIELDS.memberstackPlanId]).toBe("prc_default_87");
   });
 
+  it("past_due subscription never marks paid — no Membership/Service access writes (mid-signup)", async () => {
+    const { confirmCheckoutForMember } = await import(
+      "@/lib/forms/billing/confirm-checkout"
+    );
+    findByMs.mockResolvedValue([
+      {
+        id: "rec1",
+        fields: {
+          [MEMBER_FIELDS.stripeCustomerId]: "cus_x",
+          [MEMBER_FIELDS.onboardingStatus]: "PAYMENT_PENDING",
+        },
+      },
+    ]);
+    listSubscriptions.mockResolvedValue({
+      data: [sub("past_due", "price_default_87", PERIOD_END)],
+    });
+    retrieveSubscription.mockResolvedValue(
+      sub("past_due", "price_default_87", PERIOD_END)
+    );
+
+    const r = await confirmCheckoutForMember({
+      memberstackId: "mem_1",
+      memberEmail: "a@b.com",
+    });
+
+    expect(r.paymentConfirmed).toBe(false);
+    expect(applyTrusted).not.toHaveBeenCalled();
+  });
+
+  it("recent past_due subscription never marks paid for established members", async () => {
+    const { confirmCheckoutForMember } = await import(
+      "@/lib/forms/billing/confirm-checkout"
+    );
+    findByMs.mockResolvedValue([
+      {
+        id: "rec1",
+        fields: {
+          [MEMBER_FIELDS.stripeCustomerId]: "cus_x",
+          [MEMBER_FIELDS.onboardingStatus]: "COMPLETE",
+        },
+      },
+    ]);
+    listSubscriptions.mockResolvedValue({
+      data: [sub("past_due", "price_default_87", PERIOD_END)],
+    });
+    retrieveSubscription.mockResolvedValue(
+      sub("past_due", "price_default_87", PERIOD_END)
+    );
+
+    const r = await confirmCheckoutForMember({
+      memberstackId: "mem_1",
+      memberEmail: "a@b.com",
+    });
+
+    expect(r.paymentConfirmed).toBe(false);
+    expect(applyTrusted).not.toHaveBeenCalled();
+  });
+
   it("grandfathered member retains old price and gets the mapped Memberstack plan id", async () => {
     const { confirmCheckoutForMember } = await import(
       "@/lib/forms/billing/confirm-checkout"
