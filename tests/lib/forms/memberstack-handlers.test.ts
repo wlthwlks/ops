@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 
 const upsert = vi.fn(async () => ({
   record: { id: "rec1", fields: {} },
@@ -158,5 +159,53 @@ describe("handleMemberstackEvent", () => {
     });
     expect(r.status).toBe("ignored");
     expect(r.reason).toMatch(/No-op/i);
+  });
+
+  it("plan.added reconciles plan/customer ids but never marks Paid/Active", async () => {
+    findByMs.mockResolvedValueOnce([{ id: "rec1", fields: {} }]);
+    const { handleMemberstackEvent } = await import(
+      "@/lib/forms/webhooks/memberstack-handlers"
+    );
+    const r = await handleMemberstackEvent({
+      eventType: "member.plan.added",
+      payload: {
+        data: {
+          id: "mem_plan",
+          planId: "prc_plan_x",
+          stripeCustomerId: "cus_plan",
+        },
+      },
+    });
+    expect(r.status).toBe("succeeded");
+    const patch = updateBilling.mock.calls[0][0].patch as Record<string, unknown>;
+    expect(patch[MEMBER_FIELDS.memberstackPlanId]).toBe("prc_plan_x");
+    expect(patch[MEMBER_FIELDS.stripeCustomerId]).toBe("cus_plan");
+    expect(patch[MEMBER_FIELDS.payment]).toBeUndefined();
+    expect(patch[MEMBER_FIELDS.membership]).toBeUndefined();
+  });
+
+  it("plan.added without plan id falls back to configured plan id, still no Paid/Active", async () => {
+    const prevMsPrice = process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID;
+    findByMs.mockResolvedValueOnce([{ id: "rec1", fields: {} }]);
+    process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID = "prc_default_fallback";
+    try {
+      const { handleMemberstackEvent } = await import(
+        "@/lib/forms/webhooks/memberstack-handlers"
+      );
+      const r = await handleMemberstackEvent({
+        eventType: "member.plan.created",
+        payload: {
+          data: { id: "mem_plan2", stripeCustomerId: "cus_plan2" },
+        },
+      });
+      expect(r.status).toBe("succeeded");
+      const patch = updateBilling.mock.calls[0][0].patch as Record<string, unknown>;
+      expect(patch[MEMBER_FIELDS.memberstackPlanId]).toBeTruthy();
+      expect(patch[MEMBER_FIELDS.payment]).toBeUndefined();
+      expect(patch[MEMBER_FIELDS.membership]).toBeUndefined();
+    } finally {
+      if (prevMsPrice === undefined) delete process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID;
+      else process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID = prevMsPrice;
+    }
   });
 });

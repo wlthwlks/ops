@@ -57,7 +57,12 @@ describe("handleExpandedStripeEvent", () => {
     const r = await handleExpandedStripeEvent({
       type: "checkout.session.completed",
       data: {
-        object: { customer: "cus_missing", subscription: "sub_1", id: "cs_1" },
+        object: {
+          customer: "cus_missing",
+          subscription: "sub_1",
+          id: "cs_1",
+          payment_status: "paid",
+        },
       },
     } as never);
     expect(updateMemberBilling).toHaveBeenCalled();
@@ -137,5 +142,54 @@ describe("handleExpandedStripeEvent", () => {
     expect(patch["Service access until"]).toBe(expected);
     expect(patch["Stripe Price ID"]).toBe("price_mem");
     expect(patch["Stripe subscription status"]).toBe("active");
+  });
+
+  it("checkout.session.completed with unpaid payment does NOT mark Paid/Active", async () => {
+    const { handleExpandedStripeEvent } = await import(
+      "@/lib/forms/webhooks/stripe-lifecycle"
+    );
+    const r = await handleExpandedStripeEvent({
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_unpaid",
+          customer: "cus_x",
+          subscription: "sub_unpaid",
+          payment_status: "unpaid",
+        },
+      },
+    } as never);
+
+    expect(r.status).toBe("ignored_unpaid");
+    const patch = updateMemberBilling.mock.calls[0][0].patch as Record<string, unknown>;
+    expect(patch["Payment"]).toBeUndefined();
+    expect(patch["Membership"]).toBeUndefined();
+    expect(patch["Cancel at period end"]).toBeUndefined();
+    expect(patch["Stripe Customer ID"]).toBe("cus_x");
+    expect(patch["Stripe Subscription ID"]).toBe("sub_unpaid");
+  });
+
+  it("checkout.session.completed with paid payment still marks Paid/Active", async () => {
+    const { handleExpandedStripeEvent } = await import(
+      "@/lib/forms/webhooks/stripe-lifecycle"
+    );
+    const r = await handleExpandedStripeEvent({
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_paid",
+          customer: "cus_x",
+          subscription: "sub_paid",
+          payment_status: "paid",
+        },
+      },
+    } as never);
+
+    expect(r.status).toBe("updated");
+    const patch = updateMemberBilling.mock.calls[0][0].patch as Record<string, unknown>;
+    expect(patch["Payment"]).toBe("Paid");
+    expect(patch["Membership"]).toBe("Active");
+    expect(patch["Cancel at period end"]).toBe(false);
+    expect(patch["Service access until"]).toBeUndefined();
   });
 });

@@ -195,6 +195,24 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
       const cus = customerId(session.customer as string | Stripe.Customer | null);
       const sub = subId(session.subscription as string | Stripe.Subscription | null);
       if (!cus) return { processed: false, status: "ignored", reason: "No customer on session" };
+      // Only a PAID session is payment evidence. Completed-but-unpaid sessions
+      // (failed payments) must never mark Paid/Active — link the ids only so a
+      // later invoice.paid / confirm-checkout can reconcile.
+      const paymentStatus = session.payment_status;
+      if (paymentStatus !== "paid" && paymentStatus !== "no_payment_required") {
+        const result = await updateMemberBilling({
+          stripeCustomerId: cus,
+          patch: {
+            [MEMBER_FIELDS.stripeCustomerId]: cus,
+            ...(sub ? { [MEMBER_FIELDS.stripeSubscriptionId]: sub } : {}),
+          },
+        });
+        return {
+          processed: true,
+          status: "ignored_unpaid",
+          reason: `Checkout session payment_status=${paymentStatus ?? "unknown"} — not marked paid (${result.status})`,
+        };
+      }
       const result = await updateMemberBilling({
         stripeCustomerId: cus,
         patch: {

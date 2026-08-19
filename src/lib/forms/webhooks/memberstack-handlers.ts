@@ -198,10 +198,12 @@ export async function handleMemberstackEvent(input: {
       });
       return { processed: true, status: "pending_dependency", reason: "Member missing" };
     }
-    const patch: Record<string, unknown> = {
-      [MEMBER_FIELDS.membership]: "Active",
-      [MEMBER_FIELDS.payment]: "Paid",
-    };
+    // Plan connection reconciliation ONLY — never mark Paid/Active from a
+    // plan.added event. Memberstack can attach a plan connection without any
+    // payment (e.g. Stripe portal interactions with an unpaid subscription).
+    // Payment/Membership are owned by real payment evidence: Stripe
+    // invoice.paid webhooks and trusted confirm-checkout.
+    const patch: Record<string, unknown> = {};
     if (m.planId) patch[MEMBER_FIELDS.memberstackPlanId] = m.planId;
     else {
       const msPlan =

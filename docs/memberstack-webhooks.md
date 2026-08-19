@@ -10,7 +10,7 @@ Handlers (normalized type contains):
 
 - `member.created` — minimal Airtable ensure
 - `member.updated` — identity reconcile (no blank overwrite)
-- `plan.added` / plan created — billing fields on existing member only
+- `plan.added` / plan created — plan/customer id reconciliation ONLY on existing member. Never writes Payment=Paid or Membership=Active (Memberstack can attach a plan connection without any payment, e.g. around Stripe Customer Portal interactions with an unpaid subscription). Paid/Active are owned by real payment evidence: Stripe `invoice.paid` webhooks and trusted confirm-checkout.
 - `plan.canceled` — cancel-at-period-end note
 - `member.deleted` — soft mark; history preserved
 
