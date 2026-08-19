@@ -635,12 +635,11 @@ export async function confirmCheckoutForMember(input: {
       });
       for (const inv of invoices.data) {
         if (!inv.id) continue;
-        // Established members: only RECENT paid invoices (avoid revive on Back).
-        // Mid-signup first payment: any paid membership invoice qualifies.
-        if (
-          !midSignupPayment &&
-          !isRecentStripeTimestamp(invoicePaidAtUnix(inv))
-        ) {
+        // Only RECENT paid invoices are evidence of a NEW payment — for everyone,
+        // including mid-signup members. A historical invoice (older membership,
+        // earlier test payment on the same Stripe customer) must never revive
+        // Paid/Active when checkout was cancelled or the payment failed.
+        if (!isRecentStripeTimestamp(invoicePaidAtUnix(inv))) {
           continue;
         }
         const lines = await listAllInvoiceLines(stripe, inv.id);

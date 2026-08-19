@@ -284,6 +284,39 @@ describe("confirmCheckoutForMember with billing catalog", () => {
     expect(applyTrusted).not.toHaveBeenCalled();
   });
 
+  it("historical invoice never revives a mid-signup member (Subscribe again without paying)", async () => {
+    const { confirmCheckoutForMember } = await import(
+      "@/lib/forms/billing/confirm-checkout"
+    );
+    findByMs.mockResolvedValue([
+      {
+        id: "rec1",
+        fields: {
+          [MEMBER_FIELDS.stripeCustomerId]: "cus_x",
+          [MEMBER_FIELDS.onboardingStatus]: "PAYMENT_PENDING",
+        },
+      },
+    ]);
+    const OLD = NOW - 3 * 86400;
+    listInvoices.mockResolvedValue({
+      data: [invoice("in_old", OLD, PERIOD_END, "price_default_87")],
+      has_more: false,
+    });
+    listLineItems.mockResolvedValue({
+      data: [line("price_default_87", PERIOD_END)],
+      has_more: false,
+    });
+    listSubscriptions.mockResolvedValue({ data: [] });
+
+    const r = await confirmCheckoutForMember({
+      memberstackId: "mem_1",
+      memberEmail: "a@b.com",
+    });
+
+    expect(r.paymentConfirmed).toBe(false);
+    expect(applyTrusted).not.toHaveBeenCalled();
+  });
+
   it("grandfathered member retains old price and gets the mapped Memberstack plan id", async () => {
     const { confirmCheckoutForMember } = await import(
       "@/lib/forms/billing/confirm-checkout"
