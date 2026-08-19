@@ -22,6 +22,7 @@
     "airtable:backfill-service-access": "npx tsx scripts/backfill-service-access-until.ts",
     "airtable:reconcile-stripe-customers": "npx tsx scripts/reconcile-stripe-customer-ids.ts",
     "airtable:historical-stripe-repair": "npx tsx scripts/sync-paying-stripe-members-to-airtable.ts",
+    "airtable:clear-fake-descriptions": "npx tsx scripts/clear-fake-business-description.ts",
     "airtable:audit-future-access-parity": "npx tsx scripts/audit-future-access-parity.ts",
     "airtable:repoint-conflict-customer-ids": "npx tsx scripts/repoint-conflict-stripe-customer-ids.ts",
     "airtable:apply-future-access-parity": "npx tsx scripts/apply-future-access-parity.ts",

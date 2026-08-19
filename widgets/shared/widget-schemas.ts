@@ -183,7 +183,7 @@ export const businessFormSchema = z
           url: z.string().trim().max(500),
         })
       )
-      .optional(),
+      .min(1, "Add at least one social profile"),
   })
   .superRefine(otherIndustryRefine);
 
@@ -196,12 +196,18 @@ export const goalFormSchema = z.object({
 });
 
 export const helpFormSchema = z.object({
-  helpWanted: z.array(z.string()).max(3, "Select up to 3 areas"),
+  helpWanted: z
+    .array(z.string())
+    .min(1, "Select at least one area")
+    .max(3, "Select up to 3 areas"),
   helpWantedContext: z.string().trim().max(400).optional(),
 });
 
 export const expertiseFormSchema = z.object({
-  expertiseOffered: z.array(z.string()).max(5, "Select up to 5 areas"),
+  expertiseOffered: z
+    .array(z.string())
+    .min(1, "Select at least one area")
+    .max(5, "Select up to 5 areas"),
   expertiseContext: z.string().trim().max(400).optional(),
 });
 

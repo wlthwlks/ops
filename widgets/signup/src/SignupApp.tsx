@@ -502,6 +502,7 @@ export function SignupApp(props: { apiBase: string }) {
       businessStage: "",
       annualRevenue: "",
       businessDescription: "",
+      socialLinks: [] as SocialLink[],
     },
     mode: "onBlur",
   });
@@ -532,7 +533,9 @@ export function SignupApp(props: { apiBase: string }) {
       setSocialError("This platform is already added.");
       return;
     }
-    setSocialLinks([...socialLinks, { platform, url: "" }]);
+    const next = [...socialLinks, { platform, url: "" }];
+    setSocialLinks(next);
+    businessForm.setValue("socialLinks", next, { shouldValidate: true });
     setSocialLinksErrors([...socialLinksErrors, ""]);
     setSocialError("");
     setAddingSocialPlatform(false);
@@ -542,10 +545,13 @@ export function SignupApp(props: { apiBase: string }) {
     const next = [...socialLinks];
     next[index] = { ...next[index], url };
     setSocialLinks(next);
+    businessForm.setValue("socialLinks", next, { shouldValidate: true });
   };
 
   const removeSocialLink = (index: number) => {
-    setSocialLinks(socialLinks.filter((_, i) => i !== index));
+    const next = socialLinks.filter((_, i) => i !== index);
+    setSocialLinks(next);
+    businessForm.setValue("socialLinks", next, { shouldValidate: true });
     setSocialLinksErrors(socialLinksErrors.filter((_, i) => i !== index));
     setSocialError("");
   };
@@ -929,13 +935,18 @@ export function SignupApp(props: { apiBase: string }) {
   const onBusiness = businessForm.handleSubmit(
     async (values) => {
     if (busy) return;
+    const validSocialLinks = socialLinks.filter((l) => l.url.trim());
+    if (validSocialLinks.length === 0) {
+      setSocialError("Add at least one social profile so members can connect.");
+      return;
+    }
     setError(null);
     setAsyncState(BUSY.saving);
     scrollSignupToTop();
     try {
       await saveStep("BUSINESS", {
         ...values,
-        socialLinks: socialLinks.filter((l) => l.url.trim()),
+        socialLinks: validSocialLinks,
       });
       await saveStep("PAYMENT_PENDING", {});
       void api(props.apiBase, "/api/onboarding/analytics", {
@@ -1430,11 +1441,11 @@ export function SignupApp(props: { apiBase: string }) {
               descriptionError={businessForm.formState.errors.businessDescription?.message}
             />
 
-            <p className="wlth-section-title" style={{ marginTop: 20 }}>Social links (optional)</p>
-            <p className="wlth-muted">Add your social profiles so members can connect.</p>
-            {socialError && (
+            <p className="wlth-section-title" style={{ marginTop: 20 }}>Social links</p>
+            <p className="wlth-muted">Add at least one social profile so members can connect.</p>
+            {(socialError || businessForm.formState.errors.socialLinks?.message) && (
               <div className="wlth-banner-error" role="alert" style={{ marginBottom: 12 }}>
-                {socialError}
+                {socialError || businessForm.formState.errors.socialLinks?.message}
               </div>
             )}
             {socialLinks.map((link, idx) => (
@@ -1738,6 +1749,7 @@ export function SignupApp(props: { apiBase: string }) {
               onChange={(next) => helpForm.setValue("helpWanted", next, { shouldValidate: true })}
               max={3}
               placeholder="Add an area of help"
+              error={helpForm.formState.errors.helpWanted?.message}
             />
             <div className="wlth-field">
               <label htmlFor="hc">Optional context</label>
@@ -1788,6 +1800,7 @@ export function SignupApp(props: { apiBase: string }) {
               }
               max={5}
               placeholder="Add an area of expertise"
+              error={expertiseForm.formState.errors.expertiseOffered?.message}
             />
             <div className="wlth-field">
               <label htmlFor="ec">Optional context</label>

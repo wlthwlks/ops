@@ -3,6 +3,8 @@ import {
   accountFormSchema,
   businessFormSchema,
   locationFormSchema,
+  helpFormSchema,
+  expertiseFormSchema,
   AGE_RANGES,
 } from "../../../widgets/shared/widget-schemas";
 
@@ -101,6 +103,7 @@ describe("widget schemas", () => {
         businessDescription:
           "We help independent founders grow through peer community and introductions in major cities worldwide.",
         otherIndustry: "",
+        socialLinks: [{ platform: "linkedin", url: "https://linkedin.com/in/test" }],
       }).success
     ).toBe(false);
   });
@@ -124,7 +127,41 @@ describe("widget schemas", () => {
         businessStage: "EARLY_TRACTION",
         annualRevenue: "10K_50K",
         businessDescription: "too short",
+        socialLinks: [{ platform: "linkedin", url: "https://linkedin.com/in/test" }],
       }).success
     ).toBe(false);
+  });
+
+  it("requires at least one social profile on the business form", () => {
+    expect(
+      businessFormSchema.safeParse({
+        primaryIndustry: "TECH_SAAS",
+        businessStage: "EARLY_TRACTION",
+        annualRevenue: "10K_50K",
+        businessDescription:
+          "We help independent founders grow through peer community and introductions in major cities worldwide.",
+        socialLinks: [],
+      }).success
+    ).toBe(false);
+
+    const ok = businessFormSchema.safeParse({
+      primaryIndustry: "TECH_SAAS",
+      businessStage: "EARLY_TRACTION",
+      annualRevenue: "10K_50K",
+      businessDescription:
+        "We help independent founders grow through peer community and introductions in major cities worldwide.",
+      socialLinks: [{ platform: "instagram", url: "https://instagram.com/test" }],
+    });
+    expect(ok.success).toBe(true);
+  });
+
+  it("requires at least one help area", () => {
+    expect(helpFormSchema.safeParse({ helpWanted: [] }).success).toBe(false);
+    expect(helpFormSchema.safeParse({ helpWanted: ["INTROS"] }).success).toBe(true);
+  });
+
+  it("requires at least one expertise area", () => {
+    expect(expertiseFormSchema.safeParse({ expertiseOffered: [] }).success).toBe(false);
+    expect(expertiseFormSchema.safeParse({ expertiseOffered: ["SALES"] }).success).toBe(true);
   });
 });

@@ -277,7 +277,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       otherIndustry: "",
       businessStage: "",
       annualRevenue: "",
-      businessDescription: "Profile refresh; business context will be refined in full details.",
+      businessDescription: "",
+      socialLinks: [] as SocialLink[],
     },
   });
   // Matching refresh uses looser lengths for existing members
@@ -572,9 +573,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           otherIndustry: defaults.otherIndustry || "",
           businessStage: defaults.businessStage || "",
           annualRevenue: defaults.annualRevenue || "",
-          businessDescription:
-            defaults.businessDescription ||
-            "I’m refreshing my WLTH WLKS profile so introductions stay aligned with where my business is today.",
+          businessDescription: defaults.businessDescription || "",
+          socialLinks: defaults.socialLinks || [],
         });
         refreshGoal.reset({ ninetyDayGoal: defaults.ninetyDayGoal || "" });
         refreshHelp.reset({
@@ -1012,7 +1012,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       setSocialError("This platform is already added.");
       return;
     }
-    setSocialLinks([...socialLinks, { platform, url: "" }]);
+    const next = [...socialLinks, { platform, url: "" }];
+    setSocialLinks(next);
+    refreshBusiness.setValue("socialLinks", next, { shouldValidate: true });
     setSocialLinksErrors([...socialLinksErrors, ""]);
     setSocialError("");
     setAddingSocialPlatform(false);
@@ -1023,6 +1025,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     const next = [...socialLinks];
     next[index] = { ...next[index], url };
     setSocialLinks(next);
+    refreshBusiness.setValue("socialLinks", next, { shouldValidate: true });
     // Clear per-link error on edit
     if (socialLinksErrors[index]) {
       const nextErrors = [...socialLinksErrors];
@@ -1033,7 +1036,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   };
 
   const removeSocialLink = (index: number) => {
-    setSocialLinks(socialLinks.filter((_, i) => i !== index));
+    const next = socialLinks.filter((_, i) => i !== index);
+    setSocialLinks(next);
+    refreshBusiness.setValue("socialLinks", next, { shouldValidate: true });
     setSocialLinksErrors(socialLinksErrors.filter((_, i) => i !== index));
     setSocialError("");
     setSaveStatus("dirty");
@@ -1412,12 +1417,20 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
   const onRefreshBusiness = refreshBusiness.handleSubmit(
     async (values) => {
+      const validSocialLinks = socialLinks.filter((l) => l.url.trim());
+      if (validSocialLinks.length === 0) {
+        setSocialError("Add at least one social profile so members can connect.");
+        return;
+      }
       setError(null);
       setRefreshBusy(true);
       scrollDetailsToTop();
       try {
         if (onboardingIncomplete) {
-          await saveOnboardingStep("BUSINESS", values);
+          await saveOnboardingStep("BUSINESS", {
+            ...values,
+            socialLinks: validSocialLinks,
+          });
           await saveOnboardingStep("PAYMENT_PENDING", {});
         } else {
           await patchProfile({
@@ -1426,6 +1439,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
             businessStage: values.businessStage,
             annualRevenue: values.annualRevenue,
             businessDescription: values.businessDescription,
+            socialLinks: validSocialLinks,
           });
         }
         form.setValue("primaryIndustry", values.primaryIndustry);
@@ -2159,6 +2173,103 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   refreshBusiness.formState.errors.businessDescription?.message as string
                 }
               />
+              <p className="wlth-section-title" style={{ marginTop: 20 }}>Social links</p>
+              <p className="wlth-muted">
+                Add at least one social profile so members can connect.
+              </p>
+              {(socialError || refreshBusiness.formState.errors.socialLinks?.message) && (
+                <div className="wlth-banner-error" role="alert" style={{ marginBottom: 12 }}>
+                  {socialError || refreshBusiness.formState.errors.socialLinks?.message}
+                </div>
+              )}
+              {socialLinks.map((link, idx) => (
+                <div key={link.platform} className="wlth-social-row">
+                  <span className="wlth-social-row__label">
+                    {SOCIAL_PLATFORM_LABELS[link.platform]}
+                  </span>
+                  <input
+                    className="wlth-social-row__input"
+                    id={"refresh-social-" + link.platform}
+                    placeholder={link.platform + ".com/..."}
+                    value={displayUrl(link.url)}
+                    aria-invalid={!!socialLinksErrors[idx]}
+                    onChange={(e) => updateSocialUrl(idx, e.target.value)}
+                    onBlur={() => {
+                      if (link.url.trim()) {
+                        const result = normalizeSocialUrl(link.platform, link.url);
+                        if (result.ok && result.url) {
+                          const next = [...socialLinks];
+                          next[idx] = { ...next[idx], url: displayUrl(result.url) };
+                          setSocialLinks(next);
+                          refreshBusiness.setValue("socialLinks", next, {
+                            shouldValidate: true,
+                          });
+                          if (socialLinksErrors[idx]) {
+                            const nextErrors = [...socialLinksErrors];
+                            nextErrors[idx] = "";
+                            setSocialLinksErrors(nextErrors);
+                          }
+                        }
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="wlth-btn-remove"
+                    onClick={() => removeSocialLink(idx)}
+                    aria-label={"Remove " + SOCIAL_PLATFORM_LABELS[link.platform]}
+                  >
+                    &times;
+                  </button>
+                  {socialLinksErrors[idx] ? (
+                    <div className="wlth-error" style={{ width: "100%", marginTop: 4 }}>
+                      {socialLinksErrors[idx]}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+              {!addingSocialPlatform ? (
+                <button
+                  type="button"
+                  className="wlth-btn-secondary"
+                  style={{ marginTop: 8 }}
+                  onClick={() => {
+                    setSocialError("");
+                    setAddingSocialPlatform(true);
+                  }}
+                >
+                  + Add social profile
+                </button>
+              ) : (
+                <div className="wlth-social-picker">
+                  <p className="wlth-muted">Select a platform:</p>
+                  <div className="wlth-social-picker__options">
+                    {ADDABLE_SOCIAL_PLATFORMS.filter(
+                      (p) => !socialLinks.some((l) => l.platform === p)
+                    ).map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        className="wlth-btn-secondary"
+                        onClick={() => addSocialLink(p)}
+                      >
+                        {SOCIAL_PLATFORM_LABELS[p]}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="wlth-btn-secondary"
+                    style={{ marginTop: 8 }}
+                    onClick={() => {
+                      setAddingSocialPlatform(false);
+                      setSocialError("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
               <div className="wlth-actions">
                 <button
                   type="button"
@@ -2285,6 +2396,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   refreshHelp.setValue("helpWanted", next, { shouldValidate: true })
                 }
                 max={3}
+                error={refreshHelp.formState.errors.helpWanted?.message}
               />
               <div className="wlth-field">
                 <label htmlFor="rhc">Optional context</label>
@@ -2319,6 +2431,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   })
                 }
                 max={5}
+                error={refreshExpertise.formState.errors.expertiseOffered?.message}
               />
               <div className="wlth-field">
                 <label htmlFor="rec">Optional context</label>
