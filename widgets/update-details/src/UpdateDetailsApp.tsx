@@ -924,17 +924,25 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           </>
         ) : membershipDisplay.kind === "payment_problem" ? (
           <>
-            <h3>Payment issue</h3>
+            <h3>Your payment didn&apos;t go through</h3>
             <p className="wlth-muted" style={{ marginBottom: 12 }}>
               {billing.hasServiceAccess
-                ? "Your payment needs attention but you still have access."
-                : "Your payment has failed. Update your card to restore access."}{" "}
-              Use Manage billing to update your payment method.
+                ? "Your payment needs attention but you still have access. Update your card below or try your payment again."
+                : "No worries — you can try your payment again. You&apos;ll review the plan and price on Stripe before you&apos;re charged."}
             </p>
+            {promoBlock}
             <div className="wlth-actions">
               <button
                 type="button"
                 className="wlth-btn-primary"
+                disabled={refreshBusy}
+                onClick={() => void startRefreshCheckout()}
+              >
+                {refreshBusy ? "Opening secure checkout…" : "Try again"}
+              </button>
+              <button
+                type="button"
+                className="wlth-btn-secondary"
                 onClick={() => void openPortal()}
               >
                 Manage billing
