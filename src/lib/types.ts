@@ -4,6 +4,7 @@ export interface OpContext {
   log: (message: string) => Promise<void>;
   db: AppDb;
   /** Validated parameters for this run (server-side only). */
+  /** Validated parameters for this run (server-side only). */
   params?: Record<string, unknown>;
   variant?: string;
   setProgress?: (current: number, total?: number) => Promise<void>;
