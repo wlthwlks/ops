@@ -1591,7 +1591,7 @@ export function SignupApp(props: { apiBase: string }) {
                   type="text"
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder="e.g. FOUNDERS45"
+                  placeholder="e.g. F87OFFER"
                   value={promoCode}
                   onChange={(e) => {
                     const v = e.target.value;
