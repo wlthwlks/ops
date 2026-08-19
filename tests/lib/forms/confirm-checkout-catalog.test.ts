@@ -317,6 +317,78 @@ describe("confirmCheckoutForMember with billing catalog", () => {
     expect(applyTrusted).not.toHaveBeenCalled();
   });
 
+  it("cancelled subscription blocks recent-invoice revival (Subscribe again without paying)", async () => {
+    const { confirmCheckoutForMember } = await import(
+      "@/lib/forms/billing/confirm-checkout"
+    );
+    findByMs.mockResolvedValue([
+      {
+        id: "rec1",
+        fields: {
+          [MEMBER_FIELDS.stripeCustomerId]: "cus_x",
+          [MEMBER_FIELDS.onboardingStatus]: "COMPLETE",
+        },
+      },
+    ]);
+    // Recently paid invoice (60s ago) + a CANCELLED subscription — the earlier
+    // payment must not revive the member when they press Subscribe again.
+    listInvoices.mockResolvedValue({
+      data: [invoice("in_recent", NOW - 60, PERIOD_END, "price_default_87")],
+      has_more: false,
+    });
+    listLineItems.mockResolvedValue({
+      data: [line("price_default_87", PERIOD_END)],
+      has_more: false,
+    });
+    listSubscriptions.mockResolvedValue({
+      data: [sub("canceled", "price_default_87", PERIOD_END)],
+    });
+
+    const r = await confirmCheckoutForMember({
+      memberstackId: "mem_1",
+      memberEmail: "a@b.com",
+    });
+
+    expect(r.paymentConfirmed).toBe(false);
+    expect(applyTrusted).not.toHaveBeenCalled();
+  });
+
+  it("recent invoice still revives when the member has a live subscription", async () => {
+    const { confirmCheckoutForMember } = await import(
+      "@/lib/forms/billing/confirm-checkout"
+    );
+    findByMs.mockResolvedValue([
+      {
+        id: "rec1",
+        fields: {
+          [MEMBER_FIELDS.stripeCustomerId]: "cus_x",
+          [MEMBER_FIELDS.onboardingStatus]: "COMPLETE",
+        },
+      },
+    ]);
+    listInvoices.mockResolvedValue({
+      data: [invoice("in_recent", NOW - 60, PERIOD_END, "price_default_87")],
+      has_more: false,
+    });
+    listLineItems.mockResolvedValue({
+      data: [line("price_default_87", PERIOD_END)],
+      has_more: false,
+    });
+    listSubscriptions.mockResolvedValue({
+      data: [sub("active", "price_default_87", PERIOD_END)],
+    });
+    retrieveSubscription.mockResolvedValue(
+      sub("active", "price_default_87", PERIOD_END)
+    );
+
+    const r = await confirmCheckoutForMember({
+      memberstackId: "mem_1",
+      memberEmail: "a@b.com",
+    });
+
+    expect(r.paymentConfirmed).toBe(true);
+  });
+
   it("grandfathered member retains old price and gets the mapped Memberstack plan id", async () => {
     const { confirmCheckoutForMember } = await import(
       "@/lib/forms/billing/confirm-checkout"

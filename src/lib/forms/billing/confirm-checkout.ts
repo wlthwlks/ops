@@ -4,6 +4,13 @@
  * Production: require native Stripe price_… allowlist + proven ownership.
  * Preview (Memberstack prc_-only config): owned customer + proven paid membership
  *   (active subscription or paid checkout) — never trust arbitrary session IDs alone.
+ *
+ * Payment evidence rules (fail closed):
+ *   - Checkout Session must be paid.
+ *   - Paid invoices count only when RECENT and only when the member has no
+ *     subscriptions at all or a live (active/trialing) one. A cancelled
+ *     membership is never revived by an earlier payment.
+ *   - Subscriptions count only when active/trialing (never past_due/unpaid/incomplete).
  */
 import type Stripe from "stripe";
 import {
@@ -627,6 +634,24 @@ export async function confirmCheckoutForMember(input: {
     }
 
     if (stripeCustomerId) {
+      // Fetch subscriptions once — they gate BOTH the invoice revival and the
+      // live-subscription pick below.
+      const subs = await stripe.subscriptions.list({
+        customer: stripeCustomerId,
+        status: "all",
+        limit: 10,
+      });
+      const anySubs = subs.data.length > 0;
+      const liveSubExists = subs.data.some(
+        (s) => s.status === "active" || s.status === "trialing"
+      );
+      // A recent invoice may only revive Paid/Active when the member has no
+      // subscriptions at all (first payment) or a live (active/trialing) one.
+      // A cancelled membership must NOT be revived by an earlier payment —
+      // even one inside the recency window (e.g. paid an hour ago, cancelled,
+      // then pressed Subscribe again without paying).
+      const invoiceRevivalAllowed = !anySubs || liveSubExists;
+
       // Paid invoices with qualifying prices
       const invoices = await stripe.invoices.list({
         customer: stripeCustomerId,
@@ -635,6 +660,7 @@ export async function confirmCheckoutForMember(input: {
       });
       for (const inv of invoices.data) {
         if (!inv.id) continue;
+        if (!invoiceRevivalAllowed) break;
         // Only RECENT paid invoices are evidence of a NEW payment — for everyone,
         // including mid-signup members. A historical invoice (older membership,
         // earlier test payment on the same Stripe customer) must never revive
@@ -693,11 +719,6 @@ export async function confirmCheckoutForMember(input: {
 
       // Active subscription
       if (!verifiedPaid || priceIds.length === 0) {
-        const subs = await stripe.subscriptions.list({
-          customer: stripeCustomerId,
-          status: "all",
-          limit: 10,
-        });
         // Mid-signup: any live sub is the first membership payment.
         // Established: only recently created subs (resubscribe charge).
         // past_due / unpaid / incomplete are NOT payment evidence — a failed
