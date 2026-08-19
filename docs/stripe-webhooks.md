@@ -54,8 +54,9 @@ Do not point a preview deploy at production Airtable while Stripe webhooks are c
 
 Only when flag is on and shadow mode is off:
 
-- checkout.session.completed
-- customer.subscription.created/updated/deleted
+- checkout.session.completed — only a session with `payment_status: paid` (or `no_payment_required`) marks Payment=Paid / Membership=Active. Unpaid sessions only link customer/subscription ids (`ignored_unpaid`).
+- customer.subscription.created/updated — identity/cancel-flag reconciliation ONLY. Never writes Payment=Paid, Membership=Active or Service access until: Memberstack updates the subscription while preparing checkout (before any payment), which fires `subscription.updated` with the old status and previously re-marked members as paid without payment. Payment evidence is owned by `invoice.paid` and trusted confirm-checkout.
+- customer.subscription.deleted
 - invoice.payment_failed
 - invoice.payment_action_required
 - charge.refunded

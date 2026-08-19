@@ -104,16 +104,16 @@ describe("handleExpandedStripeEvent", () => {
     const patch = updateMemberBilling.mock.calls[0][0].patch as Record<string, unknown>;
     expect(patch["Cancel at period end"]).toBe("true");
     expect(patch["Cancellation effective at"]).toBeTruthy();
-    expect(patch["Membership"]).toBe("Active");
+    expect(patch["Membership"]).toBeUndefined();
+    expect(patch["Payment"]).toBeUndefined();
     expect(patch["Service access until"]).toBeUndefined();
   });
 
-  it("active subscription.created writes Service access until from period end", async () => {
+  it("active subscription.created never claims Paid/Active — only cancels flags + ids", async () => {
     const { handleExpandedStripeEvent } = await import(
       "@/lib/forms/webhooks/stripe-lifecycle"
     );
     const future = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30;
-    const expected = new Date(future * 1000).toISOString().slice(0, 10);
     await handleExpandedStripeEvent({
       type: "customer.subscription.created",
       data: {
@@ -137,11 +137,41 @@ describe("handleExpandedStripeEvent", () => {
 
     const patch = updateMemberBilling.mock.calls[0][0].patch as Record<string, unknown>;
     expect(patch["Cancel at period end"]).toBe("false");
-    expect(patch["Payment"]).toBe("Paid");
-    expect(patch["Membership"]).toBe("Active");
-    expect(patch["Service access until"]).toBe(expected);
+    expect(patch["Cancellation effective at"]).toBe("");
     expect(patch["Stripe Price ID"]).toBe("price_mem");
     expect(patch["Stripe subscription status"]).toBe("active");
+    expect(patch["Payment"]).toBeUndefined();
+    expect(patch["Membership"]).toBeUndefined();
+    expect(patch["Service access until"]).toBeUndefined();
+  });
+
+  it("pre-checkout subscription.updated on an active sub never re-marks Paid/Active/access", async () => {
+    const { handleExpandedStripeEvent } = await import(
+      "@/lib/forms/webhooks/stripe-lifecycle"
+    );
+    const future = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30;
+    await handleExpandedStripeEvent({
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_active",
+          customer: "cus_x",
+          status: "active",
+          cancel_at_period_end: false,
+          current_period_end: future,
+          items: {
+            data: [{ current_period_end: future, price: { id: "price_mem" } }],
+          },
+        },
+      },
+    } as never);
+
+    const patch = updateMemberBilling.mock.calls[0][0].patch as Record<string, unknown>;
+    expect(patch["Cancel at period end"]).toBe("false");
+    expect(patch["Stripe Price ID"]).toBe("price_mem");
+    expect(patch["Payment"]).toBeUndefined();
+    expect(patch["Membership"]).toBeUndefined();
+    expect(patch["Service access until"]).toBeUndefined();
   });
 
   it("checkout.session.completed with unpaid payment does NOT mark Paid/Active", async () => {
