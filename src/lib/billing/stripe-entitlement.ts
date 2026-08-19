@@ -11,6 +11,7 @@ import {
   listPaidInvoicesForCustomer,
   resolveNativeMembershipAllowlist,
 } from "@/lib/billing/service-access-sync";
+import { subscriptionItemPriceIds } from "@/lib/billing/historical-stripe-member-repair";
 import { getStripeNativeMembershipPriceIds } from "@/lib/integrations/stripe";
 
 export type RefundKind = "none" | "partial" | "full" | "unknown";
@@ -36,6 +37,7 @@ export type StripeSubscriptionSnapshot = {
   canceledAtUnix: number | null;
   endedAtUnix: number | null;
   currentPeriodEndUnix: number | null;
+  priceIds: string[];
 };
 
 export type CancellationKind =
@@ -277,6 +279,7 @@ function snapshotSub(sub: Stripe.Subscription): StripeSubscriptionSnapshot {
         : typeof itemEnd === "number"
           ? itemEnd
           : null,
+    priceIds: subscriptionItemPriceIds(sub),
   };
 }
 
@@ -438,7 +441,6 @@ export async function calculateStripeEntitlement(input: {
         // when the renewal invoice is still open/draft — Stripe keeps the sub active
         // (member keeps access) until dunning fails. Without this, a member whose
         // renewal hasn't paid yet would look expired from paid invoices alone.
-        // past_due / unpaid / trialing are intentionally NOT promoted (see access rules).
         if (
           primarySubscription.status === "active" &&
           primarySubscription.currentPeriodEndUnix != null &&
@@ -448,6 +450,24 @@ export async function calculateStripeEntitlement(input: {
           paidThroughUnix = primarySubscription.currentPeriodEndUnix;
           notes.push(
             "Active subscription — paid-through promoted to current period end (renewal invoice may still be pending)"
+          );
+        }
+
+        // Trialing subscriptions carry a real period end (trial end) with no paid
+        // invoice yet. Trials are counted as positive active members by the active
+        // census (active+trialing), so their entitlement must match — promote to
+        // the trial period end when the subscription's price qualifies.
+        // past_due / unpaid are intentionally NOT promoted (see access rules).
+        if (
+          primarySubscription.status === "trialing" &&
+          primarySubscription.currentPeriodEndUnix != null &&
+          primarySubscription.priceIds.some((id) => allow.has(id)) &&
+          (paidThroughUnix == null ||
+            primarySubscription.currentPeriodEndUnix > paidThroughUnix)
+        ) {
+          paidThroughUnix = primarySubscription.currentPeriodEndUnix;
+          notes.push(
+            "Trialing subscription — paid-through promoted to trial period end (no paid invoice yet)"
           );
         }
       }
