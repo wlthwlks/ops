@@ -8,6 +8,10 @@ import {
   getStripeClient,
   getConfiguredMemberstackPlanId,
 } from "@/lib/integrations/stripe";
+import {
+  getMemberstackPlanIdForStripePrice,
+  getReactivationPrice,
+} from "@/lib/billing/catalog";
 import { calculateStripeEntitlement } from "@/lib/billing/stripe-entitlement";
 import {
   applyTrustedPaymentByMemberstackId,
@@ -76,12 +80,16 @@ function failResult(
 
 /**
  * Price used whenever a NEW membership/subscription is created (rejoin path).
- * Must be the current Stripe `price_…`; never a legacy/grandfathered price.
- * The old allowlist (`STRIPE_MEMBERSHIP_PRICE_IDS`) is intentionally NOT used
- * here — it may contain legacy prices old members are still paying.
+ * Resolved from the billing catalog (current reactivation price). Must be a
+ * Stripe `price_…`; never a legacy/grandfathered price. The old allowlist
+ * (`STRIPE_MEMBERSHIP_PRICE_IDS`) is intentionally NOT used here — it may
+ * contain legacy prices old members are still paying.
+ * `STRIPE_REACTIVATION_PRICE_ID` remains a migration fallback only.
  */
 function resolveStripePriceId(): string {
   const envPrice = (process.env.STRIPE_REACTIVATION_PRICE_ID || "").trim();
+  const catalogPrice = getReactivationPrice()?.stripePriceId?.trim() || "";
+  if (catalogPrice.startsWith("price_")) return catalogPrice;
   if (envPrice.startsWith("price_")) return envPrice;
   return "";
 }
@@ -140,7 +148,10 @@ function commerceIds(sub: Stripe.Subscription, fallbackPriceId: string) {
     sub.items.data[0]?.price?.id?.startsWith("price_")
       ? sub.items.data[0].price.id
       : fallbackPriceId;
-  const plan = getConfiguredMemberstackPlanId() || subPrice;
+  const plan =
+    (subPrice ? getMemberstackPlanIdForStripePrice(subPrice) : "") ||
+    getConfiguredMemberstackPlanId() ||
+    subPrice;
   return { subPrice, plan };
 }
 
@@ -429,8 +440,7 @@ export async function reactivateMembershipForMember(input: {
         [MEMBER_FIELDS.stripeCustomerId]: stripeCustomerId,
         [MEMBER_FIELDS.stripePriceId]: subPrice,
         [MEMBER_FIELDS.memberstackPlanId]:
-          getConfiguredMemberstackPlanId() ||
-          fieldStr(fields, MEMBER_FIELDS.memberstackPlanId),
+          plan || fieldStr(fields, MEMBER_FIELDS.memberstackPlanId),
         ["Paid Plans (price ids)"]: formatPaidPlansText([subPrice, plan]),
         [MEMBER_FIELDS.cancelAtPeriodEnd]: false,
         [MEMBER_FIELDS.cancellationEffectiveAt]: "",
@@ -456,7 +466,7 @@ export async function reactivateMembershipForMember(input: {
   );
   if (!fullRefunded && pendingCancel) {
     const updated = await reverseScheduledCancellation(stripe, pendingCancel);
-    const { subPrice } = commerceIds(updated, "");
+    const { subPrice, plan } = commerceIds(updated, "");
     const next = periodEndIso(updated);
     await syncReactivateBilling({
       memberstackId: msId,
@@ -466,7 +476,7 @@ export async function reactivateMembershipForMember(input: {
         [MEMBER_FIELDS.stripeSubscriptionStatus]: updated.status,
         [MEMBER_FIELDS.stripeCustomerId]: stripeCustomerId,
         [MEMBER_FIELDS.stripePriceId]: subPrice,
-        [MEMBER_FIELDS.memberstackPlanId]: getConfiguredMemberstackPlanId() || "",
+        [MEMBER_FIELDS.memberstackPlanId]: plan || "",
         ["Paid Plans (price ids)"]: formatPaidPlansText([subPrice]),
         [MEMBER_FIELDS.cancelAtPeriodEnd]: false,
         [MEMBER_FIELDS.cancellationEffectiveAt]: "",
@@ -534,7 +544,7 @@ export async function reactivateMembershipForMember(input: {
     return failResult({
       status: "no_price",
       reason:
-        "No Stripe membership price configured. Set STRIPE_REACTIVATION_PRICE_ID=price_…",
+        "No Stripe membership price configured. Set BILLING_CATALOG_JSON (or STRIPE_REACTIVATION_PRICE_ID=price_…)",
     });
   }
 
@@ -580,7 +590,7 @@ export async function reactivateMembershipForMember(input: {
       [MEMBER_FIELDS.stripeSubscriptionId]: created.id,
       [MEMBER_FIELDS.stripeSubscriptionStatus]: created.status,
       [MEMBER_FIELDS.stripePriceId]: subPrice,
-      [MEMBER_FIELDS.memberstackPlanId]: getConfiguredMemberstackPlanId() || "",
+      [MEMBER_FIELDS.memberstackPlanId]: plan || "",
       ["Paid Plans (price ids)"]: formatPaidPlansText([subPrice, plan]),
       [MEMBER_FIELDS.cancelAtPeriodEnd]: false,
       ...(next ? { [MEMBER_FIELDS.serviceAccessUntil]: next } : {}),

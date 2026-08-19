@@ -6,6 +6,10 @@ import {
   getStripeNativeMembershipPriceIds,
   hasNativeStripeMembershipPrices,
 } from "@/lib/integrations/stripe";
+import {
+  getMemberstackPlanIdForStripePrice,
+  nativeMembershipPriceAllowlist,
+} from "@/lib/billing/catalog";
 import { MEMBERS_TABLE as AIRTABLE_MEMBERS_TABLE } from "@/lib/ops/airtable-fields";
 
 export const SERVICE_ACCESS_FIELD = "Service access until";
@@ -109,6 +113,7 @@ export function getLinePeriodEnd(line: Stripe.InvoiceLineItem): number | null {
 
 /**
  * Native Stripe price_… ids that qualify invoice/session lines as membership.
+ * Derived from the billing catalog (all entries, including legacy retention).
  * Fail closed: empty allowlist → no line qualifies (never allow-all).
  */
 export function resolveNativeMembershipAllowlist(
@@ -117,13 +122,13 @@ export function resolveNativeMembershipAllowlist(
   if (membershipPriceIds && membershipPriceIds.size > 0) {
     return new Set([...membershipPriceIds].filter((id) => id.startsWith("price_")));
   }
+  const fromCatalog = nativeMembershipPriceAllowlist();
+  if (fromCatalog.size > 0) return fromCatalog;
   try {
     const set = getStripeNativeMembershipPriceIds({
       requireConfigured: false,
       failClosedInProduction: false,
     });
-    // Checkout / resubscribe often uses the current reactivation price; include it
-    // so confirm-checkout and invoice qualification match live Stripe charges.
     const reactivation = (process.env.STRIPE_REACTIVATION_PRICE_ID || "").trim();
     if (reactivation.startsWith("price_")) set.add(reactivation);
     return set;
@@ -474,6 +479,12 @@ export async function updateServiceAccessUntilForCustomer(input: {
     const configuredPlan = getConfiguredMemberstackPlanId();
     const nativePriceIds = dedupePriceIds(billing?.qualifyingPriceIds || []);
     const primaryStripePriceId = nativePriceIds[0] || "";
+    // Resolve the correct catalog entry from the actual Stripe price instead of
+    // one global plan id. Only fill blank rows with the default — never overwrite
+    // an existing value with an unrelated price mapping.
+    const mappedPlan = primaryStripePriceId
+      ? getMemberstackPlanIdForStripePrice(primaryStripePriceId)
+      : "";
 
     const cancelAtPeriodEnd = billing?.cancelAtPeriodEnd === true;
     const fields: Record<string, unknown> = {
@@ -506,7 +517,10 @@ export async function updateServiceAccessUntilForCustomer(input: {
       fields[STRIPE_SUBSCRIPTION_STATUS_FIELD] = "active";
     }
     // Commerce id on the Memberstack Plan ID column — never in "Stripe Price ID".
-    if (configuredPlan) {
+    const existingPlan = String(rec.fields["Memberstack Plan ID"] || "").trim();
+    if (mappedPlan) {
+      fields["Memberstack Plan ID"] = mappedPlan;
+    } else if (configuredPlan && !existingPlan) {
       fields["Memberstack Plan ID"] = configuredPlan;
     }
 

@@ -25,6 +25,7 @@ import {
   dedupePriceIds,
   resolveNativeMembershipAllowlist,
 } from "@/lib/billing/service-access-sync";
+import { getMemberstackPlanIdForStripePrice } from "@/lib/billing/catalog";
 import { FormsError } from "@/lib/forms/errors";
 import { isInProgressOnboarding } from "@/lib/forms/onboarding/onboarding-status";
 
@@ -725,20 +726,6 @@ export async function confirmCheckoutForMember(input: {
               paidThrough,
               subscriptionPeriodEnd(pick)
             );
-          } else if (
-            midSignupPayment &&
-            ["active", "trialing"].includes(pick.status) &&
-            subPrices.length > 0
-          ) {
-            // Mid-signup: live sub with any price_ line — accept even if allowlist
-            // is slightly out of date (Memberstack may use the current checkout price).
-            verifiedPaid = true;
-            priceIds = dedupePriceIds([...priceIds, ...subPrices]);
-            qualificationMode = qualificationMode || "mid_signup_live_sub";
-            paidThrough = preferLaterPaidThrough(
-              paidThrough,
-              subscriptionPeriodEnd(pick)
-            );
           }
         }
       }
@@ -771,7 +758,7 @@ export async function confirmCheckoutForMember(input: {
     }
   }
 
-  // Final gate
+  // Final gate — unknown/unrelated Stripe prices always fail closed.
   if (verifiedPaid) {
     const gate = passesPriceGate({
       priceIds,
@@ -780,36 +767,32 @@ export async function confirmCheckoutForMember(input: {
     });
     qualificationMode = gate.mode || qualificationMode;
     if (!gate.ok) {
-      // Mid-signup with a live verified sub/invoice: do not fail closed on allowlist
-      // mismatch — Memberstack checkout price may be the current reactivation price.
-      if (midSignupPayment && priceIds.some((id) => id.startsWith("price_"))) {
-        qualificationMode = "mid_signup_price_passthrough";
-      } else {
-        console.error(
-          JSON.stringify({
-            event: "confirm_checkout_final_gate",
-            status: gate.mode === "fail_closed" ? "membership_price_config_missing" : "session_price_not_membership",
-            qualificationMode: gate.mode,
-            ownershipMethod: ownershipMethod || null,
-            nativeAllowCount: nativeAllow.size,
-            priceCount: priceIds.length,
-          })
-        );
-        return {
-          paymentConfirmed: false,
+      console.error(
+        JSON.stringify({
+          event: "confirm_checkout_final_gate",
           status:
             gate.mode === "fail_closed"
               ? "membership_price_config_missing"
               : "session_price_not_membership",
-          stripeCustomerId: "",
-          reason: gate.reason || "Price gate failed",
           qualificationMode: gate.mode,
-          ownershipMethod: ownershipMethod || undefined,
-        };
-      }
-    } else {
-      priceIds = gate.qualifying;
+          ownershipMethod: ownershipMethod || null,
+          nativeAllowCount: nativeAllow.size,
+          priceCount: priceIds.length,
+        })
+      );
+      return {
+        paymentConfirmed: false,
+        status:
+          gate.mode === "fail_closed"
+            ? "membership_price_config_missing"
+            : "session_price_not_membership",
+        stripeCustomerId: "",
+        reason: gate.reason || "Price gate failed",
+        qualificationMode: gate.mode,
+        ownershipMethod: ownershipMethod || undefined,
+      };
     }
+    priceIds = gate.qualifying;
   }
 
   if (!stripeCustomerId) {
@@ -845,6 +828,12 @@ export async function confirmCheckoutForMember(input: {
     (configuredPlan.startsWith("price_") ? configuredPlan : "") ||
     configuredPlan ||
     "";
+  // Resolve the Memberstack plan id from the actual Stripe price via the catalog;
+  // fall back to the default only when the price has no catalog mapping.
+  const mappedPlan = primaryPriceId.startsWith("price_")
+    ? getMemberstackPlanIdForStripePrice(primaryPriceId)
+    : "";
+  const planIdToPersist = mappedPlan || configuredPlan || primaryPriceId;
 
   const currentOnboardingStatus = String(
     existingRows[0]?.fields[MEMBER_FIELDS.onboardingStatus] ?? ""
@@ -874,8 +863,8 @@ export async function confirmCheckoutForMember(input: {
       patch["Paid Plans (price ids)"] = configuredPlan;
     }
   }
-  if (configuredPlan || primaryPriceId) {
-    patch[MEMBER_FIELDS.memberstackPlanId] = configuredPlan || primaryPriceId;
+  if (planIdToPersist) {
+    patch[MEMBER_FIELDS.memberstackPlanId] = planIdToPersist;
   }
   // verifiedPaid is required to reach here — safe to clear stale cancel + set access.
   patch[MEMBER_FIELDS.cancelAtPeriodEnd] = false;
@@ -907,7 +896,7 @@ export async function confirmCheckoutForMember(input: {
     stripeCustomerId,
     reason:
       result.status === "updated"
-        ? `Paid/Active + Stripe Price ID=${primaryPriceId || "—"} Status=${subscriptionStatus || "active"} Memberstack Plan ID=${configuredPlan || primaryPriceId || "—"}`
+        ? `Paid/Active + Stripe Price ID=${primaryPriceId || "—"} Status=${subscriptionStatus || "active"} Memberstack Plan ID=${planIdToPersist || "—"}`
         : result.status === "shadowed"
           ? "Shadow mode — would mark Paid"
           : result.status,

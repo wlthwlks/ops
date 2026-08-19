@@ -11,6 +11,7 @@ import {
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 import { canApplyMemberstackWebhooks } from "@/lib/forms/feature-flags";
 import { recordIntegrationError } from "@/lib/forms/webhooks/store";
+import { getConfiguredMemberstackPlanId } from "@/lib/integrations/stripe";
 import { FormsError } from "@/lib/forms/errors";
 
 function normalizeEventType(type: string): string {
@@ -204,6 +205,7 @@ export async function handleMemberstackEvent(input: {
     if (m.planId) patch[MEMBER_FIELDS.memberstackPlanId] = m.planId;
     else {
       const msPlan =
+        getConfiguredMemberstackPlanId() ||
         (process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID || "").trim() ||
         (process.env.MEMBERSTACK_PLAN_ID || "").trim();
       if (msPlan) patch[MEMBER_FIELDS.memberstackPlanId] = msPlan;

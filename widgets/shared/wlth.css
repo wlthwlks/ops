@@ -352,6 +352,55 @@
   margin: 12px 0 0;
 }
 
+/* —— Promo code —— */
+.wlth-widget .wlth-promo {
+  margin: 14px 0 18px;
+  text-align: left;
+}
+
+.wlth-widget .wlth-promo label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wlth-text);
+  margin-bottom: 6px;
+}
+
+.wlth-widget .wlth-promo-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.wlth-widget .wlth-promo-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  font-size: 14px;
+  border: 1px solid var(--wlth-border);
+  border-radius: var(--wlth-radius-sm);
+  background: var(--wlth-surface);
+  color: var(--wlth-text);
+  text-transform: uppercase;
+}
+
+.wlth-widget .wlth-promo-row input:focus {
+  outline: none;
+  border-color: var(--wlth-accent, #0f766e);
+}
+
+.wlth-widget .wlth-promo-ok {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--wlth-text);
+}
+
+.wlth-widget .wlth-promo-err {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--wlth-error, #b91c1c);
+}
+
 .wlth-widget .wlth-btn-primary {
   min-width: 180px;
 }

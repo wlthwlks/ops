@@ -251,6 +251,16 @@ export function SignupApp(props: { apiBase: string }) {
   const [communityError, setCommunityError] = useState<string | undefined>();
   const [termsOk, setTermsOk] = useState(false);
   const [termsError, setTermsError] = useState<string | undefined>();
+  const [promoCode, setPromoCode] = useState("");
+  const [promoApplied, setPromoApplied] = useState<{
+    offerCode: string;
+    priceKey: string;
+    memberstackPriceId: string;
+    label: string | null;
+    description: string | null;
+  } | null>(null);
+  const [promoError, setPromoError] = useState<string | null>(null);
+  const [promoChecking, setPromoChecking] = useState(false);
   const mountedRef = useRef(true);
   const attribution = useMemo(() => captureAttribution(), []);
   const busy = asyncState.kind === "busy" || asyncState.kind === "loading-form";
@@ -947,6 +957,48 @@ export function SignupApp(props: { apiBase: string }) {
     (errors) => onInvalidScrollToError(errors as Record<string, unknown>)
   );
 
+  const applyPromoCode = async () => {
+    const code = promoCode.trim();
+    if (!code) {
+      setPromoApplied(null);
+      setPromoError("Enter a promo code.");
+      return;
+    }
+    setPromoChecking(true);
+    setPromoError(null);
+    setPromoApplied(null);
+    try {
+      const res = (await api(props.apiBase, "/api/onboarding/billing-offer", {
+        method: "POST",
+        token: token || undefined,
+        body: JSON.stringify({ code }),
+      })) as Record<string, unknown>;
+      if (res.applied === true) {
+        setPromoApplied({
+          offerCode: String(res.offerCode || code),
+          priceKey: String(res.priceKey || ""),
+          memberstackPriceId: String(res.memberstackPriceId || ""),
+          label: typeof res.label === "string" ? res.label : null,
+          description: typeof res.description === "string" ? res.description : null,
+        });
+      } else {
+        setPromoError(
+          typeof res.message === "string"
+            ? res.message
+            : "This promo code is invalid or has expired."
+        );
+      }
+    } catch (e) {
+      setPromoError(
+        e instanceof Error && e.message
+          ? e.message
+          : "Could not validate promo code. Please try again."
+      );
+    } finally {
+      setPromoChecking(false);
+    }
+  };
+
   const startCheckout = async () => {
     if (busy) return;
     setError(null);
@@ -974,6 +1026,22 @@ export function SignupApp(props: { apiBase: string }) {
       return;
     }
     setTermsError(undefined);
+    // Promo-code gate: a typed-but-invalid code must never silently fall back
+    // to the default price.
+    const typedCode = promoCode.trim();
+    if (typedCode && !promoApplied) {
+      setError(
+        promoError ||
+          "Enter a valid promo code or clear the promo field to continue with the standard price."
+      );
+      requestAnimationFrame(() => {
+        const el = document.querySelector(".wlth-promo");
+        if (el && el instanceof HTMLElement) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+      return;
+    }
     // Outbound path: payment-verification only — never payment-confirmed
     setAsyncState(BUSY.checkout);
     scrollSignupToTop();
@@ -987,7 +1055,7 @@ export function SignupApp(props: { apiBase: string }) {
         }) => Promise<unknown>;
       };
     };
-    const priceId = config?.membershipPriceId;
+    const priceId = promoApplied?.memberstackPriceId || config?.membershipPriceId;
     if (!priceId) {
       setError("Membership price is not configured (MEMBERSTACK_MEMBERSHIP_PRICE_ID).");
       setAsyncState({ kind: "idle" });
@@ -1512,6 +1580,46 @@ export function SignupApp(props: { apiBase: string }) {
               }}
               termsError={termsError}
             />
+
+            <div className="wlth-promo">
+              <label htmlFor="wlth-promo-code">Promo code (optional)</label>
+              <div className="wlth-promo-row">
+                <input
+                  id="wlth-promo-code"
+                  type="text"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="e.g. FOUNDERS45"
+                  value={promoCode}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setPromoCode(v);
+                    setPromoError(null);
+                    if (
+                      promoApplied &&
+                      promoApplied.offerCode.toUpperCase() !== v.trim().toUpperCase()
+                    ) {
+                      setPromoApplied(null);
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="wlth-btn-secondary"
+                  disabled={promoChecking}
+                  onClick={() => void applyPromoCode()}
+                >
+                  {promoChecking ? "Checking…" : "Apply"}
+                </button>
+              </div>
+              {promoApplied && (
+                <p className="wlth-promo-ok">
+                  <strong>{promoApplied.label || promoApplied.offerCode}</strong>
+                  {promoApplied.description ? ` — ${promoApplied.description}` : ""}
+                </p>
+              )}
+              {promoError && <p className="wlth-promo-err">{promoError}</p>}
+            </div>
 
             <div className="wlth-actions">
               <button

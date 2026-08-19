@@ -1,4 +1,8 @@
 import Stripe from "stripe";
+import {
+  getBillingCatalog,
+  getDefaultSignupPrice,
+} from "@/lib/billing/catalog";
 
 let _stripe: Stripe | undefined;
 
@@ -49,7 +53,10 @@ function dedupePreserveOrder(ids: string[]): string[] {
 }
 
 /**
- * Parse membership price configuration from env.
+ * Parse membership price configuration.
+ * Explicit options → legacy parsing (tests / opt-in callers).
+ * Env-only → derived from the centralized Billing Catalog
+ * (BILLING_CATALOG_JSON or the legacy env migration).
  * Native Stripe `price_…` ids qualify Stripe invoices/checkout.
  * Memberstack `prc_…` / `pln_…` ids are stored on Airtable only.
  */
@@ -58,27 +65,47 @@ export function parseMembershipPriceConfig(options?: {
   memberstackMembershipPriceId?: string;
   memberstackPlanId?: string;
 }): MembershipPriceConfig {
-  const stripeRaw =
-    options?.stripeMembershipPriceIds ?? process.env.STRIPE_MEMBERSHIP_PRICE_IDS ?? "";
-  const msPrimary =
-    options?.memberstackMembershipPriceId ??
-    process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID ??
-    "";
-  const msPlan = options?.memberstackPlanId ?? process.env.MEMBERSTACK_PLAN_ID ?? "";
+  if (
+    options &&
+    (options.stripeMembershipPriceIds !== undefined ||
+      options.memberstackMembershipPriceId !== undefined ||
+      options.memberstackPlanId !== undefined)
+  ) {
+    const stripeRaw = options.stripeMembershipPriceIds ?? "";
+    const msPrimary = options.memberstackMembershipPriceId ?? "";
+    const msPlan = options.memberstackPlanId ?? "";
 
-  const fromStripeEnv = splitCsv(stripeRaw);
-  const extras = [msPrimary.trim(), msPlan.trim()].filter(Boolean);
-  const all = dedupePreserveOrder([...fromStripeEnv, ...extras]);
+    const fromStripeEnv = splitCsv(stripeRaw);
+    const extras = [msPrimary.trim(), msPlan.trim()].filter(Boolean);
+    const all = dedupePreserveOrder([...fromStripeEnv, ...extras]);
 
-  const nativeStripePriceIds = all.filter((id) => id.startsWith("price_"));
-  const memberstackCommerceIds = all.filter(
-    (id) => id.startsWith("prc_") || id.startsWith("pln_")
+    const nativeStripePriceIds = all.filter((id) => id.startsWith("price_"));
+    const memberstackCommerceIds = all.filter(
+      (id) => id.startsWith("prc_") || id.startsWith("pln_")
+    );
+
+    return {
+      nativeStripePriceIds: dedupePreserveOrder(nativeStripePriceIds),
+      memberstackCommerceIds: dedupePreserveOrder(memberstackCommerceIds),
+      allIds: all,
+    };
+  }
+
+  const catalog = getBillingCatalog();
+  const nativeStripePriceIds = dedupePreserveOrder(
+    catalog.prices
+      .map((p) => p.stripePriceId)
+      .filter((id): id is string => Boolean(id))
   );
-
+  const memberstackCommerceIds = dedupePreserveOrder(
+    catalog.prices
+      .map((p) => p.memberstackPriceId)
+      .filter((id): id is string => Boolean(id))
+  );
   return {
-    nativeStripePriceIds: dedupePreserveOrder(nativeStripePriceIds),
-    memberstackCommerceIds: dedupePreserveOrder(memberstackCommerceIds),
-    allIds: all,
+    nativeStripePriceIds,
+    memberstackCommerceIds,
+    allIds: dedupePreserveOrder([...nativeStripePriceIds, ...memberstackCommerceIds]),
   };
 }
 
@@ -101,11 +128,16 @@ export function getConfiguredMembershipPriceIds(options?: {
 
 /**
  * Primary membership price/plan id to store on Airtable Memberstack Plan ID / display.
- * Prefers Memberstack commerce id when configured.
+ * Prefers the catalog default signup price's Memberstack commerce id when configured.
+ * Call sites that know the actual Stripe price should use
+ * getMemberstackPlanIdForStripePrice() from the billing catalog instead.
  */
 export function getConfiguredMemberstackPlanId(): string {
   const cfg = parseMembershipPriceConfig();
+  const defaultMs =
+    getDefaultSignupPrice()?.memberstackPriceId?.trim() || "";
   return (
+    defaultMs ||
     cfg.memberstackCommerceIds[0] ||
     cfg.nativeStripePriceIds[0] ||
     cfg.allIds[0] ||

@@ -258,6 +258,71 @@ describe("reactivateMembershipForMember", () => {
     expect(patch[MEMBER_FIELDS.memberstackPlanId]).toBe("prc_plan");
   });
 
+  it("uses the billing catalog reactivation price and maps the Memberstack plan id", async () => {
+    const prevCatalog = process.env.BILLING_CATALOG_JSON;
+    const prevStripeIds = process.env.STRIPE_MEMBERSHIP_PRICE_IDS;
+    const prevMsPrice = process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID;
+    process.env.STRIPE_REACTIVATION_PRICE_ID = "price_env_stale";
+    process.env.STRIPE_MEMBERSHIP_PRICE_IDS = "";
+    delete process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID;
+    process.env.BILLING_CATALOG_JSON = JSON.stringify({
+      version: 1,
+      defaultTierKey: "standard",
+      defaultPriceKey: "standard_quarterly_default",
+      prices: [
+        {
+          priceKey: "standard_quarterly_default",
+          tierKey: "standard",
+          cadence: "quarterly",
+          stripePriceId: "price_catalog_new",
+          memberstackPriceId: "prc_catalog_new",
+          sellable: true,
+          legacy: false,
+          eligibleForSignup: true,
+          eligibleForReactivation: true,
+        },
+        {
+          priceKey: "standard_legacy",
+          tierKey: "standard",
+          cadence: "custom",
+          stripePriceId: "price_legacy",
+          sellable: false,
+          legacy: true,
+          eligibleForSignup: false,
+          eligibleForReactivation: false,
+        },
+      ],
+      offers: [],
+    });
+    try {
+      subscriptionsList.mockResolvedValue({ data: [] });
+      subscriptionsCreate.mockResolvedValue({
+        id: "sub_catalog",
+        status: "active",
+        items: membershipLine("price_catalog_new"),
+      });
+
+      const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+      expect(result.status).toBe("reactivated");
+      const createArgs = subscriptionsCreate.mock.calls[0][0] as {
+        items: { price: string }[];
+      };
+      expect(createArgs.items[0].price).toBe("price_catalog_new");
+      expect(createArgs.items[0].price).not.toBe("price_env_stale");
+      const patch = applyTrustedPaymentByMemberstackId.mock.calls[0][0]
+        .patch as Record<string, unknown>;
+      expect(patch[MEMBER_FIELDS.memberstackPlanId]).toBe("prc_catalog_new");
+    } finally {
+      if (prevCatalog === undefined) delete process.env.BILLING_CATALOG_JSON;
+      else process.env.BILLING_CATALOG_JSON = prevCatalog;
+      if (prevStripeIds === undefined) delete process.env.STRIPE_MEMBERSHIP_PRICE_IDS;
+      else process.env.STRIPE_MEMBERSHIP_PRICE_IDS = prevStripeIds;
+      if (prevMsPrice === undefined) delete process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID;
+      else process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID = prevMsPrice;
+    }
+  });
+
   it("canceled after period end never reuses the historical old price", async () => {
     subscriptionsList.mockResolvedValue({
       data: [
