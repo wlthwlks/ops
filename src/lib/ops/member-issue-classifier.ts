@@ -8,6 +8,7 @@ import type {
 } from "@/lib/ops/member-health-types";
 import { isValidEmail, normalizeEmailStrict } from "@/lib/billing/reconcile-stripe-customers";
 import { hasServiceAccess } from "@/lib/introduction/service-access";
+import { resolveIntroPauseState } from "@/lib/introduction/pause-state";
 
 const ISSUE_META: Record<
   MemberIssueCode,
@@ -198,6 +199,38 @@ const ISSUE_META: Record<
     recommendedAction: "Review and remove the member from WLTH WLKS Slack access.",
     systems: ["slack", "airtable"],
   },
+  INTROS_PAUSED: {
+    severity: "info",
+    label: "Introductions paused",
+    explanation:
+      "Recurring intro status is Paused with a future resume date. The member is excluded from introductions until then.",
+    recommendedAction: "No action required. Resume manually if they return early.",
+    systems: ["airtable"],
+  },
+  PAUSED_WITH_MISSING_DATE: {
+    severity: "medium",
+    label: "Paused without resume date",
+    explanation:
+      "Recurring intro status is Paused but Recurring pause until is blank or invalid — the member stays paused indefinitely.",
+    recommendedAction: "Set a resume date or resume introductions manually in the member drawer.",
+    systems: ["airtable"],
+  },
+  PAUSED_PAST_RESUME_DATE: {
+    severity: "medium",
+    label: "Pause date passed",
+    explanation:
+      "The pause resume date has passed but the status is still Paused. The expiry cron should auto-clear this.",
+    recommendedAction: "Resume introductions in the member drawer or wait for the nightly expiry run.",
+    systems: ["airtable"],
+  },
+  STRIPE_SUBSCRIPTION_PAUSED: {
+    severity: "medium",
+    label: "Billing paused in Stripe",
+    explanation:
+      "The Stripe subscription is paused (pause collection). The member has no service access until it resumes.",
+    recommendedAction: "Wait for the Stripe resume date, or resume the subscription in the Stripe dashboard.",
+    systems: ["stripe", "airtable"],
+  },
 };
 
 export function makeIssue(code: MemberIssueCode): MemberIssue {
@@ -231,6 +264,14 @@ export type ClassifyInput = {
   stripeCustomerId: string;
   stripeCustomerEmail?: string;
   latestQualifyingPaidThrough?: string;
+  /** Airtable "Recurring intro status" (raw). */
+  recurringIntroStatus?: string | null;
+  /** Airtable "Recurring pause until" (raw). */
+  recurringPauseUntil?: string | null;
+  /** Airtable "Stripe subscription status" (raw). */
+  stripeSubscriptionStatus?: string | null;
+  /** Airtable "Billing pause until" (raw). */
+  billingPauseUntil?: string | null;
   /** Count of Airtable records sharing normalized primary email. */
   airtableEmailCount: number;
   /** Count of Airtable records sharing this Stripe Customer ID. */
@@ -256,11 +297,16 @@ export function classifyMemberHealth(input: ClassifyInput): {
   recommendedNextAction: string;
 } {
   const issues: MemberIssue[] = [];
+  const stripeSubStatus = (input.stripeSubscriptionStatus ?? "")
+    .trim()
+    .toLowerCase();
   const access = hasServiceAccess(
     input.membership,
     input.payment,
     input.serviceAccessUntil || null,
-    input.referenceDate
+    input.referenceDate,
+    undefined,
+    { stripeSubscriptionStatus: input.stripeSubscriptionStatus }
   );
 
   if (input.stripeOnly) {
@@ -271,6 +317,32 @@ export function classifyMemberHealth(input: ClassifyInput): {
       highestSeverity: highestSeverity(issues),
       recommendedNextAction: issues[0].recommendedAction,
     };
+  }
+
+  if (stripeSubStatus === "paused") {
+    const resumeUntil = (input.billingPauseUntil ?? "").trim();
+    const indefinite = !resumeUntil;
+    const issue = makeIssue("STRIPE_SUBSCRIPTION_PAUSED");
+    issue.severity = indefinite ? "high" : "medium";
+    issue.explanation = indefinite
+      ? "The Stripe subscription is paused indefinitely (pause collection). The member has no service access until it is resumed in Stripe."
+      : `The Stripe subscription is paused (pause collection) until ${resumeUntil}. The member has no service access until it resumes.`;
+    issues.push(issue);
+  }
+
+  const introPause = resolveIntroPauseState(
+    input.recurringIntroStatus,
+    input.recurringPauseUntil,
+    input.referenceDate
+  );
+  if (introPause.state === "paused") {
+    if (introPause.missingDate) {
+      issues.push(makeIssue("PAUSED_WITH_MISSING_DATE"));
+    } else if (!introPause.isPaused) {
+      issues.push(makeIssue("PAUSED_PAST_RESUME_DATE"));
+    } else {
+      issues.push(makeIssue("INTROS_PAUSED"));
+    }
   }
 
   if (input.serviceAccessUntil) {

@@ -23,6 +23,10 @@
     {
       "path": "/api/cron/future-access-parity",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/intro-pause-expiry",
+      "schedule": "0 6 * * *"
     }
   ]
 }

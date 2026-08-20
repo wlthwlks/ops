@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import {
   App,
   Button,
+  DatePicker,
   Descriptions,
   Divider,
   Drawer,
@@ -18,11 +20,101 @@ export type OpenedFromIssue = {
   detectedAt?: string;
 };
 
+function PauseControls(props: {
+  member: MemberHealthRow;
+  mode: string;
+  onChanged: () => void;
+}) {
+  const { message } = App.useApp();
+  const [pauseDate, setPauseDate] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"pause" | "resume" | null>(null);
+
+  if (!props.member.airtableRecordId) return null;
+
+  const call = async (action: "pause" | "resume") => {
+    setBusy(action);
+    try {
+      const res = await fetch("/api/ops-dashboard/members/pause", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          airtableRecordId: props.member.airtableRecordId,
+          ...(action === "pause" && pauseDate ? { pauseUntil: pauseDate } : {}),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || json.success === false) {
+        throw new Error(json.message || res.statusText);
+      }
+      const result = json.results?.[0];
+      if (result && !result.ok) throw new Error(result.error || "Action failed");
+      const warnings = result?.warnings || [];
+      message.success(
+        action === "pause"
+          ? warnings.length > 0
+            ? `Paused (${warnings[0]})`
+            : "Introductions paused"
+          : "Introductions resumed"
+      );
+      setPauseDate(null);
+      props.onChanged();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const live = props.mode === "live";
+  const isPaused =
+    props.member.introPauseState === "paused" ||
+    props.member.introPauseState === "paused_expired";
+
+  return (
+    <Space wrap>
+      <DatePicker
+        size="small"
+        placeholder="Resume date (blank = indefinite)"
+        disabled={!live || busy !== null}
+        onChange={(_, s) => setPauseDate(typeof s === "string" ? s : null)}
+      />
+      <Button
+        size="small"
+        type="primary"
+        danger={!isPaused}
+        loading={busy === "pause"}
+        disabled={!live || busy !== null}
+        onClick={() => void call("pause")}
+      >
+        Pause intros
+      </Button>
+      <Button
+        size="small"
+        loading={busy === "resume"}
+        disabled={!live || busy !== null || !isPaused}
+        onClick={() => void call("resume")}
+      >
+        Resume intros
+      </Button>
+      {!live && (
+        <Typography.Text type="secondary">
+          Read-only mode — pause actions disabled
+        </Typography.Text>
+      )}
+    </Space>
+  );
+}
+
 export function MemberDetailsDrawer(props: {
   member: MemberHealthRow | null;
   open: boolean;
   onClose: () => void;
   openedFromIssue?: OpenedFromIssue | null;
+  /** Ops runtime mode ("live" enables pause/resume actions). */
+  mode?: string;
+  /** Called after a pause/resume action so the directory can refresh. */
+  onChanged?: () => void;
 }) {
   const { message } = App.useApp();
   const selected = props.member;
@@ -137,6 +229,42 @@ export function MemberDetailsDrawer(props: {
               )}
             </Descriptions.Item>
           </Descriptions>
+
+          <Typography.Text strong>Introductions</Typography.Text>
+          <Descriptions size="small" column={1} bordered>
+            <Descriptions.Item label="Recurring intro status">
+              {selected.recurringIntroStatus || "—"}
+            </Descriptions.Item>
+            <Descriptions.Item label="Recurring pause until">
+              {selected.recurringPauseUntil || "—"}
+            </Descriptions.Item>
+            <Descriptions.Item label="Pause state">
+              <Tag
+                color={
+                  selected.introPauseState === "paused"
+                    ? "warning"
+                    : selected.introPauseState === "paused_expired"
+                      ? "gold"
+                      : selected.introPauseState === "excluded"
+                        ? "red"
+                        : "default"
+                }
+              >
+                {selected.introPauseState.replace(/_/g, " ")}
+              </Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="Stripe subscription status">
+              {selected.stripeSubscriptionStatus || "—"}
+            </Descriptions.Item>
+            <Descriptions.Item label="Billing pause until">
+              {selected.billingPauseUntil || (selected.stripeSubscriptionStatus.trim().toLowerCase() === "paused" ? "Indefinite" : "—")}
+            </Descriptions.Item>
+          </Descriptions>
+          <PauseControls
+            member={selected}
+            mode={props.mode || "read_only"}
+            onChanged={props.onChanged || (() => {})}
+          />
 
           <Typography.Text strong>Stripe</Typography.Text>
           <Descriptions size="small" column={1} bordered>

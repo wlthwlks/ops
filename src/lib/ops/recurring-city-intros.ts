@@ -1,6 +1,7 @@
 import { DateTime } from "luxon";
 import type { AirtableClient, AirtableRecord } from "../integrations/airtable";
 import type { SlackClient, SlackUser } from "../integrations/slack";
+import { resolveIntroPauseState } from "../introduction/pause-state";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +41,8 @@ export interface RecurringMember {
   membership: string;
   serviceAccessUntil: string | null;
   firstIntroductionStatus: string;
+  /** Airtable "Stripe subscription status" — "paused" blocks access. */
+  stripeSubscriptionStatus?: string;
 }
 
 export interface RecurringGroup {
@@ -178,6 +181,10 @@ export function isMemberEligible(member: RecurringMember, cycleDate: Date): { el
     return { eligible: false, reason: "Waiting for first introduction" };
   }
 
+  if ((member.stripeSubscriptionStatus || "").trim().toLowerCase() === "paused") {
+    return { eligible: false, reason: "Billing paused" };
+  }
+
   const serviceAccessOk = member.payment === "Paid" && member.membership === "Active";
   if (!serviceAccessOk) {
     if (member.serviceAccessUntil) {
@@ -190,14 +197,16 @@ export function isMemberEligible(member: RecurringMember, cycleDate: Date): { el
     }
   }
 
-  const status = (member.recurringIntroStatus || "").trim();
-  if (status === "" || status === "Active") return { eligible: true, reason: null };
-  if (status === "Excluded") return { eligible: false, reason: "Excluded" };
-  if (status === "Paused") {
-    if (!member.recurringPauseUntil) return { eligible: false, reason: "Paused" };
-    const pauseEnd = new Date(member.recurringPauseUntil);
-    if (cycleDate >= pauseEnd) return { eligible: true, reason: null };
-    return { eligible: false, reason: "Paused" };
+  const pause = resolveIntroPauseState(
+    member.recurringIntroStatus,
+    member.recurringPauseUntil,
+    cycleDate
+  );
+  if (pause.state === "active") return { eligible: true, reason: null };
+  if (pause.state === "excluded") return { eligible: false, reason: "Excluded" };
+  if (pause.isPaused) return { eligible: false, reason: "Paused" };
+  if (pause.state === "paused" && !pause.isPaused) {
+    return { eligible: true, reason: null };
   }
   return { eligible: false, reason: "Unknown status" };
 }
@@ -597,6 +606,7 @@ export async function runRecurringCityIntros(
         membership: String(mf["Membership"] || ""),
         serviceAccessUntil: mf["Service access until"] ? String(mf["Service access until"]) : null,
         firstIntroductionStatus: String(mf["First introduction status"] || ""),
+        stripeSubscriptionStatus: String(mf["Stripe subscription status"] || ""),
       };
 
       if (isMemberEligible(member, cycleDate).eligible) {

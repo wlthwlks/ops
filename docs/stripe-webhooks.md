@@ -2,6 +2,31 @@
 
 Endpoint: `POST /api/webhooks/stripe` (existing).
 
+## Always on: pause collection (`customer.subscription.updated`)
+
+**This path is not disabled by form feature flags.**
+
+Stripe pause collection does NOT change the subscription status — it stays
+`active` and the pause is only visible as `pause_collection` on the
+subscription object (`resumes_at: null` = indefinite). The dedicated
+`customer.subscription.paused` / `customer.subscription.resumed` events belong
+to other flows (e.g. subscription schedules that DO set status `paused`) and
+are NOT required for this integration — `customer.subscription.updated`
+alone is sufficient.
+
+Detected transitions (`src/lib/billing/pause-sync.ts`):
+
+- Pause: `pause_collection` set on the subscription (or status `paused`)
+- Resume: `pause_collection` cleared (visible via `previous_attributes.pause_collection`),
+  status transition `paused → active`, or the `customer.subscription.resumed` event
+
+On pause, Airtable is updated: `Stripe subscription status = "paused"` (our
+marker column — Stripe's own status stays active), `Billing pause until` =
+resume date or blank, `Service access until` = now, `Membership = "Paused"`.
+On resume the fields are restored (`Membership = "Active"`, access until from
+the Stripe period end when still in the future). Missed events can be repaired
+with `npm run billing:backfill-pauses`.
+
 ## Always on: `invoice.paid`
 
 **This path is not disabled by form feature flags.**

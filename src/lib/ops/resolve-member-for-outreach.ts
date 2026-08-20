@@ -222,6 +222,14 @@ export async function resolveMemberForOutreach(
       stripeCustomerId,
       stripeCustomerEmail: "",
       latestQualifyingPaidThrough: "",
+      recurringIntroStatus: fieldStr(record.fields, MEMBER_FIELDS.recurringIntroStatus),
+      recurringPauseUntil: fieldStr(record.fields, MEMBER_FIELDS.recurringPauseUntil),
+      introPauseState: "unknown",
+      stripeSubscriptionStatus: fieldStr(
+        record.fields,
+        MEMBER_FIELDS.stripeSubscriptionStatus
+      ),
+      billingPauseUntil: fieldStr(record.fields, MEMBER_FIELDS.billingPauseUntil),
       activeSlackUserId: identity.user?.id || "",
       activeSlackEmail: identity.user?.email || "",
       activeSlackDisplayName: identity.user

@@ -56,6 +56,53 @@ describe("checkServiceAccess", () => {
   });
 });
 
+describe("Stripe pause collection access", () => {
+  const ref = new Date("2026-07-25");
+
+  it("blocks access under legacy policy even when Active+Paid with future access", () => {
+    expect(
+      hasServiceAccess("Active", "Paid", "2026-12-01", ref, undefined, {
+        stripeSubscriptionStatus: "paused",
+      })
+    ).toBe(false);
+  });
+
+  it("blocks access under v2 policy", () => {
+    expect(
+      hasServiceAccess("Active", "Paid", "2026-12-01", ref, "v2", {
+        stripeSubscriptionStatus: "paused",
+      })
+    ).toBe(false);
+  });
+
+  it("is case-insensitive and ignores other statuses", () => {
+    expect(
+      hasServiceAccess("Active", "Paid", null, ref, undefined, {
+        stripeSubscriptionStatus: "PAUSED",
+      })
+    ).toBe(false);
+    expect(
+      hasServiceAccess("Active", "Paid", null, ref, undefined, {
+        stripeSubscriptionStatus: "active",
+      })
+    ).toBe(true);
+  });
+
+  it("reports billing_paused reason and message", () => {
+    const result = checkServiceAccess(
+      "Active",
+      "Paid",
+      "2026-12-01",
+      ref,
+      undefined,
+      { stripeSubscriptionStatus: "paused" }
+    );
+    expect(result.accessible).toBe(false);
+    expect(result.reason).toBe("billing_paused");
+    expect((result as { message: string }).message).toContain("paused");
+  });
+});
+
 describe("cancel_at_period_end access preservation", () => {
   // cancel_at_period_end=true + Service access until future = member still has access
   it("Active+Paid+cancel_at_period_end with future access → has access", () => {

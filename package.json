@@ -30,6 +30,8 @@
     "airtable:audit-member-duplicates": "npx tsx scripts/audit-airtable-member-duplicates.ts",
     "billing:audit": "npx tsx scripts/entitlement-audit.ts",
     "billing:reconcile": "npx tsx scripts/entitlement-reconcile.ts",
+    "billing:backfill-pauses": "npx tsx scripts/backfill-billing-pauses.ts",
+    "billing:backfill-pauses:local": "npx tsx scripts/backfill-billing-pauses.ts --env-file=.env.local",
     "klaviyo:sync-members": "npx tsx scripts/sync-klaviyo-members.ts",
     "widgets:build": "WIDGET=signup vite build --config widgets/vite.config.ts && WIDGET=update-details vite build --config widgets/vite.config.ts && WIDGET=getting-started vite build --config widgets/vite.config.ts",
     "widgets:build:signup": "WIDGET=signup vite build --config widgets/vite.config.ts",

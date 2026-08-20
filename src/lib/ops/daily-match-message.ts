@@ -191,7 +191,7 @@ export async function runDailyMatchMessage(
   if (emails && emails.length > 0) {
     ctx.log(`Looking up ${emails.length} specific email(s)...`);
     const emailConditions = emails.map((e) => `{email} = "${e.toLowerCase()}"`);
-    const formula = `AND({Membership} = "Active", {Payment} = "Paid", OR(${emailConditions.join(", ")}))`;
+    const formula = `AND({Membership} = "Active", {Payment} = "Paid", NOT({Recurring intro status} = "Paused"), NOT({Stripe subscription status} = "paused"), OR(${emailConditions.join(", ")}))`;
     records = await airtable.listRecords("MEMBERS", { filterByFormula: formula });
     ctx.log(`Found ${records.length} member(s) matching the email(s)`);
   } else {
@@ -199,7 +199,7 @@ export async function runDailyMatchMessage(
       startDate === endDate
         ? `IS_SAME(CREATED_TIME(), "${startDate}", "day")`
         : `AND(IS_AFTER(CREATED_TIME(), DATEADD("${startDate}", -1, "days")), IS_BEFORE(CREATED_TIME(), DATEADD("${endDate}", 1, "days")))`;
-    const formula = `AND({Membership} = "Active", {Payment} = "Paid", ${dateFilter})`;
+    const formula = `AND({Membership} = "Active", {Payment} = "Paid", NOT({Recurring intro status} = "Paused"), NOT({Stripe subscription status} = "paused"), ${dateFilter})`;
     ctx.log(`Fetching new members for ${startDate} to ${endDate}...`);
     records = await airtable.listRecords("MEMBERS", {
       filterByFormula: formula,

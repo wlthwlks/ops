@@ -20,6 +20,7 @@ import {
 import { extractStripeCustomerIdFromMemberstackRaw } from "@/lib/forms/billing/confirm-checkout";
 import { getStripeClient } from "@/lib/integrations/stripe";
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
+import { resolveIntroPauseState } from "@/lib/introduction/pause-state";
 
 export const runtime = "nodejs";
 
@@ -63,11 +64,28 @@ function isScheduledToCancel(sub: Stripe.Subscription): boolean {
 }
 
 function subscriptionToSnapshot(sub: Stripe.Subscription) {
+  const pauseCollection = (sub.pause_collection ||
+    null) as { behavior?: string; resumes_at?: number | null } | null;
+  const resumesAt =
+    pauseCollection && typeof pauseCollection.resumes_at === "number"
+      ? pauseCollection.resumes_at
+      : null;
+  // Stripe pause collection does NOT change subscription status — the pause
+  // is only visible as pause_collection on the object.
+  const paused = sub.status === "paused" || pauseCollection != null;
   return {
     subscriptionStatus: sub.status,
     cancelAtPeriodEnd: isScheduledToCancel(sub),
     currentPeriodEnd: periodEndFromSub(sub),
     subscriptionId: sub.id,
+    billingPause: {
+      paused,
+      indefinite: paused && !resumesAt,
+      resumesAt: resumesAt
+        ? new Date(resumesAt * 1000).toISOString().slice(0, 10)
+        : null,
+      behavior: pauseCollection?.behavior || null,
+    },
   };
 }
 
@@ -120,6 +138,12 @@ async function loadLiveStripeSnapshot(
   cancelAtPeriodEnd: boolean | null;
   currentPeriodEnd: string | null;
   subscriptionId: string | null;
+  billingPause: {
+    paused: boolean;
+    indefinite: boolean;
+    resumesAt: string | null;
+    behavior: string | null;
+  } | null;
   error?: string | null;
 }> {
   const empty = {
@@ -127,6 +151,7 @@ async function loadLiveStripeSnapshot(
     cancelAtPeriodEnd: null as boolean | null,
     currentPeriodEnd: null as string | null,
     subscriptionId: null as string | null,
+    billingPause: null,
     error: null as string | null,
   };
 
@@ -168,8 +193,9 @@ async function loadLiveStripeSnapshot(
           (s.status === "active" || s.status === "trialing") && isScheduledToCancel(s)
       ) ||
       subs.data.find((s) => s.status === "active" || s.status === "trialing") ||
-      subs.data.find((s) =>
-        ["past_due", "unpaid", "incomplete"].includes(s.status)
+      subs.data.find(
+        (s) =>
+          ["past_due", "unpaid", "incomplete", "paused"].includes(s.status)
       ) ||
       [...subs.data]
         .filter((s) => s.status === "canceled")
@@ -269,6 +295,12 @@ export async function GET(request: Request) {
       fieldStr(row.fields, MEMBER_FIELDS.stripeSubscriptionStatus) ||
       null;
 
+    // Stripe pause collection keeps the subscription status "active" — surface
+    // it as a pause for classification (and keep the real status in the payload).
+    const classifiedSubscriptionStatus = live.billingPause?.paused
+      ? "paused"
+      : stripeSubscriptionStatus;
+
     const accessUntilLabel = resolveAccessUntilLabel({
       serviceAccessUntil: profile.serviceAccessUntil,
       currentPeriodEnd: live.currentPeriodEnd,
@@ -280,14 +312,20 @@ export async function GET(request: Request) {
       payment: profile.payment,
       serviceAccessUntil: profile.serviceAccessUntil || accessUntilLabel,
       cancelAtPeriodEnd,
-      stripeSubscriptionStatus,
+      stripeSubscriptionStatus: classifiedSubscriptionStatus,
       hasPaymentMethod,
       currentPeriodEnd: live.currentPeriodEnd,
       cancellationEffectiveAt: cancelEffective || cancelDateLegacy,
+      billingPauseResumesAt: live.billingPause?.resumesAt ?? null,
     });
 
     const hasAccess = hasRemainingServiceAccess(
       profile.serviceAccessUntil || accessUntilLabel || live.currentPeriodEnd
+    );
+
+    const introPause = resolveIntroPauseState(
+      fieldStr(row.fields, MEMBER_FIELDS.recurringIntroStatus),
+      fieldStr(row.fields, MEMBER_FIELDS.recurringPauseUntil) || null
     );
 
     console.error(
@@ -324,6 +362,20 @@ export async function GET(request: Request) {
         uiState,
         hasServiceAccess: hasAccess,
         accessUntilLabel,
+        billingPause: live.billingPause ?? {
+          paused: false,
+          indefinite: false,
+          resumesAt: null,
+          behavior: null,
+        },
+        introPause: {
+          state: introPause.state,
+          isPaused: introPause.isPaused,
+          pauseUntil: introPause.pauseUntilDate
+            ? introPause.pauseUntilDate.toISOString().slice(0, 10)
+            : null,
+          missingDate: introPause.missingDate,
+        },
         /** Helps debug without secrets — safe for client */
         customerResolvedFrom: resolved.source,
         stripeLookupError: live.error || null,

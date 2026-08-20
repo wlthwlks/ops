@@ -50,6 +50,9 @@ export async function GET(request: Request) {
       expiredStillInSlack: flag(url, "expiredStillInSlack"),
       stripeConflict: flag(url, "stripeConflict"),
       duplicateStripe: flag(url, "duplicateStripe"),
+      paused: flag(url, "paused"),
+      pauseExpired: flag(url, "pauseExpired"),
+      billingPaused: flag(url, "billingPaused"),
       actionableOnly: flag(url, "actionableOnly"),
       informationalOnly: flag(url, "informationalOnly"),
       accessEndingDays: url.searchParams.get("accessEndingDays")

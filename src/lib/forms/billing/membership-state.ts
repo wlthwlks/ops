@@ -7,6 +7,7 @@ export type MembershipUiState =
   | "active"
   | "cancellation_scheduled"
   | "payment_problem"
+  | "paused"
   | "expired"
   | "incomplete_onboarding"
   | "unknown";
@@ -24,6 +25,8 @@ export type MembershipStateInput = {
   /** ISO or date string */
   currentPeriodEnd?: string | null;
   cancellationEffectiveAt?: string | null;
+  /** Stripe pause-collection resume date (blank = paused indefinitely). */
+  billingPauseResumesAt?: string | null;
   now?: Date;
 };
 
@@ -102,6 +105,11 @@ export function classifyMembershipUiState(
     pay === "unpaid"
   ) {
     return "payment_problem";
+  }
+
+  // Stripe pause collection (indefinite or scheduled) — distinct from cancel.
+  if (subStatus === "paused") {
+    return "paused";
   }
 
   // Scheduled cancel is the primary product state we want to surface.

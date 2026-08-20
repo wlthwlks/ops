@@ -83,6 +83,8 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
       } else if (sub.status === "active" || sub.status === "trialing") {
         patch[MEMBER_FIELDS.cancelAtPeriodEnd] = "false";
         patch[MEMBER_FIELDS.cancellationEffectiveAt] = "";
+        // Resume path (pause collection cleared) — drop any billing pause date.
+        patch[MEMBER_FIELDS.billingPauseUntil] = "";
         // NEVER claim Paid/Active/Service access from subscription lifecycle
         // events. Memberstack updates the subscription while PREPARING checkout
         // (before any payment), which fires subscription.updated with the old
@@ -133,6 +135,7 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
           [MEMBER_FIELDS.cancellationEffectiveAt]: effectiveAt,
           [MEMBER_FIELDS.serviceAccessUntil]: effectiveAt,
           [MEMBER_FIELDS.cancelAtPeriodEnd]: "false",
+          [MEMBER_FIELDS.billingPauseUntil]: "",
         },
       });
       if (result.status === "STRIPE_MEMBER_NOT_FOUND") {

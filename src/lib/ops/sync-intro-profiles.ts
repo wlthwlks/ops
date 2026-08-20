@@ -57,11 +57,11 @@ function buildCityFilter(cityGroup: CityGroup): string {
   const conditions = [cityGroup.label, ...cityGroup.alternatives].map(
     (name) => `FIND(LOWER("${name}"), LOWER({City}))`
   );
-  return `AND({Membership} = "Active", {Cancellation date} = "", OR(${conditions.join(", ")}))`;
+  return `AND({Membership} = "Active", {Cancellation date} = "", NOT({Recurring intro status} = "Paused"), OR(${conditions.join(", ")}))`;
 }
 
 function buildAllCitiesFilter(): string {
-  return `AND({Membership} = "Active", {Cancellation date} = "")`;
+  return `AND({Membership} = "Active", {Cancellation date} = "", NOT({Recurring intro status} = "Paused"))`;
 }
 
 const SYNC_FIELDS = [

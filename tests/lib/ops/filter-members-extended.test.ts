@@ -22,6 +22,11 @@ function row(partial: Partial<MemberHealthRow>): MemberHealthRow {
     stripeCustomerId: "cus_1",
     stripeCustomerEmail: "",
     latestQualifyingPaidThrough: "",
+    recurringIntroStatus: "",
+    recurringPauseUntil: "",
+    introPauseState: "active",
+    stripeSubscriptionStatus: "",
+    billingPauseUntil: "",
     activeSlackUserId: "U1",
     activeSlackEmail: "ada@ex.com",
     activeSlackDisplayName: "Ada",
@@ -78,6 +83,38 @@ describe("filterMembers extended", () => {
   it("filter options include all cities not just a page", () => {
     const opts = buildMemberFilterOptions(members);
     expect(opts.cities).toEqual(["London", "Paris"]);
+  });
+
+  it("filters paused intros and billing pauses", () => {
+    const paused = row({
+      airtableRecordId: "p1",
+      introPauseState: "paused",
+    });
+    const pausedExpired = row({
+      airtableRecordId: "p2",
+      introPauseState: "paused_expired",
+    });
+    const billingPaused = row({
+      airtableRecordId: "p3",
+      stripeSubscriptionStatus: "paused",
+    });
+
+    const r = filterMembers(members.concat([paused, pausedExpired, billingPaused]), {
+      paused: true,
+    });
+    expect(r.map((m) => m.airtableRecordId)).toEqual(["p1", "p2"]);
+
+    const expiredOnly = filterMembers(
+      members.concat([paused, pausedExpired, billingPaused]),
+      { pauseExpired: true }
+    );
+    expect(expiredOnly.map((m) => m.airtableRecordId)).toEqual(["p2"]);
+
+    const billing = filterMembers(
+      members.concat([paused, pausedExpired, billingPaused]),
+      { billingPaused: true }
+    );
+    expect(billing.map((m) => m.airtableRecordId)).toEqual(["p3"]);
   });
 
   it("city filter is exact case-insensitive", () => {

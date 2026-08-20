@@ -927,6 +927,7 @@ export async function updateMemberBilling(
     "Cancel at period end",
     "Cancellation effective at",
     "Memberstack Plan ID",
+    "Billing pause until",
   ];
   const changed: Record<string, { from: unknown; to: unknown }> = {};
   for (const f of billingFields) {
@@ -1048,6 +1049,7 @@ export async function applyTrustedPaymentByMemberstackId(
     "Cancel at period end",
     "Cancellation effective at",
     "Memberstack Plan ID",
+    "Billing pause until",
   ];
   const changed: Record<string, { from: unknown; to: unknown }> = {};
   for (const f of billingFields) {

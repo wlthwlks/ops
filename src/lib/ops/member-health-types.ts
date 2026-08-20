@@ -25,7 +25,11 @@ export type MemberIssueCode =
   | "FULLY_CONNECTED"
   | "CANCELLED_WITH_VALID_SERVICE_ACCESS"
   | "SERVICE_ACCESS_LATER_THAN_STRIPE"
-  | "EXPIRED_MEMBER_STILL_IN_SLACK_WORKSPACE";
+  | "EXPIRED_MEMBER_STILL_IN_SLACK_WORKSPACE"
+  | "INTROS_PAUSED"
+  | "PAUSED_WITH_MISSING_DATE"
+  | "PAUSED_PAST_RESUME_DATE"
+  | "STRIPE_SUBSCRIPTION_PAUSED";
 
 export type MemberIssue = {
   code: MemberIssueCode;
@@ -53,6 +57,18 @@ export type ChannelMembershipState =
   | "not_checked"
   | "error";
 
+/**
+ * Intro pause state derived from "Recurring intro status" + "Recurring pause until".
+ * "paused" blocks introductions right now; "paused_expired" means the resume date
+ * has passed but the status is still "Paused" (auto-resume cron will clear it).
+ */
+export type IntroPauseStateRow =
+  | "active"
+  | "paused"
+  | "paused_expired"
+  | "excluded"
+  | "unknown";
+
 export type MemberHealthRow = {
   airtableRecordId: string | null;
   name: string;
@@ -68,6 +84,15 @@ export type MemberHealthRow = {
   stripeCustomerId: string;
   stripeCustomerEmail: string;
   latestQualifyingPaidThrough: string;
+  /** Airtable "Recurring intro status" (raw). */
+  recurringIntroStatus: string;
+  /** Airtable "Recurring pause until" (raw). */
+  recurringPauseUntil: string;
+  introPauseState: IntroPauseStateRow;
+  /** Airtable "Stripe subscription status" (raw). */
+  stripeSubscriptionStatus: string;
+  /** Airtable "Billing pause until" — blank means paused indefinitely. */
+  billingPauseUntil: string;
   activeSlackUserId: string;
   activeSlackEmail: string;
   activeSlackDisplayName: string;

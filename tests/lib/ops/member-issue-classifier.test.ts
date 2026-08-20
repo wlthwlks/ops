@@ -30,6 +30,64 @@ describe("classifyMemberHealth", () => {
     expect(r.issues.some((i) => i.code === "FULLY_CONNECTED")).toBe(true);
   });
 
+  it("flags a Stripe-paused subscription as no-access with a pause issue", () => {
+    const r = classifyMemberHealth({
+      ...base,
+      stripeSubscriptionStatus: "paused",
+      billingPauseUntil: "2026-09-01",
+      serviceAccessUntil: "2026-12-01T00:00:00.000Z",
+    });
+    expect(r.hasCurrentServiceAccess).toBe(false);
+    const issue = r.issues.find((i) => i.code === "STRIPE_SUBSCRIPTION_PAUSED");
+    expect(issue).toBeTruthy();
+    expect(issue?.severity).toBe("medium");
+    expect(issue?.explanation).toContain("2026-09-01");
+  });
+
+  it("flags indefinite Stripe pause as high severity", () => {
+    const r = classifyMemberHealth({
+      ...base,
+      stripeSubscriptionStatus: "paused",
+      billingPauseUntil: "",
+    });
+    const issue = r.issues.find((i) => i.code === "STRIPE_SUBSCRIPTION_PAUSED");
+    expect(issue?.severity).toBe("high");
+    expect(issue?.explanation).toMatch(/indefinite/i);
+  });
+
+  it("flags paused intros (info), missing pause date (medium) and expired pause (medium)", () => {
+    const paused = classifyMemberHealth({
+      ...base,
+      recurringIntroStatus: "Paused",
+      recurringPauseUntil: "2026-09-01",
+    });
+    expect(paused.issues.some((i) => i.code === "INTROS_PAUSED")).toBe(true);
+
+    const missing = classifyMemberHealth({
+      ...base,
+      recurringIntroStatus: "Paused",
+      recurringPauseUntil: "",
+    });
+    expect(missing.issues.some((i) => i.code === "PAUSED_WITH_MISSING_DATE")).toBe(true);
+    expect(missing.issues.some((i) => i.code === "INTROS_PAUSED")).toBe(false);
+
+    const expired = classifyMemberHealth({
+      ...base,
+      recurringIntroStatus: "Paused",
+      recurringPauseUntil: "2026-01-01",
+    });
+    expect(expired.issues.some((i) => i.code === "PAUSED_PAST_RESUME_DATE")).toBe(true);
+  });
+
+  it("does not flag intro pause issues for Excluded members", () => {
+    const r = classifyMemberHealth({
+      ...base,
+      recurringIntroStatus: "Excluded",
+    });
+    expect(r.issues.some((i) => i.code.startsWith("PAUSED"))).toBe(false);
+    expect(r.issues.some((i) => i.code === "INTROS_PAUSED")).toBe(false);
+  });
+
   it("flags expired cancelled member still in Slack workspace", () => {
     const r = classifyMemberHealth({
       ...base,
