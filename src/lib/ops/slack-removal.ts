@@ -14,6 +14,7 @@ import {
 } from "@/lib/ops/member-health";
 import type { MemberHealthRow } from "@/lib/ops/member-health-types";
 import { resolveMemberForOutreach } from "@/lib/ops/resolve-member-for-outreach";
+import { sortByDateJoinedDesc } from "@/lib/ops/slack-community";
 
 export type RemovalReadiness =
   | "ready_for_review"
@@ -59,16 +60,31 @@ export async function detectSlackRemovalCapabilities(): Promise<SlackRemovalCapa
       scopes.includes("channels:write") ||
       scopes.includes("groups:write") ||
       scopes.includes("channels:manage");
-    // Ordinary bot tokens cannot deactivate workspace users (admin.users.remove requires admin token / Enterprise Grid)
-    const hasAdminRemove =
-      scopes.includes("admin.users:write") ||
-      Boolean(process.env.SLACK_ADMIN_USER_TOKEN?.trim());
+    // Deactivation needs a real admin token with admin.users:write (Enterprise Grid).
+    let hasAdminRemove = false;
+    let deactivateReason = "";
+    const adminToken = process.env.SLACK_ADMIN_USER_TOKEN?.trim();
+    if (adminToken) {
+      try {
+        const admin = createSlackClient({ botToken: adminToken });
+        const adminAuth = await admin.authTest();
+        hasAdminRemove = (adminAuth.scopes || []).includes("admin.users:write");
+        if (!hasAdminRemove) {
+          deactivateReason =
+            "SLACK_ADMIN_USER_TOKEN is configured but lacks admin.users:write. Ordinary bot tokens cannot deactivate workspace users (Enterprise Grid / admin API required).";
+        }
+      } catch (e) {
+        deactivateReason =
+          e instanceof Error ? e.message : "Admin token check failed";
+      }
+    } else {
+      deactivateReason =
+        "Workspace deactivation requires SLACK_ADMIN_USER_TOKEN with admin.users:write (Enterprise Grid / admin API). Ordinary bot tokens cannot deactivate users. Use Copy emails / Export CSV / Open Slack Admin instead.";
+    }
     return {
       canKickFromChannels: canKick,
       canDeactivateWorkspaceUser: hasAdminRemove,
-      deactivateReason: hasAdminRemove
-        ? ""
-        : "Workspace deactivation requires a Slack admin token with admin.users:write (Enterprise Grid / admin API). Ordinary bot tokens cannot deactivate users. Use Copy emails / Export CSV / Open Slack Admin instead.",
+      deactivateReason,
       scopes,
     };
   } catch (e) {
@@ -79,6 +95,24 @@ export async function detectSlackRemovalCapabilities(): Promise<SlackRemovalCapa
       scopes: [],
     };
   }
+}
+
+/**
+ * Paused members (intro pause or billing pause) stay in the community —
+ * they are never queued for removal.
+ */
+export function isPausedMember(m: MemberHealthRow): boolean {
+  if (
+    m.introPauseState === "paused" ||
+    m.introPauseState === "paused_expired" ||
+    m.introPauseState === "excluded"
+  ) {
+    return true;
+  }
+  if (m.stripeSubscriptionStatus.trim().toLowerCase() === "paused") {
+    return true;
+  }
+  return false;
 }
 
 function daysExpired(until: string, ref: Date): number | null {
@@ -140,6 +174,8 @@ export async function buildRemovalQueue(): Promise<{
 
   const candidates = scan.members.filter((m) => {
     if (m.hasCurrentServiceAccess) return false;
+    // Paused members stay in the community — never queued for removal.
+    if (isPausedMember(m)) return false;
     if (m.membership === "Active" && m.payment === "Paid") return false;
     if (!m.serviceAccessUntil?.trim()) return false;
     const until = new Date(m.serviceAccessUntil);
@@ -182,6 +218,10 @@ export async function buildRemovalQueue(): Promise<{
     if (lastRemovalStatus === "partial") readiness = "removal_partially_completed";
     if (lastRemovalStatus === "failed") readiness = "removal_failed";
 
+    // Accounts that are already deactivated in Slack are already removed —
+    // not part of the "needs removal" list.
+    if (readiness === "already_deactivated") continue;
+
     const currentChannels: string[] = [];
     if (member.cityChannelMembership === "member" && member.cityChannelName) {
       currentChannels.push(member.cityChannelName);
@@ -202,7 +242,8 @@ export async function buildRemovalQueue(): Promise<{
     });
   }
 
-  rows.sort((a, b) => (b.daysExpired ?? -1) - (a.daysExpired ?? -1));
+  // Date joined latest → oldest (missing dates sink to the bottom).
+  sortByDateJoinedDesc(rows, (r) => r.member.dateJoined);
 
   return {
     rows,
@@ -433,4 +474,70 @@ export async function executeChannelRemovals(input: {
 
   void slack;
   return { status, results };
+}
+
+export async function executeWorkspaceDeactivation(input: {
+  airtableRecordId: string;
+  clerkUserId: string;
+  runtimeMode: string;
+  idempotencyKey: string;
+}): Promise<{ status: string; error?: string }> {
+  const capabilities = await detectSlackRemovalCapabilities();
+  const plan = await buildRemovalPlan(input.airtableRecordId, capabilities);
+
+  if (!plan.eligible) {
+    return {
+      status: "skipped_revalidated",
+      error: plan.exclusionReason || "Member not eligible for removal",
+    };
+  }
+  if (!plan.slackUserId) {
+    return { status: "skipped_revalidated", error: "No Slack user id resolved" };
+  }
+  if (!capabilities.canDeactivateWorkspaceUser) {
+    return { status: "failed", error: capabilities.deactivateReason };
+  }
+
+  const rowId = randomUUID();
+  try {
+    await db.insert(slackAccessActions).values({
+      id: rowId,
+      actionType: "workspace_deactivate",
+      airtableRecordId: input.airtableRecordId,
+      slackUserId: plan.slackUserId,
+      status: "running",
+      initiatedByClerkUserId: input.clerkUserId,
+      runtimeMode: input.runtimeMode,
+      idempotencyKey: input.idempotencyKey,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/unique|duplicate/i.test(msg)) {
+      return { status: "failed", error: "Duplicate idempotency key" };
+    }
+  }
+
+  try {
+    const slack = createSlackClient({
+      botToken: process.env.SLACK_BOT_TOKEN!,
+      adminToken: process.env.SLACK_ADMIN_USER_TOKEN,
+    });
+    await slack.deactivateUser(plan.slackUserId);
+    await db
+      .update(slackAccessActions)
+      .set({ status: "completed", completedAt: new Date() })
+      .where(eq(slackAccessActions.id, rowId));
+    return { status: "completed" };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    try {
+      await db
+        .update(slackAccessActions)
+        .set({ status: "failed", error: msg, completedAt: new Date() })
+        .where(eq(slackAccessActions.id, rowId));
+    } catch {
+      /* ignore */
+    }
+    return { status: "failed", error: msg };
+  }
 }

@@ -1,17 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, Suspense } from "react";
+import { useCallback, useEffect, useMemo, useState, Suspense } from "react";
 import {
+  Alert,
   App,
   Button,
   Card,
-  Checkbox,
+  Col,
   Descriptions,
-  Drawer,
-  Input,
+  InputNumber,
   Modal,
+  Row,
+  Segmented,
   Select,
-  Skeleton,
   Space,
   Spin,
   Table,
@@ -22,26 +23,36 @@ import {
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { OpsPageHeader } from "@/components/ops/OpsPageHeader";
 import { ErrorState } from "@/components/ops/ErrorState";
+import { EmptyState } from "@/components/ops/EmptyState";
 import { MemberDetailsDrawer } from "@/components/ops/MemberDetailsDrawer";
-import { SlackUserChannelsCell } from "@/components/ops/SlackUserChannelsCell";
-import { ServiceAccessStateTag } from "@/components/ops/ServiceAccessStateTag";
 import { RemovalReadinessTag } from "@/components/ops/RemovalReadinessTag";
+import {
+  SlackCommunityFilters,
+  filterByDateRange,
+  filterBySearch,
+  type SlackFilterOptions,
+  type SlackFilterState,
+} from "@/components/ops/SlackCommunityFilters";
 import type { MemberHealthRow } from "@/lib/ops/member-health-types";
-import type { ChannelHealthRow } from "@/lib/ops/channel-membership";
 
-type WorkspaceUser = {
+type LinkSuggestion = {
   slackUserId: string;
-  name: string;
-  email: string;
-  airtableMatch: string;
-  memberName: string;
-  city: string;
-  serviceAccessUntil: string;
-  serviceAccessState: string;
-  channels: Array<{ id: string; name: string; membership: string }>;
-  channelCount: number;
-  recommendedAction: string;
+  slackEmail: string;
+  slackName: string;
+  confidence: "high" | "low";
+  kind: string;
+};
+
+type LinkRow = {
   airtableRecordId: string;
+  name: string;
+  primaryEmail: string;
+  city: string;
+  membership: string;
+  payment: string;
+  dateJoined: string;
+  suggestion: LinkSuggestion | null;
+  candidates: Array<{ slackUserId: string; name: string; email: string }>;
 };
 
 type RemovalRow = {
@@ -53,59 +64,93 @@ type RemovalRow = {
   lastRemovalStatus: string | null;
 };
 
-type EmailPreview = {
-  recipient: string;
-  subject: string;
-  html: string;
-  text: string;
-  eligible: boolean;
+type InviteRow = {
+  member: MemberHealthRow;
+  cooldownActive: boolean;
+  lastInvitedAt: string | null;
   eligibilityReasons: string[];
-  missingConfig: string[];
 };
 
-const previewCache = new Map<
-  string,
-  { at: number; preview: EmailPreview; scanVersion: string }
->();
-const PREVIEW_TTL_MS = 60_000;
+type ChannelAddRow = {
+  member: MemberHealthRow;
+};
+
+type Capabilities = {
+  canKickFromChannels: boolean;
+  canDeactivateWorkspaceUser: boolean;
+  deactivateReason: string;
+  canInviteToChannels: boolean;
+  inviteToChannelsReason: string;
+  canInviteToWorkspace: boolean;
+  inviteToWorkspaceReason: string;
+  scopes: string[];
+};
+
+type CompareData = {
+  airtable: { recordId: string; fields: Array<{ label: string; value: string }> };
+  slack: { fields: Array<{ label: string; value: string }> } | null;
+  candidates: Array<{ slackUserId: string; name: string; email: string }>;
+  currentSlackEmail: string;
+};
+
+const EMPTY_OPTIONS: SlackFilterOptions = { cities: [], memberships: [], payments: [] };
+const EMPTY_FILTERS: SlackFilterState = {};
+
+function fmtDate(v: string): string {
+  if (!v?.trim()) return "—";
+  const t = new Date(v).getTime();
+  if (Number.isNaN(t)) return v;
+  return new Date(v).toISOString().slice(0, 10);
+}
 
 function SlackAccessPageInner() {
   const { message, modal } = App.useApp();
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const tab = searchParams.get("tab") || "needs";
+  const rawTab = searchParams.get("tab") || "link";
+  const tab = rawTab === "remove" || rawTab === "invite" ? rawTab : "link";
 
   const [mode, setMode] = useState("read_only");
   const [role, setRole] = useState("viewer");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [needs, setNeeds] = useState<MemberHealthRow[]>([]);
-  const [channels, setChannels] = useState<ChannelHealthRow[]>([]);
-  const [workspaceUsers, setWorkspaceUsers] = useState<WorkspaceUser[]>([]);
-  const [userFilter, setUserFilter] = useState("");
-  const [channelFilter, setChannelFilter] = useState<string | undefined>();
-  const [expiredOnly, setExpiredOnly] = useState(false);
-  const [noMatchOnly, setNoMatchOnly] = useState(false);
-  const [noChannelOnly, setNoChannelOnly] = useState(false);
+  const [scannedAt, setScannedAt] = useState<string | null>(null);
+
+  const [linkRows, setLinkRows] = useState<LinkRow[]>([]);
+  const [linkOptions, setLinkOptions] = useState<SlackFilterOptions>(EMPTY_OPTIONS);
+  const [linkFilters, setLinkFilters] = useState<SlackFilterState>(EMPTY_FILTERS);
+  const [linkConfidence, setLinkConfidence] = useState<string>("all");
+  const [selectedLinks, setSelectedLinks] = useState<Set<string>>(new Set());
+  const [busyLinkIds, setBusyLinkIds] = useState<Set<string>>(new Set());
+
   const [removalRows, setRemovalRows] = useState<RemovalRow[]>([]);
-  const [capabilities, setCapabilities] = useState<{
-    canKickFromChannels: boolean;
-    canDeactivateWorkspaceUser: boolean;
-    deactivateReason: string;
-  } | null>(null);
-  const [selectedMember, setSelectedMember] = useState<MemberHealthRow | null>(null);
-  const [channelDetail, setChannelDetail] = useState<ChannelHealthRow | null>(null);
-
-  // Email preview
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [preview, setPreview] = useState<EmailPreview | null>(null);
-  const [previewMemberId, setPreviewMemberId] = useState<string | null>(null);
-  const previewAbort = useRef<AbortController | null>(null);
-  const previewInflight = useRef<string | null>(null);
-
+  const [removalFilters, setRemovalFilters] = useState<SlackFilterState>(EMPTY_FILTERS);
+  const [removalReadiness, setRemovalReadiness] = useState<string[]>([]);
+  const [removalMinDays, setRemovalMinDays] = useState<number | null>(null);
   const [selectedRemoval, setSelectedRemoval] = useState<Set<string>>(new Set());
+  const [removing, setRemoving] = useState(false);
+
+  const [inviteRows, setInviteRows] = useState<InviteRow[]>([]);
+  const [channelAddRows, setChannelAddRows] = useState<ChannelAddRow[]>([]);
+  const [inviteOptions, setInviteOptions] = useState<SlackFilterOptions>(EMPTY_OPTIONS);
+  const [inviteFilters, setInviteFilters] = useState<SlackFilterState>(EMPTY_FILTERS);
+  const [inviteView, setInviteView] = useState<"invite" | "channel-add">("invite");
+  const [inviteStatus, setInviteStatus] = useState<string>("all");
+  const [selectedInvites, setSelectedInvites] = useState<Set<string>>(new Set());
+  const [selectedChannelAdds, setSelectedChannelAdds] = useState<Set<string>>(new Set());
+  const [inviting, setInviting] = useState(false);
+  const [addingChannels, setAddingChannels] = useState(false);
+
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+  const [selectedMember, setSelectedMember] = useState<MemberHealthRow | null>(null);
+
+  // Compare modal (tab 1)
+  const [compareRow, setCompareRow] = useState<LinkRow | null>(null);
+  const [compareData, setCompareData] = useState<CompareData | null>(null);
+  const [compareUserId, setCompareUserId] = useState<string | null>(null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [linking, setLinking] = useState(false);
 
   const canMutate = mode === "live" && role === "admin";
 
@@ -126,63 +171,23 @@ function SlackAccessPageInner() {
     }
   }, []);
 
-  const loadNeeds = useCallback(async () => {
+  const loadLink = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(
-        "/api/ops-dashboard/members?missingSlack=1&serviceAccess=current&pageSize=200&page=1"
-      );
+      const res = await fetch("/api/ops-dashboard/slack/link");
       const json = await res.json();
       if (!res.ok || json.success === false) throw new Error(json.message || res.statusText);
-      setNeeds(json.members || []);
-      setMode(json.summary?.mode || mode);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [mode]);
-
-  const loadChannels = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/ops-dashboard/channels", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ activeOnlyFetch: true }),
-      });
-      const json = await res.json();
-      if (!res.ok || json.success === false) throw new Error(json.message || res.statusText);
-      setChannels(json.channels || []);
+      setLinkRows(json.rows || []);
+      setLinkOptions(json.options || EMPTY_OPTIONS);
+      setCapabilities(json.capabilities || null);
+      setScannedAt(json.scannedAt || null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
   }, []);
-
-  const loadWorkspaceUsers = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const p = new URLSearchParams({ pageSize: "200", page: "1" });
-      if (userFilter) p.set("q", userFilter);
-      if (channelFilter) p.set("channelId", channelFilter);
-      if (expiredOnly) p.set("expiredOnly", "1");
-      if (noMatchOnly) p.set("noAirtableMatch", "1");
-      if (noChannelOnly) p.set("noConfiguredChannel", "1");
-      const res = await fetch(`/api/ops-dashboard/slack/workspace-users?${p}`);
-      const json = await res.json();
-      if (!res.ok || json.success === false) throw new Error(json.message || res.statusText);
-      setWorkspaceUsers(json.users || []);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [userFilter, channelFilter, expiredOnly, noMatchOnly, noChannelOnly]);
 
   const loadRemoval = useCallback(async () => {
     setLoading(true);
@@ -193,6 +198,26 @@ function SlackAccessPageInner() {
       if (!res.ok || json.success === false) throw new Error(json.message || res.statusText);
       setRemovalRows(json.rows || []);
       setCapabilities(json.capabilities || null);
+      setScannedAt(json.scannedAt || null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadInvite = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/ops-dashboard/slack/invite");
+      const json = await res.json();
+      if (!res.ok || json.success === false) throw new Error(json.message || res.statusText);
+      setInviteRows(json.inviteRows || []);
+      setChannelAddRows(json.channelAddRows || []);
+      setInviteOptions(json.options || EMPTY_OPTIONS);
+      setCapabilities(json.capabilities || null);
+      setScannedAt(json.scannedAt || null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -205,170 +230,576 @@ function SlackAccessPageInner() {
   }, [loadConfig]);
 
   useEffect(() => {
-    if (tab === "needs") void loadNeeds();
-    if (tab === "channels") void loadChannels();
-    if (tab === "users") void loadWorkspaceUsers();
-    if (tab === "removal") void loadRemoval();
-  }, [tab, loadNeeds, loadChannels, loadWorkspaceUsers, loadRemoval]);
+    if (tab === "link") void loadLink();
+    if (tab === "remove") void loadRemoval();
+    if (tab === "invite") void loadInvite();
+  }, [tab, loadLink, loadRemoval, loadInvite]);
 
-  const openPreview = async (id: string) => {
-    if (previewInflight.current === id) return;
-    setPreviewMemberId(id);
-    setPreviewOpen(true);
-    setPreview(null);
-    setPreviewLoading(true);
+  const reload = () => {
+    if (tab === "link") void loadLink();
+    if (tab === "remove") void loadRemoval();
+    if (tab === "invite") void loadInvite();
+  };
 
-    const cached = previewCache.get(id);
-    if (cached && Date.now() - cached.at < PREVIEW_TTL_MS) {
-      setPreview(cached.preview);
-      setPreviewLoading(false);
-      return;
+  // ---------- Tab 1: linking ----------
+  const filteredLinks = useMemo(() => {
+    let rows = linkRows;
+    rows = filterBySearch(rows, linkFilters.q || "", (r) => [
+      r.name,
+      r.primaryEmail,
+      r.suggestion?.slackName || "",
+      r.suggestion?.slackEmail || "",
+    ]);
+    if (linkFilters.city) {
+      const c = linkFilters.city.toLowerCase();
+      rows = rows.filter((r) => r.city.toLowerCase() === c);
     }
+    if (linkFilters.membership) {
+      rows = rows.filter(
+        (r) => r.membership.toLowerCase() === linkFilters.membership!.toLowerCase()
+      );
+    }
+    if (linkFilters.payment) {
+      rows = rows.filter(
+        (r) => r.payment.toLowerCase() === linkFilters.payment!.toLowerCase()
+      );
+    }
+    rows = filterByDateRange(rows, linkFilters.dateFrom, linkFilters.dateTo, (r) => r.dateJoined);
+    if (linkConfidence === "high") rows = rows.filter((r) => r.suggestion?.confidence === "high");
+    if (linkConfidence === "low") rows = rows.filter((r) => r.suggestion?.confidence === "low");
+    if (linkConfidence === "none") rows = rows.filter((r) => !r.suggestion);
+    return rows;
+  }, [linkRows, linkFilters, linkConfidence]);
 
-    previewAbort.current?.abort();
-    const ac = new AbortController();
-    previewAbort.current = ac;
-    previewInflight.current = id;
-
+  const openCompare = async (row: LinkRow) => {
+    const userId = row.suggestion?.slackUserId || row.candidates[0]?.slackUserId || null;
+    setCompareRow(row);
+    setCompareUserId(userId);
+    setCompareData(null);
+    setCompareLoading(true);
     try {
-      const res = await fetch("/api/ops-dashboard/slack-email/preview", {
+      const res = await fetch("/api/ops-dashboard/slack/compare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ airtableRecordId: id }),
-        signal: ac.signal,
+        body: JSON.stringify({ airtableRecordId: row.airtableRecordId, slackUserId: userId }),
       });
       const json = await res.json();
-      if (!res.ok || !json.success) {
-        message.error(json.message || "Preview failed");
-        return;
-      }
-      setPreview(json.preview);
-      previewCache.set(id, {
-        at: Date.now(),
-        preview: json.preview,
-        scanVersion: json.scanVersion || "",
-      });
+      if (!res.ok || json.success === false) throw new Error(json.message || "Compare failed");
+      setCompareData(json);
     } catch (e) {
-      if (e instanceof Error && e.name === "AbortError") return;
-      message.error(e instanceof Error ? e.message : "Preview failed");
+      message.error(e instanceof Error ? e.message : "Compare failed");
     } finally {
-      if (previewInflight.current === id) previewInflight.current = null;
-      setPreviewLoading(false);
+      setCompareLoading(false);
     }
   };
 
-  const closePreview = () => {
-    previewAbort.current?.abort();
-    setPreviewOpen(false);
-    setPreview(null);
-    setPreviewMemberId(null);
-    setPreviewLoading(false);
+  const switchCompareUser = async (userId: string) => {
+    if (!compareRow) return;
+    setCompareUserId(userId);
+    setCompareLoading(true);
+    try {
+      const res = await fetch("/api/ops-dashboard/slack/compare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ airtableRecordId: compareRow.airtableRecordId, slackUserId: userId }),
+      });
+      const json = await res.json();
+      if (!res.ok || json.success === false) throw new Error(json.message || "Compare failed");
+      setCompareData(json);
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "Compare failed");
+    } finally {
+      setCompareLoading(false);
+    }
   };
 
-  const sendEmail = async () => {
-    if (!previewMemberId) return;
+  const updateSlackEmail = async (recordId: string, email: string): Promise<boolean> => {
     if (!canMutate) {
-      message.warning("Sending requires LIVE mode and admin role");
-      return;
+      message.warning("Updating Slack Email requires LIVE mode and admin role");
+      return false;
     }
-    const res = await fetch("/api/ops-dashboard/slack-email/send", {
+    const res = await fetch("/api/ops-dashboard/slack/resolve", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ airtableRecordId: previewMemberId }),
+      body: JSON.stringify({ write: true, updates: [{ airtableRecordId: recordId, suggestedSlackEmail: email }] }),
     });
     const json = await res.json();
-    if (!res.ok || !json.success) {
-      message.error(json.message || "Send failed");
-      return;
+    if (!res.ok || json.success === false) {
+      message.error(json.message || "Update failed");
+      return false;
     }
-    const r = json.results?.[0];
-    if (r?.status === "sent") message.success("Email accepted by Resend");
-    else message.warning(`${r?.status}: ${r?.error || ""}`);
-    closePreview();
-    loadNeeds();
+    if (json.writtenIds?.includes(recordId)) {
+      message.success(`Slack Email set to ${email}`);
+      return true;
+    }
+    const skip = json.skipped?.find((s: { id: string }) => s.id === recordId);
+    message.warning(`Skipped: ${skip?.reason || "unknown reason"}`);
+    return false;
   };
 
-  const copyText = async (value: string, label: string) => {
+  const linkSingle = async (row: LinkRow) => {
+    if (!row.suggestion) return;
+    setBusyLinkIds((s) => new Set(s).add(row.airtableRecordId));
     try {
-      await navigator.clipboard.writeText(value);
-      message.success(`${label} copied`);
-    } catch {
-      message.error(`Could not copy ${label.toLowerCase()}`);
+      const ok = await updateSlackEmail(row.airtableRecordId, row.suggestion.slackEmail);
+      if (ok) {
+        setCompareRow(null);
+        setCompareData(null);
+        void loadLink();
+      }
+    } finally {
+      setBusyLinkIds((s) => {
+        const next = new Set(s);
+        next.delete(row.airtableRecordId);
+        return next;
+      });
     }
   };
 
-  const allMembersChannel = useMemo(
-    () => channels.find((c) => c.isAllMembersChannel) || null,
-    [channels]
-  );
-
-  const runRemoval = async (ids: string[], action: string) => {
-    if (!canMutate) {
-      message.warning("Removal requires LIVE mode and admin role");
+  const linkFromCompare = async () => {
+    if (!compareRow || !compareData) return;
+    const email = compareData.slack?.fields.find((f) => f.label === "Email")?.value || "";
+    if (!email || email === "—") {
+      message.error("Selected Slack profile has no email to link");
       return;
     }
+    setLinking(true);
+    try {
+      const ok = await updateSlackEmail(compareRow.airtableRecordId, email);
+      if (ok) {
+        setCompareRow(null);
+        setCompareData(null);
+        void loadLink();
+      }
+    } finally {
+      setLinking(false);
+    }
+  };
+
+  const linkSelected = () => {
+    const rows = filteredLinks.filter(
+      (r) => r.suggestion && selectedLinks.has(r.airtableRecordId)
+    );
+    if (rows.length === 0) return;
     modal.confirm({
-      title: `Confirm ${action} for ${ids.length} member(s)?`,
-      content:
-        "Server will revalidate Service access until before any action. Members with valid access will be skipped.",
+      title: `Update Slack Email for ${rows.length} member(s)?`,
+      content: (
+        <div>
+          <p>Each member&apos;s Slack Email field will be set to the suggested email:</p>
+          <ul style={{ maxHeight: 220, overflow: "auto", paddingLeft: 18 }}>
+            {rows.map((r) => (
+              <li key={r.airtableRecordId}>
+                {r.name} → {r.suggestion!.slackEmail}
+              </li>
+            ))}
+          </ul>
+          <p>Rows already filled in Airtable are skipped server-side.</p>
+        </div>
+      ),
+      okText: "Update",
       onOk: async () => {
-        const res = await fetch("/api/ops-dashboard/slack/removal", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: action === "preview" ? "preview" : "remove_channels",
-            airtableRecordIds: ids,
-          }),
-        });
-        const json = await res.json();
-        if (!res.ok || json.success === false) {
-          message.error(json.message || "Action failed");
-          return;
+        let okCount = 0;
+        for (const r of rows) {
+          const ok = await updateSlackEmail(r.airtableRecordId, r.suggestion!.slackEmail);
+          if (ok) okCount++;
         }
-        if (action === "preview") {
-          message.info(`Plans ready for ${json.plans?.length || 0} member(s)`);
-          console.info(json.plans);
-        } else {
-          message.success("Removal request completed (see per-member results)");
-        }
-        loadRemoval();
+        if (okCount > 0) message.success(`Linked ${okCount} member(s)`);
+        setSelectedLinks(new Set());
+        void loadLink();
       },
     });
   };
 
-  const selectedEmails = removalRows
-    .filter((r) => r.member.airtableRecordId && selectedRemoval.has(r.member.airtableRecordId))
-    .map((r) => r.member.primaryEmail)
-    .filter(Boolean);
+  // ---------- Tab 2: removal ----------
+  const filteredRemoval = useMemo(() => {
+    let rows = removalRows;
+    rows = filterBySearch(rows, removalFilters.q || "", (r) => [
+      r.member.name,
+      r.member.primaryEmail,
+    ]);
+    if (removalFilters.city) {
+      const c = removalFilters.city.toLowerCase();
+      rows = rows.filter((r) => r.member.city.toLowerCase() === c);
+    }
+    if (removalFilters.membership) {
+      rows = rows.filter(
+        (r) => r.member.membership.toLowerCase() === removalFilters.membership!.toLowerCase()
+      );
+    }
+    if (removalFilters.payment) {
+      rows = rows.filter(
+        (r) => r.member.payment.toLowerCase() === removalFilters.payment!.toLowerCase()
+      );
+    }
+    rows = filterByDateRange(
+      rows,
+      removalFilters.dateFrom,
+      removalFilters.dateTo,
+      (r) => r.member.dateJoined
+    );
+    if (removalReadiness.length > 0) {
+      rows = rows.filter((r) => removalReadiness.includes(r.readiness));
+    }
+    if (removalMinDays != null) {
+      rows = rows.filter((r) => (r.daysExpired ?? -1) >= (removalMinDays ?? 0));
+    }
+    return rows;
+  }, [removalRows, removalFilters, removalReadiness, removalMinDays]);
+
+  const runRemoval = (ids: string[]) => {
+    if (!canMutate) {
+      message.warning("Removal requires LIVE mode and admin role");
+      return;
+    }
+    if (ids.length === 0) return;
+    modal.confirm({
+      title: `Remove ${ids.length} member(s) from Slack?`,
+      content: (
+        <div>
+          <p>Each member is revalidated server-side before any action:</p>
+          <ul style={{ paddingLeft: 18 }}>
+            <li>Kicked from their WLTH channels (city + all-members)</li>
+            {capabilities?.canDeactivateWorkspaceUser ? (
+              <li>Workspace account deactivated (admin token available)</li>
+            ) : (
+              <li>
+                Workspace deactivation unavailable — kick only. Open Slack Admin to
+                deactivate accounts manually.
+              </li>
+            )}
+          </ul>
+        </div>
+      ),
+      okText: "Remove from Slack",
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setRemoving(true);
+        try {
+          const res = await fetch("/api/ops-dashboard/slack/removal", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "remove_and_deactivate", airtableRecordIds: ids }),
+          });
+          const json = await res.json();
+          if (!res.ok || json.success === false) throw new Error(json.message || "Removal failed");
+          const results = json.results || [];
+          const done = results.filter((r: { ok?: boolean }) => r.ok);
+          const failed = results.filter((r: { ok?: boolean }) => !r.ok);
+          message.success(`Removed ${done.length} / ${results.length} member(s)`);
+          if (failed.length > 0) {
+            modal.warning({
+              title: `${failed.length} member(s) had problems`,
+              content: (
+                <ul style={{ maxHeight: 240, overflow: "auto", paddingLeft: 18 }}>
+                  {failed.map(
+                    (
+                      r: { memberName?: string; kickError?: string; deactivateError?: string },
+                      i: number
+                    ) => (
+                      <li key={i}>
+                        {r.memberName}: {r.kickError || r.deactivateError || "unknown error"}
+                      </li>
+                    )
+                  )}
+                </ul>
+              ),
+            });
+          }
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : "Removal failed");
+        } finally {
+          setRemoving(false);
+          setSelectedRemoval(new Set());
+          void loadRemoval();
+        }
+      },
+    });
+  };
+
+  // ---------- Tab 3: invites ----------
+  const filteredInvites = useMemo(() => {
+    let rows = inviteRows;
+    rows = filterBySearch(rows, inviteFilters.q || "", (r) => [
+      r.member.name,
+      r.member.primaryEmail,
+    ]);
+    if (inviteFilters.city) {
+      const c = inviteFilters.city.toLowerCase();
+      rows = rows.filter((r) => r.member.city.toLowerCase() === c);
+    }
+    if (inviteFilters.membership) {
+      rows = rows.filter(
+        (r) => r.member.membership.toLowerCase() === inviteFilters.membership!.toLowerCase()
+      );
+    }
+    if (inviteFilters.payment) {
+      rows = rows.filter(
+        (r) => r.member.payment.toLowerCase() === inviteFilters.payment!.toLowerCase()
+      );
+    }
+    rows = filterByDateRange(
+      rows,
+      inviteFilters.dateFrom,
+      inviteFilters.dateTo,
+      (r) => r.member.dateJoined
+    );
+    if (inviteStatus === "not_invited") rows = rows.filter((r) => !r.cooldownActive);
+    if (inviteStatus === "invited") rows = rows.filter((r) => r.cooldownActive);
+    return rows;
+  }, [inviteRows, inviteFilters, inviteStatus]);
+
+  const filteredChannelAdds = useMemo(() => {
+    let rows = channelAddRows;
+    rows = filterBySearch(rows, inviteFilters.q || "", (r) => [
+      r.member.name,
+      r.member.primaryEmail,
+    ]);
+    if (inviteFilters.city) {
+      const c = inviteFilters.city.toLowerCase();
+      rows = rows.filter((r) => r.member.city.toLowerCase() === c);
+    }
+    if (inviteFilters.membership) {
+      rows = rows.filter(
+        (r) => r.member.membership.toLowerCase() === inviteFilters.membership!.toLowerCase()
+      );
+    }
+    if (inviteFilters.payment) {
+      rows = rows.filter(
+        (r) => r.member.payment.toLowerCase() === inviteFilters.payment!.toLowerCase()
+      );
+    }
+    rows = filterByDateRange(
+      rows,
+      inviteFilters.dateFrom,
+      inviteFilters.dateTo,
+      (r) => r.member.dateJoined
+    );
+    return rows;
+  }, [channelAddRows, inviteFilters]);
+
+  const sendInvites = (ids: string[], force: boolean) => {
+    if (!canMutate) {
+      message.warning("Inviting requires LIVE mode and admin role");
+      return;
+    }
+    if (ids.length === 0) return;
+    modal.confirm({
+      title: `Invite ${ids.length} member(s) to Slack?`,
+      content: force ? (
+        "Cooldown will be ignored and invite emails re-sent."
+      ) : (
+        <div>
+          <p>Each member receives the Slack joining email (workspace link + channel guidance).</p>
+          {capabilities?.canInviteToWorkspace ? (
+            <p>Workspace invites are sent directly through the Slack admin API.</p>
+          ) : (
+            <p>
+              Open channels are joinable by everyone in the workspace. Once a member joins,
+              use the &quot;Add to city channel&quot; view to invite them into their private
+              city channel.
+            </p>
+          )}
+        </div>
+      ),
+      okText: force ? "Force invite" : "Invite",
+      onOk: async () => {
+        setInviting(true);
+        try {
+          const res = await fetch("/api/ops-dashboard/slack-email/send", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ airtableRecordIds: ids, force }),
+          });
+          const json = await res.json();
+          if (!res.ok || json.success === false) throw new Error(json.message || "Invite failed");
+          const skipped = json.skippedCount || 0;
+          if (json.sentCount > 0) message.success(`Invited ${json.sentCount} member(s)`);
+          if (skipped > 0) {
+            message.warning(`${skipped} skipped (cooldown or validation)`);
+          }
+          if (json.failedCount > 0) message.error(`${json.failedCount} failed to send`);
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : "Invite failed");
+        } finally {
+          setInviting(false);
+          setSelectedInvites(new Set());
+          void loadInvite();
+        }
+      },
+    });
+  };
+
+  const addToChannels = (ids: string[]) => {
+    if (!canMutate) {
+      message.warning("Adding to channels requires LIVE mode and admin role");
+      return;
+    }
+    if (ids.length === 0) return;
+    modal.confirm({
+      title: `Add ${ids.length} member(s) to their city channel?`,
+      content: (
+        <div>
+          <p>Each member is revalidated first (current access + workspace identity).</p>
+          {!capabilities?.canInviteToChannels && (
+            <Typography.Paragraph type="warning">
+              {capabilities?.inviteToChannelsReason}
+            </Typography.Paragraph>
+          )}
+        </div>
+      ),
+      okText: "Add to channels",
+      onOk: async () => {
+        setAddingChannels(true);
+        try {
+          const res = await fetch("/api/ops-dashboard/slack/channel-invite", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ airtableRecordIds: ids }),
+          });
+          const json = await res.json();
+          if (!res.ok || json.success === false) throw new Error(json.message || "Add failed");
+          if (json.completed > 0) message.success(`Added ${json.completed} member(s)`);
+          if (json.failed > 0) message.error(`${json.failed} failed`);
+          if (json.skipped > 0) message.warning(`${json.skipped} skipped`);
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : "Add failed");
+        } finally {
+          setAddingChannels(false);
+          setSelectedChannelAdds(new Set());
+          void loadInvite();
+        }
+      },
+    });
+  };
+
+  const capabilityChecks = useMemo(() => {
+    if (!capabilities) return [];
+    return [
+      {
+        key: "kick",
+        label: "Remove from WLTH channels",
+        ok: capabilities.canKickFromChannels,
+        reason: "Bot needs channels:write / groups:write and membership in target channels.",
+      },
+      {
+        key: "channel_invite",
+        label: "Add members to private city channels",
+        ok: capabilities.canInviteToChannels,
+        reason: capabilities.inviteToChannelsReason,
+      },
+      {
+        key: "workspace_invite",
+        label: "Workspace invite via Slack API",
+        ok: capabilities.canInviteToWorkspace,
+        reason: capabilities.inviteToWorkspaceReason,
+      },
+      {
+        key: "deactivate",
+        label: "Deactivate workspace accounts",
+        ok: capabilities.canDeactivateWorkspaceUser,
+        reason: capabilities.deactivateReason,
+      },
+    ];
+  }, [capabilities]);
+
+  const linkTabExtra = (
+    <Segmented
+      options={[
+        { label: "All", value: "all" },
+        { label: "High confidence", value: "high" },
+        { label: "Low confidence", value: "low" },
+        { label: "No suggestion", value: "none" },
+      ]}
+      value={linkConfidence}
+      onChange={(v) => setLinkConfidence(String(v))}
+    />
+  );
+
+  const removalTabExtra = (
+    <Space wrap>
+      <Select
+        mode="multiple"
+        allowClear
+        placeholder="Readiness"
+        style={{ minWidth: 200 }}
+        value={removalReadiness}
+        onChange={setRemovalReadiness}
+        options={[
+          "ready_for_review",
+          "access_date_invalid",
+          "slack_identity_unresolved",
+          "no_longer_in_wlth_channels",
+          "removal_partially_completed",
+          "removal_failed",
+        ].map((r) => ({ value: r, label: r.replace(/_/g, " ") }))}
+      />
+      <InputNumber
+        min={0}
+        placeholder="Min days expired"
+        value={removalMinDays}
+        onChange={(v) => setRemovalMinDays(typeof v === "number" ? v : null)}
+        style={{ width: 150 }}
+      />
+    </Space>
+  );
+
+  const inviteTabExtra = (
+    <Segmented
+      options={[
+        { label: "All", value: "all" },
+        { label: "Not invited", value: "not_invited" },
+        { label: "Invited recently", value: "invited" },
+      ]}
+      value={inviteStatus}
+      onChange={(v) => setInviteStatus(String(v))}
+    />
+  );
 
   return (
     <div style={{ maxWidth: 1400, margin: "0 auto" }}>
       <OpsPageHeader
-        title="Slack Access"
-        description="Identities, channel membership, workspace users, joining emails, and expired-access removal queue."
+        title="Slack Community"
+        description="Link Slack identities, remove inactive members, and invite members into the community."
         breadcrumbs={[
           { title: "Members", href: "/members" },
-          { title: "Slack Access" },
+          { title: "Slack Community" },
         ]}
         mode={mode}
-        onRefresh={() => {
-          if (tab === "needs") void loadNeeds();
-          if (tab === "channels") void loadChannels();
-          if (tab === "users") void loadWorkspaceUsers();
-          if (tab === "removal") void loadRemoval();
-        }}
+        scannedAt={scannedAt}
+        onRefresh={reload}
         refreshing={loading}
       />
 
-      {error && (
-        <ErrorState
-          message={error}
-          onRetry={() => {
-            if (tab === "needs") void loadNeeds();
-            if (tab === "channels") void loadChannels();
-            if (tab === "users") void loadWorkspaceUsers();
-            if (tab === "removal") void loadRemoval();
-          }}
+      {error && <ErrorState message={error} onRetry={reload} />}
+
+      {capabilityChecks.length > 0 && (
+        <Alert
+          closable
+          type={capabilityChecks.some((c) => !c.ok) ? "warning" : "info"}
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="Slack capabilities"
+          description={
+            <Space direction="vertical" size={2}>
+              {capabilityChecks.map((c) => (
+                <Typography.Text key={c.key} style={{ fontSize: 13 }}>
+                  {c.ok ? "✓" : "✗"} {c.label}
+                  {!c.ok && (
+                    <Typography.Text type="secondary">
+                      {" "}— {c.reason}
+                    </Typography.Text>
+                  )}
+                </Typography.Text>
+              ))}
+              <Typography.Link
+                href="https://wlthwlks.slack.com/admin"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open Slack Admin
+              </Typography.Link>
+            </Space>
+          }
         />
       )}
 
@@ -377,198 +808,104 @@ function SlackAccessPageInner() {
         onChange={setTab}
         items={[
           {
-            key: "needs",
-            label: "Needs Slack",
-            children: (
-              <Table
-                size="small"
-                loading={loading}
-                rowKey={(r) => r.airtableRecordId || r.primaryEmail}
-                dataSource={needs}
-                onRow={(r) => ({
-                  onClick: () => setSelectedMember(r),
-                  style: { cursor: "pointer" },
-                })}
-                columns={[
-                  { title: "Name", dataIndex: "name" },
-                  { title: "Email", dataIndex: "primaryEmail" },
-                  { title: "City", dataIndex: "city" },
-                  {
-                    title: "Action",
-                    render: (_, r) => (
-                      <Button
-                        size="small"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (r.airtableRecordId) void openPreview(r.airtableRecordId);
-                        }}
-                      >
-                        Preview email
-                      </Button>
-                    ),
-                  },
-                ]}
-              />
-            ),
-          },
-          {
-            key: "channels",
-            label: "Channels",
+            key: "link",
+            label: `Link Slack emails (${linkRows.length})`,
             children: (
               <>
-                {allMembersChannel?.allMembersBreakdown && (
-                  <Card size="small" title="all-wlth-wlks actual membership" style={{ marginBottom: 16 }}>
-                    <Descriptions size="small" column={2}>
-                      <Descriptions.Item label="Active humans present">
-                        {allMembersChannel.allMembersBreakdown.activeHumansIncluded}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Raw channel member IDs">
-                        {allMembersChannel.allMembersBreakdown.rawChannelMemberIds}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Deleted/deactivated excluded">
-                        {allMembersChannel.allMembersBreakdown.deletedExcluded}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Bots/apps excluded">
-                        {allMembersChannel.allMembersBreakdown.botsAppsExcluded}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="IDs not in users.list">
-                        {allMembersChannel.allMembersBreakdown.idsNotInUsersList}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Current access present">
-                        {allMembersChannel.allMembersBreakdown.currentAccessPresent}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Grace period present">
-                        {allMembersChannel.allMembersBreakdown.gracePeriodPresent}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Expired present">
-                        {allMembersChannel.allMembersBreakdown.expiredPresent}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Unmatched Slack users">
-                        {allMembersChannel.allMembersBreakdown.unmatchedSlackUsers}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Expected current-access missing">
-                        {allMembersChannel.allMembersBreakdown.expectedCurrentAccessMissing}
-                      </Descriptions.Item>
-                    </Descriptions>
-                  </Card>
-                )}
-                <Table
-                  size="small"
-                  loading={loading}
-                  rowKey={(r) => r.key}
-                  dataSource={channels}
-                  onRow={(r) => ({
-                    onClick: () => setChannelDetail(r),
-                    style: { cursor: "pointer" },
-                  })}
-                  columns={[
-                    {
-                      title: "Channel",
-                      render: (_, r) => (
-                        <span>
-                          {r.channelName}{" "}
-                          {r.isAllMembersChannel && <Tag color="purple">all-members</Tag>}
-                        </span>
-                      ),
-                    },
-                    {
-                      title: "Present",
-                      dataIndex: "presentCount",
-                      render: (v, r) =>
-                        r.isAllMembersChannel
-                          ? r.allMembersBreakdown?.activeHumansIncluded ?? v
-                          : v,
-                    },
-                    { title: "Missing", dataIndex: "missingCount" },
-                    { title: "Unresolved", dataIndex: "unresolvedCount" },
-                    {
-                      title: "Status",
-                      dataIndex: "scanStatus",
-                      render: (v: string) => <Tag>{v}</Tag>,
-                    },
-                  ]}
+                <SlackCommunityFilters
+                  value={linkFilters}
+                  options={linkOptions}
+                  onChange={setLinkFilters}
+                  onClear={() => setLinkFilters(EMPTY_FILTERS)}
+                  extra={linkTabExtra}
                 />
-              </>
-            ),
-          },
-          {
-            key: "users",
-            label: "Workspace Users",
-            children: (
-              <>
                 <Space wrap style={{ marginBottom: 12 }}>
-                  <Input.Search
-                    placeholder="Search name/email/Slack ID"
-                    allowClear
-                    onSearch={setUserFilter}
-                    style={{ width: 260 }}
-                  />
-                  <Select
-                    allowClear
-                    placeholder="Filter by channel"
-                    style={{ width: 220 }}
-                    value={channelFilter}
-                    onChange={setChannelFilter}
-                    options={channels
-                      .filter((c) => c.slackChannelId)
-                      .map((c) => ({
-                        value: c.slackChannelId,
-                        label: c.channelName,
-                      }))}
-                  />
-                  <Checkbox checked={expiredOnly} onChange={(e) => setExpiredOnly(e.target.checked)}>
-                    Expired member
-                  </Checkbox>
-                  <Checkbox checked={noMatchOnly} onChange={(e) => setNoMatchOnly(e.target.checked)}>
-                    No Airtable match
-                  </Checkbox>
-                  <Checkbox
-                    checked={noChannelOnly}
-                    onChange={(e) => setNoChannelOnly(e.target.checked)}
+                  <Button
+                    type="primary"
+                    disabled={!canMutate || selectedLinks.size === 0}
+                    onClick={linkSelected}
                   >
-                    No configured channel
-                  </Checkbox>
-                  <Button onClick={() => void loadWorkspaceUsers()}>Apply</Button>
+                    Update selected ({selectedLinks.size})
+                  </Button>
+                  <Typography.Text type="secondary">
+                    Members without a Slack Email on Airtable, with the best matching Slack
+                    profile. Use Compare to review before linking.
+                  </Typography.Text>
                 </Space>
                 <Table
                   size="small"
                   loading={loading}
-                  rowKey={(r) => r.slackUserId}
-                  dataSource={workspaceUsers}
-                  scroll={{ x: 1200 }}
+                  rowKey={(r) => r.airtableRecordId}
+                  dataSource={filteredLinks}
+                  rowSelection={{
+                    selectedRowKeys: [...selectedLinks],
+                    onChange: (keys) => setSelectedLinks(new Set(keys.map(String))),
+                    getCheckboxProps: (r) => ({ disabled: !r.suggestion }),
+                  }}
+                  scroll={{ x: 1100 }}
+                  locale={{
+                    emptyText: (
+                      <EmptyState
+                        title="No members to link"
+                        description="Everyone without a Slack Email already matches a workspace user, or filters exclude them."
+                      />
+                    ),
+                  }}
                   columns={[
-                    { title: "Name", dataIndex: "name", width: 140 },
-                    { title: "Email", dataIndex: "email", width: 200 },
-                    { title: "Slack ID", dataIndex: "slackUserId", width: 120 },
+                    { title: "Name", dataIndex: "name", fixed: "left", width: 160 },
+                    { title: "Email", dataIndex: "primaryEmail", width: 200 },
+                    { title: "City", dataIndex: "city", width: 110 },
+                    { title: "Membership", dataIndex: "membership", width: 110 },
+                    { title: "Payment", dataIndex: "payment", width: 100 },
                     {
-                      title: "Airtable",
-                      dataIndex: "airtableMatch",
-                      width: 100,
-                      render: (v: string) => <Tag>{v}</Tag>,
-                    },
-                    {
-                      title: "Access",
-                      dataIndex: "serviceAccessState",
+                      title: "Date joined",
+                      dataIndex: "dateJoined",
                       width: 110,
-                      render: (v: string) => <ServiceAccessStateTag state={v} />,
+                      render: (v: string) => fmtDate(v),
                     },
                     {
-                      title: "Until",
-                      dataIndex: "serviceAccessUntil",
-                      width: 110,
-                      render: (v: string) => v || "—",
+                      title: "Suggested Slack profile",
+                      width: 260,
+                      render: (_, r) =>
+                        r.suggestion ? (
+                          <Space direction="vertical" size={0}>
+                            <Space size={4}>
+                              <Typography.Text strong>
+                                {r.suggestion.slackName}
+                              </Typography.Text>
+                              <Tag color={r.suggestion.confidence === "high" ? "success" : "warning"}>
+                                {r.suggestion.confidence}
+                              </Tag>
+                            </Space>
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                              {r.suggestion.slackEmail}
+                            </Typography.Text>
+                          </Space>
+                        ) : (
+                          <Tag>No suggestion</Tag>
+                        ),
                     },
-                    { title: "City", dataIndex: "city", width: 100 },
                     {
-                      title: "Channels",
+                      title: "Actions",
                       width: 220,
-                      render: (_, r) => <SlackUserChannelsCell channels={r.channels} />,
-                    },
-                    { title: "#", dataIndex: "channelCount", width: 50 },
-                    {
-                      title: "Action",
-                      dataIndex: "recommendedAction",
-                      ellipsis: true,
+                      render: (_, r) => (
+                        <Space>
+                          <Button size="small" onClick={() => void openCompare(r)}>
+                            Compare
+                          </Button>
+                          {r.suggestion && (
+                            <Button
+                              size="small"
+                              type="primary"
+                              disabled={!canMutate}
+                              loading={busyLinkIds.has(r.airtableRecordId)}
+                              onClick={() => void linkSingle(r)}
+                            >
+                              Link
+                            </Button>
+                          )}
+                        </Space>
+                      ),
                     },
                   ]}
                 />
@@ -576,59 +913,30 @@ function SlackAccessPageInner() {
             ),
           },
           {
-            key: "removal",
-            label: "Expired Access / Removal Queue",
+            key: "remove",
+            label: `Remove inactive (${removalRows.length})`,
             children: (
               <>
+                <SlackCommunityFilters
+                  value={removalFilters}
+                  options={{
+                    cities: [...new Set(removalRows.map((r) => r.member.city).filter(Boolean))].sort(),
+                    memberships: [...new Set(removalRows.map((r) => r.member.membership).filter(Boolean))].sort(),
+                    payments: [...new Set(removalRows.map((r) => r.member.payment).filter(Boolean))].sort(),
+                  }}
+                  onChange={setRemovalFilters}
+                  onClear={() => setRemovalFilters(EMPTY_FILTERS)}
+                  extra={removalTabExtra}
+                />
                 <Space wrap style={{ marginBottom: 12 }}>
                   <Button
-                    onClick={() =>
-                      void runRemoval([...selectedRemoval], "preview")
-                    }
-                    disabled={!selectedRemoval.size}
+                    danger
+                    type="primary"
+                    disabled={!canMutate || selectedRemoval.size === 0}
+                    loading={removing}
+                    onClick={() => void runRemoval([...selectedRemoval])}
                   >
-                    Preview removal plan
-                  </Button>
-                  <Button
-                    onClick={async () => {
-                      await copyText(selectedEmails.join("\n"), "Emails");
-                    }}
-                    disabled={!selectedEmails.length}
-                  >
-                    Copy selected emails
-                  </Button>
-                  <Button
-                    onClick={() => {
-                      const lines = [
-                        "email,name,city,serviceAccessUntil,readiness",
-                        ...removalRows
-                          .filter(
-                            (r) =>
-                              r.member.airtableRecordId &&
-                              selectedRemoval.has(r.member.airtableRecordId)
-                          )
-                          .map((r) =>
-                            [
-                              r.member.primaryEmail,
-                              r.member.name,
-                              r.member.city,
-                              r.member.serviceAccessUntil,
-                              r.readiness,
-                            ]
-                              .map((v) => `"${String(v).replace(/"/g, '""')}"`)
-                              .join(",")
-                          ),
-                      ];
-                      const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-                      const a = document.createElement("a");
-                      a.href = URL.createObjectURL(blob);
-                      a.download = "removal-queue.csv";
-                      a.click();
-                      message.success("CSV exported");
-                    }}
-                    disabled={!selectedRemoval.size}
-                  >
-                    Export selected CSV
+                    Remove selected from Slack ({selectedRemoval.size})
                   </Button>
                   <Button
                     href="https://wlthwlks.slack.com/admin"
@@ -637,100 +945,90 @@ function SlackAccessPageInner() {
                   >
                     Open Slack Admin
                   </Button>
-                  <Button
-                    danger
-                    disabled={
-                      !canMutate ||
-                      !selectedRemoval.size ||
-                      !capabilities?.canKickFromChannels
-                    }
-                    onClick={() => void runRemoval([...selectedRemoval], "remove")}
-                  >
-                    Remove from WLTH channels
-                  </Button>
-                  <Button
-                    danger
-                    disabled
-                    title={
-                      capabilities?.deactivateReason ||
-                      "Workspace deactivation unavailable"
-                    }
-                  >
-                    Deactivate account (unavailable)
-                  </Button>
+                  <Typography.Text type="secondary">
+                    Expired access, not paused — paused members stay in the community.
+                  </Typography.Text>
                 </Space>
-                {capabilities && !capabilities.canDeactivateWorkspaceUser && (
-                  <Typography.Paragraph type="secondary">
-                    {capabilities.deactivateReason}
-                  </Typography.Paragraph>
-                )}
-                {!capabilities?.canKickFromChannels && (
-                  <Typography.Paragraph type="secondary">
-                    Channel kick unavailable — bot needs channels:write / groups:write and
-                    must be in target channels. Use CSV + Slack Admin as fallback.
-                  </Typography.Paragraph>
-                )}
                 <Table
                   size="small"
                   loading={loading}
                   rowKey={(r) => r.member.airtableRecordId || r.member.primaryEmail}
-                  dataSource={removalRows}
+                  dataSource={filteredRemoval}
                   rowSelection={{
                     selectedRowKeys: [...selectedRemoval],
                     onChange: (keys) => setSelectedRemoval(new Set(keys.map(String))),
                     getCheckboxProps: (r) => ({
-                      disabled: r.readiness === "still_has_access",
+                      disabled:
+                        r.readiness === "still_has_access" ||
+                        r.readiness === "already_deactivated",
                     }),
                   }}
                   onRow={(r) => ({
                     onClick: () => setSelectedMember(r.member),
                     style: { cursor: "pointer" },
                   })}
-                  scroll={{ x: 1400 }}
+                  scroll={{ x: 1300 }}
+                  locale={{
+                    emptyText: (
+                      <EmptyState
+                        title="No inactive members"
+                        description="No expired members left in Slack, or filters exclude them."
+                      />
+                    ),
+                  }}
                   columns={[
-                    { title: "Member", render: (_, r) => r.member.name },
-                    { title: "Email", render: (_, r) => r.member.primaryEmail },
-                    { title: "City", render: (_, r) => r.member.city },
-                    { title: "Membership", render: (_, r) => r.member.membership },
-                    { title: "Payment", render: (_, r) => r.member.payment },
+                    { title: "Name", render: (_, r) => r.member.name, fixed: "left", width: 150 },
+                    { title: "Email", render: (_, r) => r.member.primaryEmail, width: 200 },
+                    { title: "City", render: (_, r) => r.member.city, width: 100 },
                     {
-                      title: "Cancellation",
-                      render: (_, r) => r.member.cancellationDate || "—",
+                      title: "Date joined",
+                      render: (_, r) => fmtDate(r.member.dateJoined),
+                      width: 110,
                     },
                     {
                       title: "Access until",
                       render: (_, r) => r.member.serviceAccessUntil || "—",
+                      width: 110,
                     },
                     {
                       title: "Days expired",
                       render: (_, r) => r.daysExpired ?? "—",
-                    },
-                    {
-                      title: "Slack",
-                      render: (_, r) => r.member.slackIdentityState.replace(/_/g, " "),
+                      width: 100,
                     },
                     {
                       title: "Channels",
                       render: (_, r) => r.currentChannels.join(", ") || "—",
-                    },
-                    {
-                      title: "all-wlth-wlks",
-                      render: (_, r) => r.member.allMembersChannelMembership,
-                    },
-                    {
-                      title: "City channel",
-                      render: (_, r) => r.member.cityChannelMembership,
+                      width: 180,
                     },
                     {
                       title: "Readiness",
                       render: (_, r) => <RemovalReadinessTag readiness={r.readiness} />,
+                      width: 150,
                     },
                     {
                       title: "Last attempt",
                       render: (_, r) =>
                         r.lastRemovalAttempt
-                          ? `${r.lastRemovalStatus} @ ${r.lastRemovalAttempt}`
+                          ? `${r.lastRemovalStatus} @ ${fmtDate(r.lastRemovalAttempt)}`
                           : "—",
+                      width: 150,
+                    },
+                    {
+                      title: "Action",
+                      width: 120,
+                      render: (_, r) => (
+                        <Button
+                          size="small"
+                          danger
+                          disabled={!canMutate || removing}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void runRemoval([r.member.airtableRecordId || r.member.primaryEmail]);
+                          }}
+                        >
+                          Remove
+                        </Button>
+                      ),
                     },
                   ]}
                 />
@@ -738,83 +1036,336 @@ function SlackAccessPageInner() {
             ),
           },
           {
-            key: "config",
-            label: "Config",
+            key: "invite",
+            label: `Invite to Slack (${inviteRows.length})`,
             children: (
-              <Card size="small">
-                <Typography.Paragraph>
-                  Required: SLACK_BOT_TOKEN, SLACK_ALL_MEMBERS_CHANNEL_ID,
-                  SLACK_WORKSPACE_INVITE_URL, users:read, users:read.email, channels:read,
-                  groups:read. Channel kick needs channels:write / groups:write. Workspace
-                  deactivation needs admin.users:write (Enterprise Grid) — not available on
-                  ordinary bot tokens.
-                </Typography.Paragraph>
-                <Typography.Paragraph type="secondary">
-                  Private channels require inviting the bot. Invisible channels are marked
-                  not checked — never shown as no access.
-                </Typography.Paragraph>
-              </Card>
+              <>
+                <SlackCommunityFilters
+                  value={inviteFilters}
+                  options={inviteOptions}
+                  onChange={setInviteFilters}
+                  onClear={() => setInviteFilters(EMPTY_FILTERS)}
+                  extra={
+                    <Space wrap>
+                      {inviteView === "invite" && inviteTabExtra}
+                      <Segmented
+                        options={[
+                          { label: `To invite (${inviteRows.length})`, value: "invite" },
+                          {
+                            label: `Add to city channel (${channelAddRows.length})`,
+                            value: "channel-add",
+                          },
+                        ]}
+                        value={inviteView}
+                        onChange={(v) => setInviteView(String(v) as "invite" | "channel-add")}
+                      />
+                    </Space>
+                  }
+                />
+
+                {inviteView === "invite" ? (
+                  <>
+                    <Space wrap style={{ marginBottom: 12 }}>
+                      <Button
+                        type="primary"
+                        disabled={!canMutate || selectedInvites.size === 0}
+                        loading={inviting}
+                        onClick={() => void sendInvites([...selectedInvites], false)}
+                      >
+                        Invite selected ({selectedInvites.size})
+                      </Button>
+                      <Button
+                        disabled={!canMutate || selectedInvites.size === 0}
+                        loading={inviting}
+                        onClick={() => void sendInvites([...selectedInvites], true)}
+                      >
+                        Force invite selected
+                      </Button>
+                      <Typography.Text type="secondary">
+                        Invite email with the workspace join link. Open channels are joinable
+                        by everyone; we handle the private city channel.
+                      </Typography.Text>
+                    </Space>
+                    <Table
+                      size="small"
+                      loading={loading}
+                      rowKey={(r) => r.member.airtableRecordId || r.member.primaryEmail}
+                      dataSource={filteredInvites}
+                      rowSelection={{
+                        selectedRowKeys: [...selectedInvites],
+                        onChange: (keys) => setSelectedInvites(new Set(keys.map(String))),
+                        getCheckboxProps: (r) => ({
+                          disabled: r.eligibilityReasons.length > 0,
+                        }),
+                      }}
+                      onRow={(r) => ({
+                        onClick: () => setSelectedMember(r.member),
+                        style: { cursor: "pointer" },
+                      })}
+                      scroll={{ x: 1200 }}
+                      locale={{
+                        emptyText: (
+                          <EmptyState
+                            title="No members to invite"
+                            description="Everyone with current access is already in Slack, or filters exclude them."
+                          />
+                        ),
+                      }}
+                      columns={[
+                        { title: "Name", render: (_, r) => r.member.name, fixed: "left", width: 150 },
+                        { title: "Email", render: (_, r) => r.member.primaryEmail, width: 200 },
+                        { title: "City", render: (_, r) => r.member.city, width: 100 },
+                        {
+                          title: "City channel",
+                          render: (_, r) => r.member.cityChannelName || "—",
+                          width: 140,
+                        },
+                        {
+                          title: "Date joined",
+                          render: (_, r) => fmtDate(r.member.dateJoined),
+                          width: 110,
+                        },
+                        {
+                          title: "Membership",
+                          render: (_, r) => r.member.membership,
+                          width: 110,
+                        },
+                        {
+                          title: "Status",
+                          width: 130,
+                          render: (_, r) =>
+                            r.cooldownActive ? (
+                              <Tag color="processing">
+                                Invited {fmtDate(r.lastInvitedAt || "")}
+                              </Tag>
+                            ) : r.eligibilityReasons.length > 0 ? (
+                              <Tag color="warning">Blocked</Tag>
+                            ) : (
+                              <Tag color="success">Ready</Tag>
+                            ),
+                        },
+                        {
+                          title: "Blockers",
+                          render: (_, r) =>
+                            r.eligibilityReasons.length > 0
+                              ? r.eligibilityReasons.join("; ")
+                              : "—",
+                          ellipsis: true,
+                        },
+                        {
+                          title: "Action",
+                          width: 130,
+                          render: (_, r) => (
+                            <Space>
+                              <Button
+                                size="small"
+                                type="primary"
+                                disabled={
+                                  !canMutate ||
+                                  inviting ||
+                                  r.eligibilityReasons.length > 0 ||
+                                  r.cooldownActive
+                                }
+                                loading={inviting}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void sendInvites(
+                                    [r.member.airtableRecordId || r.member.primaryEmail],
+                                    false
+                                  );
+                                }}
+                              >
+                                Invite
+                              </Button>
+                              {r.cooldownActive && r.eligibilityReasons.length === 0 && (
+                                <Button
+                                  size="small"
+                                  disabled={!canMutate || inviting}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void sendInvites(
+                                      [r.member.airtableRecordId || r.member.primaryEmail],
+                                      true
+                                    );
+                                  }}
+                                >
+                                  Resend
+                                </Button>
+                              )}
+                            </Space>
+                          ),
+                        },
+                      ]}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Space wrap style={{ marginBottom: 12 }}>
+                      <Button
+                        type="primary"
+                        disabled={
+                          !canMutate ||
+                          selectedChannelAdds.size === 0 ||
+                          !capabilities?.canInviteToChannels
+                        }
+                        loading={addingChannels}
+                        onClick={() => void addToChannels([...selectedChannelAdds])}
+                      >
+                        Add selected to city channel ({selectedChannelAdds.size})
+                      </Button>
+                      <Typography.Text type="secondary">
+                        In the workspace but missing from their private city channel.
+                      </Typography.Text>
+                    </Space>
+                    <Table
+                      size="small"
+                      loading={loading}
+                      rowKey={(r) => r.member.airtableRecordId || r.member.primaryEmail}
+                      dataSource={filteredChannelAdds}
+                      rowSelection={{
+                        selectedRowKeys: [...selectedChannelAdds],
+                        onChange: (keys) => setSelectedChannelAdds(new Set(keys.map(String))),
+                      }}
+                      onRow={(r) => ({
+                        onClick: () => setSelectedMember(r.member),
+                        style: { cursor: "pointer" },
+                      })}
+                      scroll={{ x: 1000 }}
+                      locale={{
+                        emptyText: (
+                          <EmptyState
+                            title="No pending channel adds"
+                            description="Everyone in the workspace is already in their city channel."
+                          />
+                        ),
+                      }}
+                      columns={[
+                        { title: "Name", render: (_, r) => r.member.name, fixed: "left", width: 150 },
+                        { title: "Email", render: (_, r) => r.member.primaryEmail, width: 200 },
+                        { title: "City", render: (_, r) => r.member.city, width: 100 },
+                        {
+                          title: "City channel",
+                          render: (_, r) => r.member.cityChannelName || "—",
+                          width: 140,
+                        },
+                        {
+                          title: "Date joined",
+                          render: (_, r) => fmtDate(r.member.dateJoined),
+                          width: 110,
+                        },
+                        {
+                          title: "Action",
+                          width: 170,
+                          render: (_, r) => (
+                            <Button
+                              size="small"
+                              type="primary"
+                              disabled={!canMutate || !capabilities?.canInviteToChannels}
+                              loading={addingChannels}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void addToChannels([
+                                  r.member.airtableRecordId || r.member.primaryEmail,
+                                ]);
+                              }}
+                            >
+                              Add to channel
+                            </Button>
+                          ),
+                        },
+                      ]}
+                    />
+                  </>
+                )}
+              </>
             ),
           },
         ]}
       />
 
       <Modal
-        open={previewOpen}
-        onCancel={closePreview}
-        title="Slack joining email preview"
-        width={640}
-        okText="Send"
-        okButtonProps={{ disabled: !canMutate || previewLoading || !preview?.eligible }}
-        onOk={() => void sendEmail()}
+        open={Boolean(compareRow)}
+        onCancel={() => {
+          setCompareRow(null);
+          setCompareData(null);
+        }}
+        title={
+          compareRow
+            ? `Compare Airtable ↔ Slack — ${compareRow.name}`
+            : "Compare Airtable ↔ Slack"
+        }
+        width={860}
+        footer={
+          <Space>
+            <Button
+              onClick={() => {
+                setCompareRow(null);
+                setCompareData(null);
+              }}
+            >
+              Not a match
+            </Button>
+            <Button
+              type="primary"
+              disabled={!canMutate || compareLoading || !compareData?.slack}
+              loading={linking}
+              onClick={() => void linkFromCompare()}
+            >
+              This is them — update Slack Email
+            </Button>
+          </Space>
+        }
         destroyOnHidden
       >
-        {previewLoading && <Skeleton active paragraph={{ rows: 8 }} />}
-        {!previewLoading && preview && (
-          <div>
-            <Typography.Text type="secondary">To: {preview.recipient}</Typography.Text>
-            <div style={{ margin: "8px 0" }}>
-              <strong>{preview.subject}</strong>
-            </div>
-            {!preview.eligible && (
-              <Typography.Paragraph type="danger">
-                Not eligible: {preview.eligibilityReasons.join("; ")}
-              </Typography.Paragraph>
-            )}
-            <div
-              style={{
-                border: "1px solid #eee",
-                borderRadius: 8,
-                padding: 12,
-                maxHeight: 360,
-                overflow: "auto",
-              }}
-              dangerouslySetInnerHTML={{ __html: preview.html }}
-            />
-          </div>
-        )}
+        <Spin spinning={compareLoading}>
+          <Select
+            showSearch
+            placeholder="Choose a Slack user"
+            style={{ width: "100%", marginBottom: 12 }}
+            value={compareUserId || undefined}
+            onChange={(v) => void switchCompareUser(String(v))}
+            optionFilterProp="label"
+            options={(compareData?.candidates || []).map((c) => ({
+              value: c.slackUserId,
+              label: `${c.name} — ${c.email}`,
+            }))}
+          />
+          <Row gutter={12}>
+            <Col xs={24} md={12}>
+              <Card size="small" title="Airtable record" style={{ height: "100%" }}>
+                <Descriptions
+                  size="small"
+                  column={1}
+                  items={(compareData?.airtable.fields || []).map((f) => ({
+                    key: f.label,
+                    label: f.label,
+                    children: f.value,
+                  }))}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} md={12}>
+              <Card size="small" title="Slack profile" style={{ height: "100%" }}>
+                {compareData?.slack ? (
+                  <Descriptions
+                    size="small"
+                    column={1}
+                    items={compareData.slack.fields.map((f) => ({
+                      key: f.label,
+                      label: f.label,
+                      children: f.value,
+                    }))}
+                  />
+                ) : (
+                  <Typography.Text type="secondary">
+                    No Slack profile selected or profile unavailable.
+                  </Typography.Text>
+                )}
+              </Card>
+            </Col>
+          </Row>
+        </Spin>
       </Modal>
-
-      <Drawer
-        open={Boolean(channelDetail)}
-        onClose={() => setChannelDetail(null)}
-        size="large"
-        title={channelDetail?.channelName || "Channel"}
-      >
-        {channelDetail && (
-          <Descriptions size="small" column={1} bordered>
-            <Descriptions.Item label="Slack Channel ID">
-              {channelDetail.slackChannelId || "—"}
-            </Descriptions.Item>
-            <Descriptions.Item label="Present">{channelDetail.presentCount}</Descriptions.Item>
-            <Descriptions.Item label="Missing">{channelDetail.missingCount}</Descriptions.Item>
-            <Descriptions.Item label="Scan">{channelDetail.scanStatus}</Descriptions.Item>
-            {channelDetail.scanError && (
-              <Descriptions.Item label="Error">{channelDetail.scanError}</Descriptions.Item>
-            )}
-          </Descriptions>
-        )}
-      </Drawer>
 
       <MemberDetailsDrawer
         open={Boolean(selectedMember)}

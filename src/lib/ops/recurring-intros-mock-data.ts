@@ -163,6 +163,16 @@ export function createMockSlack(): SlackClient {
       team: "Mock Team",
       scopes: ["users:read", "users:read.email", "channels:read", "groups:read"],
     }),
+    inviteToChannel: async (channelId: string, userId: string) => {
+      console.log(`[mock-slack] conversations.invite → ${channelId}: ${userId}`);
+    },
+    inviteUsersToWorkspace: async (emails: string[]) =>
+      emails.map((email) => ({ email, ok: true })),
+    deactivateUser: async (userId: string) => {
+      console.log(`[mock-slack] admin.users.setInactive → ${userId}`);
+    },
+    getUserInfo: async (userId: string) =>
+      FAKE_MEMBERS.slack.find((u) => u.id === userId) || null,
   };
 }
 
@@ -257,5 +267,15 @@ export function createSlackMockFromMembers(memberRecords: AirtableRecord[]): Sla
     authTest: async () => {
       throw new Error("Write blocked — Safe Preview mode");
     },
+    inviteToChannel: async () => {
+      throw new Error("Write blocked — Safe Preview mode");
+    },
+    inviteUsersToWorkspace: async () => {
+      throw new Error("Write blocked — Safe Preview mode");
+    },
+    deactivateUser: async () => {
+      throw new Error("Write blocked — Safe Preview mode");
+    },
+    getUserInfo: async (userId: string) => users.find((u) => u.id === userId) || null,
   };
 }

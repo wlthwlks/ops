@@ -195,12 +195,12 @@ describe("GET /api/remove-members (deprecated)", () => {
     vi.clearAllMocks();
   });
 
-  it("returns 410 Gone with redirect to Slack Access removal queue", async () => {
+  it("returns 410 Gone with redirect to Slack Community removal queue", async () => {
     const res = await getRemoved();
     expect(res.status).toBe(410);
     const body = await res.json();
     expect(body.success).toBe(false);
     expect(body.code).toBe("DEPRECATED");
-    expect(body.redirect).toBe("/members/slack-access?tab=removal");
+    expect(body.redirect).toBe("/members/slack-access?tab=remove");
   });
 });

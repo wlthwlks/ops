@@ -120,10 +120,10 @@ const groups: ServiceGroup[] = [
         url: "https://app.slack.com/app-settings/T0ASD0GD8E4/A0B7861TNM9/collaborators",
       },
       {
-        name: "Slack Access — removal queue",
+        name: "Slack Community — removal queue",
         description:
-          "Expired-access removal queue lives at /members/slack-access?tab=removal (CSV export + Slack Admin fallback). Ordinary bot tokens cannot deactivate workspace users.",
-        url: "/members/slack-access?tab=removal",
+          "Inactive-member removal lives at /members/slack-access?tab=remove (Slack Admin fallback). Ordinary bot tokens cannot deactivate workspace users.",
+        url: "/members/slack-access?tab=remove",
       },
     ],
   },

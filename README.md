@@ -80,9 +80,9 @@ listed here because this repo is public — see `.env` locally for those.)
 
 | Tool | Used for | Where |
 |---|---|---|
-| **Slack Admin** | Manual workspace deactivation when bot cannot deactivate users | Open from Slack Access → Expired Access / Removal Queue (export CSV, copy emails). Ordinary bot tokens cannot deactivate workspace users. |
+| **Slack Admin** | Manual workspace deactivation when bot cannot deactivate users | Open from Slack Community → Remove inactive. Ordinary bot tokens cannot deactivate workspace users. |
 
-Legacy `/remove-members` redirects to `/members/slack-access?tab=removal`. No extension license keys are stored in this repository.
+Legacy `/remove-members` redirects to `/members/slack-access?tab=remove`. No extension license keys are stored in this repository.
 
 ### Where each integration lives in code
 
@@ -146,10 +146,13 @@ See `src/lib/introduction/` for shared helpers: reservations, history, service a
 - `users:read` — list workspace users
 - `users:read.email` — resolve Slack user emails from Airtable
 - `groups:read` — read members of private city channels
+- `groups:write` / `channels:manage` — add members to private city channels (`conversations.invite`)
 - `channels:read` — read members of public channels
+- `channels:write` / `groups:write` — remove members from channels (`conversations.kick`)
 - `mpim:write`, `mpim:read` — open and write to group DMs
 - `chat:write` — post introduction messages
 - `app_mentions:read` — optional, for future reply handling
+- `admin.users:write` (via `SLACK_ADMIN_USER_TOKEN`, Enterprise Grid only) — workspace invite (`admin.users.invite`) and account deactivation (`admin.users.setInactive`)
 
 ### Introductions runtime modes
 
@@ -197,7 +200,7 @@ Grouped sidebar (routes kept stable for bookmarks):
 | Overview | Operations Overview | `/overview` |
 | Member Management | Member Directory | `/members` |
 | | Data Issues | `/members/issues` |
-| | Slack Access | `/members/slack-access` |
+| | Slack Community | `/members/slack-access` |
 | | Billing Integrity | `/members/billing` |
 | | New Members | `/get-daily-new-customers-for-cities` |
 | | Cancellations | `/remove-members` |
@@ -209,7 +212,13 @@ Grouped sidebar (routes kept stable for bookmarks):
 
 Root `/` redirects to `/overview`.
 
-**Slack Email Resolver + Workspace Users** live under `/members/slack-access` (extracted from Recurring Introductions). Recurring intro calculations/APIs are unchanged.
+**Slack Community** lives under `/members/slack-access` — a 3-tab tool for the community workspace (Slack is community-only, not a core business system):
+
+1. **Link Slack emails** — members with an empty `Slack Email` field, each with a suggested Slack profile; a side-by-side Compare modal, then write `Slack Email` to Airtable.
+2. **Remove inactive** — expired-access members no longer in the community (paused members excluded), removed from WLTH channels with one click (+ workspace deactivation when an admin token is available).
+3. **Invite to Slack** — current-access members not in the workspace get a joining email; once they join, they are added to their private city channel.
+
+All three lists are ordered by `Date joined` latest → oldest, with search/city/membership/payment/date filters.
 
 #### Runtime mode (dashboard + introductions)
 
@@ -232,7 +241,7 @@ OPS_VIEWER_USER_IDS=user_aaa
 - Unknown authenticated users fail closed in production.
 - Local/dev: if both allowlists are empty, authenticated users are treated as admin.
 
-#### Slack outreach
+#### Slack community
 
 ```env
 SLACK_WORKSPACE_INVITE_URL=
@@ -241,12 +250,13 @@ SLACK_WORKSPACE_URL=            # for channel deep links
 SLACK_ALL_MEMBERS_CHANNEL_ID=
 SLACK_ALL_MEMBERS_CHANNEL_NAME=all-wlth-wlks
 SLACK_OUTREACH_COOLDOWN_DAYS=7
+SLACK_ADMIN_USER_TOKEN=         # optional: Enterprise Grid admin token (admin.users:write)
 RESEND_API_KEY=
 RESEND_FROM_EMAIL=
 OPS_SUPPORT_EMAIL=
 ```
 
-Outreach emails ask members to join Slack + city channel + `all-wlth-wlks`. They do **not** auto-invite via Slack API. Cooldown prevents duplicate sends; force-resend is admin+live only.
+Invite emails carry the workspace join link + channel guidance. Open channels are joinable by everyone in the workspace; private city channels are handled by the bot (`conversations.invite`) once the member joins. With `SLACK_ADMIN_USER_TOKEN` the bot can also invite via `admin.users.invite` and deactivate accounts via `admin.users.setInactive`. Cooldown prevents duplicate invites; force-resend is admin+live only.
 
 #### Billing integrity
 
@@ -264,6 +274,12 @@ Outreach emails ask members to join Slack + city channel + `all-wlth-wlks`. They
 | `/api/ops-dashboard/issues` | GET | Issue work queue |
 | `/api/ops-dashboard/scans/member-health` | POST | Explicit member/Slack/channel scan |
 | `/api/ops-dashboard/slack/resolve` | POST | Scan or safe Slack Email write |
+| `/api/ops-dashboard/slack/link` | GET | Slack Email linking queue (empty Slack Email + suggestions) |
+| `/api/ops-dashboard/slack/compare` | POST | Side-by-side Airtable record vs Slack profile |
+| `/api/ops-dashboard/slack/removal-queue` | GET | Inactive member removal queue (+ capabilities) |
+| `/api/ops-dashboard/slack/removal` | POST | Preview / remove channels / remove + deactivate (live admin) |
+| `/api/ops-dashboard/slack/invite` | GET | Invite queue + pending private-channel adds |
+| `/api/ops-dashboard/slack/channel-invite` | POST | Add member to private city channel (live admin) |
 | `/api/ops-dashboard/slack-email/preview` | POST | Preview joining email |
 | `/api/ops-dashboard/slack-email/send` | POST | Send joining email (live admin) |
 
@@ -282,17 +298,12 @@ Adds `member_outreach` and `ops_scan_snapshots`.
 - Controlled server-side pagination via `?page=` and `?pageSize=` (single slice on the API — not double-paginated in the table).
 - Filters and search reset to page 1. Result range shows `1–100 of N members`.
 
-#### Slack channel membership (`/members/slack-access`)
+#### Slack Community (`/members/slack-access`)
 
-- **Refresh channel memberships** runs an explicit scan (works in `read_only`).
-- Loads Airtable `Slack channels` with exact fields: `Name`, `Cities`, `group size`, `Channel status/donut`, `Slack Channel ID`, `Timezone`, `Scheduling mode`.
-- **Present**: expected service-eligible member with trusted Slack user ID in `conversations.members`.
-- **Missing**: in Slack but not in channel · not in workspace · invalid email · channel config missing (separate reasons).
-- **Unresolved**: ambiguous/stale Slack identity.
-- **Unexpected**: Slack users in channel not matched to eligible Airtable members (bots excluded by default).
-- Active channels scanned by default; Paused/Closed visible via filters (not urgent alerts).
-- `all-wlth-wlks` uses `SLACK_ALL_MEMBERS_CHANNEL_ID` / `NAME`.
-- Bounded Slack concurrency; one membership fetch per channel per scan.
+- **Link Slack emails** — lists members with an empty `Slack Email` and a best-guess Slack profile (primary-email or exact-name match, plus name-scored candidates). Compare shows the Airtable record next to the Slack profile; confirming writes `Slack Email` (server revalidates: field must still be empty and the email must map to exactly one active Slack user).
+- **Remove inactive** — expired-access members who are not paused (intro pause or Stripe pause). One click removes them from their WLTH channels; with an admin token, their workspace account is deactivated too. Already-deactivated accounts are not listed.
+- **Invite to Slack** — current-access members not found in the workspace get a joining email (cooldown-aware, forceable). Once they join, the "Add to city channel" view invites them into their private city channel via `conversations.invite`.
+- All lists ordered by `Date joined` latest → oldest. Filters: search, city, membership, payment, date range, plus per-tab status filters.
 
 #### Airtable field maps
 
@@ -365,7 +376,7 @@ Reports land in `reports/city-relation-repair/<timestamp>/`.
 
 1. Set `INTRODUCTIONS_MODE=read_only`, open `/overview`, hover KPI tooltips, run scans — no writes.
 2. `/members?page=1&pageSize=100` — confirm 100 rows and next page.
-3. `/members/slack-access` → Refresh channel memberships — present/missing counts appear.
+3. `/members/slack-access` → Link / Remove / Invite tabs load ordered by Date joined; filters apply; mutation buttons disabled in read-only mode.
 4. Confirm send/write buttons disabled or return `403` / `MANUAL_ACTIONS_READ_ONLY`.
 5. Live rollout: set allowlists, `INTRODUCTIONS_MODE=live`, preview then single-send outreach.
 

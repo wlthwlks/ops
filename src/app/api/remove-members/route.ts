@@ -16,8 +16,8 @@ export async function GET() {
         success: false,
         code: "DEPRECATED",
         message:
-          "This endpoint is deprecated. Use GET /api/ops-dashboard/slack/removal-queue and the Slack Access removal tab.",
-        redirect: "/members/slack-access?tab=removal",
+          "This endpoint is deprecated. Use GET /api/ops-dashboard/slack/removal-queue and the Slack Community removal tab.",
+        redirect: "/members/slack-access?tab=remove",
         retryable: false,
       },
       { status: 410 }

@@ -49,7 +49,7 @@ const NAV: NavItem[] = [
     children: [
       { key: "/members", icon: <UnorderedListOutlined />, label: "Member Directory" },
       { key: "/members/issues", icon: <AlertOutlined />, label: "Data Issues" },
-      { key: "/members/slack-access", icon: <SlackOutlined />, label: "Slack Access" },
+      { key: "/members/slack-access", icon: <SlackOutlined />, label: "Slack Community" },
       { key: "/members/billing", icon: <DollarOutlined />, label: "Billing Integrity" },
       {
         key: "/get-daily-new-customers-for-cities",

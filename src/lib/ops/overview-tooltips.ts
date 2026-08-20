@@ -6,7 +6,7 @@ export const OVERVIEW_KPI_TOOLTIPS = {
   fullyConnected:
     "Service-eligible members with Stripe Customer ID linked, trusted Slack identity, city channel membership, and all-wlth-wlks membership when channel data was scanned. Sources: Airtable + Slack. Based on last scan. Gaps usually mean Slack or channel issues.",
   payingMissingSlack:
-    "Service-eligible Airtable members with no trusted active Slack human user (primary or Slack Email). Sources: Airtable + Slack users.list. Based on last scan. Action: open Slack Access → Needs Slack and send joining email when live.",
+    "Service-eligible Airtable members with no trusted active Slack human user (primary or Slack Email). Sources: Airtable + Slack users.list. Based on last scan. Action: open Slack Community → Invite to Slack and send joining emails when live.",
   payingStripeMissingAirtable:
     "Stripe customers with qualifying paid membership invoices and no Airtable match. Not computed on every overview load (expensive). Usually 0 here until a billing CLI/scan. Never auto-created from the dashboard — use Make or historical CLI.",
   missingStripeCustomerId:
@@ -14,7 +14,7 @@ export const OVERVIEW_KPI_TOOLTIPS = {
   criticalIssues:
     "Count of non-info issues classified critical (duplicates, Stripe ID conflicts, invalid access dates, paying Stripe missing Airtable, etc.). Sources: last member-health classification. Action: open Data Issues → Critical.",
   channelGaps:
-    "Members missing city channel or all-wlth-wlks after a channel membership scan. 0 if channels were not scanned. Sources: Airtable channels + Slack conversations.members. Action: Slack Access → scan channels, then fix missing memberships.",
+    "Members missing city channel or all-wlth-wlks after a channel membership scan. 0 if channels were not scanned. Sources: Airtable channels + Slack conversations.members. Action: Slack Community → Invite to Slack → Add to city channel.",
   failedOps24h:
     "Registry operations in Postgres op_runs with status failed in the last 24 hours. Sources: Postgres. Independent of member scan. Action: open Operations and inspect run logs.",
 } as const;
