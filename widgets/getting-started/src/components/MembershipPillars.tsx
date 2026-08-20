@@ -30,36 +30,40 @@ const pillars: Pillar[] = [
     title: 'Curated Introductions',
     body: (
       <>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           On the 1st of every month you&apos;ll get a curated introduction to two
           female founders in your city, matched to your stage, your industry and
           your goals.
         </p>
-        <p>No searching through hundreds of profiles. No awkward networking room.</p>
-        <p>Just an introduction to women worth knowing.</p>
-        <p className="text-foreground">
+        <p className="text-foreground text-[15px] leading-relaxed">
+          No searching through hundreds of profiles. No awkward networking room.
+        </p>
+        <p className="text-foreground text-[15px] leading-relaxed">
+          Just an introduction to women worth knowing.
+        </p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           The introduction is ours. The relationship is yours.
         </p>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           From there, start a conversation, jump on a call, meet for coffee or go
           for a walk together.
         </p>
-        <p className="text-sm italic text-muted-foreground/80">
+        <p className="text-sm italic text-foreground">
           WLTH WLKS facilitates introductions, not guaranteed perfect matches.
           Not every introduction will become a deep friendship or business
           relationship, and that&apos;s normal. That&apos;s why we introduce you
           to new groups regularly.
         </p>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           The magic of WLTH WLKS comes from consistency, participation, showing
           up, and proactively connecting.
         </p>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           We also host monthly CITY WLKS in our core cities and offer more
           in-depth residencies through our WLTH Collective program. We&apos;ll
           share more details on these in due course.
         </p>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           To get better introductions, keep your member profile up to date so we
           understand what you&apos;re building, what you need help with and what
           you can offer other founders.
@@ -73,7 +77,7 @@ const pillars: Pillar[] = [
     title: 'Virtual Programming',
     body: (
       <>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           WLTH WLKS virtual sessions connect founders from different cities,
           industries and business stages through facilitated conversations and
           member networking.
@@ -90,7 +94,7 @@ const pillars: Pillar[] = [
             </div>
           ))}
         </dl>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           These sessions give you access to the global WLTH WLKS founder network,
           wherever you happen to be.
         </p>
@@ -106,21 +110,21 @@ const pillars: Pillar[] = [
     title: 'CITY WLKS',
     body: (
       <>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           A monthly walk that brings every member in your city together in one
           place, hosted by a local City Host. Large group format, same rhythm
           each month.
         </p>
-        <p className="text-foreground">
+        <p className="text-foreground text-[15px] leading-relaxed">
           Real conversations with real women. No pitching, no small talk, no
           bullshit.
         </p>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           We&apos;re rolling these out city by city, starting where we have the
           density and a WLTH Collective member on the ground to host. Our first
           cities are LA, Lisbon, Cape Town, and San Diego, with more to follow.
         </p>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           The moment a city hits 50+ members and has a host, we bring CITY WLKS
           there next. And if you want to be the one who brings it to your city,
           I&apos;d love to hear from you.
@@ -137,19 +141,19 @@ const pillars: Pillar[] = [
     title: 'The Community',
     body: (
       <>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           Join our Slack community to connect with the global WLTH WLKS network.
           Chat someone in London while you&apos;re in Vancouver. Talk strategy
           with a founder in New York. Connect with someone building a completely
           different business who sees a problem in a way you hadn&apos;t
           considered.
         </p>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           Use the community to continue conversations between walks, connect with
           founders in other cities, share what you&apos;re working on, ask
           questions, celebrate wins and discover opportunities across the network.
         </p>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           You don&apos;t need to constantly monitor another platform to get value
           from your membership; your introductions and activities will keep
           coming.

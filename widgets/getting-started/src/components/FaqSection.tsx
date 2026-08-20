@@ -33,7 +33,9 @@ const faqs: Faq[] = [
     q: 'Do you have any conversation starters for the walks?',
     a: (
       <>
-        <p>Not sure what to talk about? Try these conversation starters:</p>
+        <p className="text-foreground text-[15px] leading-relaxed">
+          Not sure what to talk about? Try these conversation starters:
+        </p>
         <ul className="mt-3 grid gap-2 sm:grid-cols-2">
           {conversationStarters.map((s) => (
             <li key={s} className="flex items-start gap-2.5">
@@ -52,12 +54,14 @@ const faqs: Faq[] = [
     q: 'I didn\u2019t receive my introduction',
     a: (
       <>
-        <p>Your introduction arrives on the 1st of each month.</p>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
+          Your introduction arrives on the 1st of each month.
+        </p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           If you join after the 1st (for example, on the 3rd), your first
           introduction will be sent on the 1st of the following month.
         </p>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           In the meantime, you can still make the most of your membership: join
           our virtual sessions, come to CITY WLKS in your city, and connect with
           founders inside Slack.
@@ -68,7 +72,7 @@ const faqs: Faq[] = [
   {
     q: 'How can I see my city channel on Slack?',
     a: (
-      <p>
+      <p className="text-foreground text-[15px] leading-relaxed">
         You&apos;ll be manually added to your city channel upon joining Slack. If
         you don&apos;t see your city channel, DM Sarah with the name of your city
         channel and she&apos;ll add you in.
@@ -78,7 +82,7 @@ const faqs: Faq[] = [
   {
     q: 'Nobody replied in my intro group',
     a: (
-      <p>
+      <p className="text-foreground text-[15px] leading-relaxed">
         This occasionally happens, and is against our community standards.
         Sometimes things come up for people and they forget to pause, but we do
         check in on how often this happens and enforce our community standards
@@ -90,7 +94,7 @@ const faqs: Faq[] = [
   {
     q: 'Only a few people replied in my intro group. Should we still go on a walk?',
     a: (
-      <p>
+      <p className="text-foreground text-[15px] leading-relaxed">
         We have strict community standards and are working hard to enforce them.
         When you are paired with other founders, we expect everyone to engage,
         even if it&apos;s to say, hey I can&apos;t make it this time. If a few of
@@ -107,17 +111,17 @@ const faqs: Faq[] = [
     q: 'My introduction and I didn\u2019t hit it off',
     a: (
       <>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           WLTH WLKS facilitates introductions, not guaranteed perfect matches.
           Not every introduction will become a deep friendship or business
           relationship, and that&apos;s normal. That&apos;s why we introduce you
           to new groups regularly.
         </p>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           The magic of WLTH WLKS comes from consistency, participation, showing up
           and proactively connecting.
         </p>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           Keep putting yourself out there. Join the sessions, show up to CITY
           WLKS, stay in the mix, and the right people and conversations will
           come.
@@ -129,7 +133,9 @@ const faqs: Faq[] = [
     q: 'Do you have any tips for scheduling?',
     a: (
       <>
-        <p>The easiest way to organize a meetup is this:</p>
+        <p className="text-foreground text-[15px] leading-relaxed">
+          The easiest way to organize a meetup is this:
+        </p>
         <ol className="mt-2 flex flex-col gap-2">
           <li className="flex gap-3">
             <span className="font-semibold text-primary">1.</span>
@@ -146,7 +152,7 @@ const faqs: Faq[] = [
             </span>
           </li>
         </ol>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           Take the initiative and start the conversation by suggesting a date,
           time and a good walking spot.{' '}
           <span className="text-foreground">
@@ -162,12 +168,14 @@ const faqs: Faq[] = [
     q: 'Do you offer a money back guarantee?',
     a: (
       <>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           We stand behind the experience. If you actively participate and
           don&apos;t feel WLTH WLKS delivered on its promise, our team will work
           with you directly to make it right.
         </p>
-        <p>To be eligible, members must have:</p>
+        <p className="text-foreground text-[15px] leading-relaxed">
+          To be eligible, members must have:
+        </p>
         <ul className="mt-2 flex flex-col gap-2">
           {refundCriteria.map((c) => (
             <li key={c} className="flex items-start gap-2.5">
@@ -179,7 +187,7 @@ const faqs: Faq[] = [
             </li>
           ))}
         </ul>
-        <p>
+        <p className="text-foreground text-[15px] leading-relaxed">
           Refund requests must be submitted within 14 days of your first
           introduction. Memberships are not refundable due to lack of
           participation, inactivity, schedule availability, relocation, or
@@ -195,7 +203,7 @@ const faqs: Faq[] = [
   {
     q: 'What is WLTH Collective?',
     a: (
-      <p>
+      <p className="text-foreground text-[15px] leading-relaxed">
         WLTH Collective is a private community for ambitious female founders who
         crave more out of life. As WLTH WLKS expanded city by city, something
         powerful started to happen: women were showing up for the walk, but they
