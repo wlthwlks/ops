@@ -229,7 +229,7 @@ export function FaqSection() {
         <h2 className="text-2xl font-bold uppercase tracking-tight text-foreground sm:text-3xl">
           FAQs
         </h2>
-        <p className="mx-auto mt-2 max-w-xl text-pretty text-[15px] font-light leading-relaxed text-muted-foreground">
+        <p className="mx-auto mt-2 max-w-xl text-pretty text-[15px] font-light leading-relaxed text-foreground">
           Have an issue? Contact our team at{' '}
           <a href="mailto:info@wlthwlks.com" className="text-primary underline-offset-2 hover:underline">
             info@wlthwlks.com
@@ -252,7 +252,7 @@ export function FaqSection() {
                 <Plus className="h-4 w-4" aria-hidden="true" />
               </span>
             </summary>
-            <div className="space-y-3 pb-6 pr-10 text-[15px] font-light leading-relaxed text-muted-foreground">
+            <div className="space-y-3 pb-6 pr-10 text-[15px] font-light leading-relaxed text-foreground">
               {faq.a}
             </div>
           </details>

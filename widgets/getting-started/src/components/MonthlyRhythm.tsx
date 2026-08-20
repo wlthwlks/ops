@@ -31,7 +31,7 @@ export function MonthlyRhythm() {
         <h2 className="text-2xl font-bold uppercase tracking-tight text-foreground sm:text-3xl">
           There is something happening every week
         </h2>
-        <p className="mx-auto mt-2 max-w-xl text-pretty text-[15px] font-light leading-relaxed text-muted-foreground">
+        <p className="mx-auto mt-2 max-w-xl text-pretty text-[15px] font-light leading-relaxed text-foreground">
           Your membership is designed around a simple monthly rhythm.
         </p>
       </div>
@@ -49,7 +49,7 @@ export function MonthlyRhythm() {
             <h3 className="mt-2 text-base font-medium uppercase tracking-wide text-foreground">
               {w.title}
             </h3>
-            <p className="mt-3 text-pretty text-[15px] font-light leading-relaxed text-muted-foreground">
+            <p className="mt-3 text-pretty text-[15px] font-light leading-relaxed text-foreground">
               {w.text}
             </p>
           </li>

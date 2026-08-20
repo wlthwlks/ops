@@ -52,7 +52,7 @@ export function GettingStartedApp(props: Props) {
         <p className="text-[11px] font-semibold uppercase tracking-brand text-primary">
           WLTH WLKS
         </p>
-        <p className="text-[15px] font-light text-muted-foreground">
+        <p className="text-[15px] font-light text-foreground">
           Loading your membership…
         </p>
       </div>
@@ -68,7 +68,7 @@ export function GettingStartedApp(props: Props) {
         <h2 className="text-2xl font-bold uppercase tracking-tight text-foreground">
           Members only
         </h2>
-        <p className="max-w-md text-[15px] font-light leading-relaxed text-muted-foreground">
+        <p className="max-w-md text-[15px] font-light leading-relaxed text-foreground">
           Log in with your WLTH WLKS Memberstack account to view Getting Started and make
           the most of your membership.
         </p>
@@ -85,7 +85,7 @@ export function GettingStartedApp(props: Props) {
         <h2 className="text-2xl font-bold uppercase tracking-tight text-foreground">
           Something went wrong
         </h2>
-        <p className="max-w-md text-[15px] font-light leading-relaxed text-muted-foreground">
+        <p className="max-w-md text-[15px] font-light leading-relaxed text-foreground">
           {error || "Please refresh and try again."}
         </p>
       </div>

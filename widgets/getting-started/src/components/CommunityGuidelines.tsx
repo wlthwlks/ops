@@ -25,7 +25,7 @@ export function CommunityGuidelines() {
         <h2 className="text-2xl font-bold uppercase tracking-tight text-foreground sm:text-3xl">
           A community that works for everyone
         </h2>
-        <p className="mx-auto mt-2 max-w-2xl text-pretty text-[15px] font-light leading-relaxed text-muted-foreground">
+        <p className="mx-auto mt-2 max-w-2xl text-pretty text-[15px] font-light leading-relaxed text-foreground">
           The best communities work when everyone participates generously. When
           you joined, you agreed to our terms of service, participation
           guidelines and community standards. Here&apos;s a consolidated
@@ -43,7 +43,7 @@ export function CommunityGuidelines() {
             {please.map((item) => (
               <li key={item} className="flex items-start gap-3">
                 <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                <span className="text-[15px] font-light leading-relaxed text-muted-foreground">
+                <span className="text-[15px] font-light leading-relaxed text-foreground">
                   {item}
                 </span>
               </li>
@@ -60,7 +60,7 @@ export function CommunityGuidelines() {
             {pleaseNot.map((item) => (
               <li key={item} className="flex items-start gap-3">
                 <X className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />
-                <span className="text-[15px] font-light leading-relaxed text-muted-foreground">
+                <span className="text-[15px] font-light leading-relaxed text-foreground">
                   {item}
                 </span>
               </li>
@@ -73,7 +73,7 @@ export function CommunityGuidelines() {
         <p className="text-base font-normal uppercase tracking-brand text-foreground">
           WLTH WLKS is relationship-first.
         </p>
-        <p className="mx-auto mt-3 max-w-2xl text-pretty text-[15px] font-light leading-relaxed text-muted-foreground">
+        <p className="mx-auto mt-3 max-w-2xl text-pretty text-[15px] font-light leading-relaxed text-foreground">
           The stronger the community becomes, the more valuable it becomes for
           everyone. A rising tide lifts all boats, for sure.
         </p>

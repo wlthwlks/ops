@@ -34,7 +34,7 @@ export function GsHero() {
           You&apos;re in. Now make the most of your membership.
         </p>
         <p
-          className="animate-fade-up mt-5 max-w-2xl text-pretty text-[15px] font-light leading-relaxed text-muted-foreground sm:text-base"
+          className="animate-fade-up mt-5 max-w-2xl text-pretty text-[15px] font-light leading-relaxed text-foreground sm:text-base"
           style={{ animationDelay: '0.22s' }}
         >
           WLTH WLKS is a global community for ambitious female founders who are

@@ -11,14 +11,14 @@ export function ClosingCta() {
         </h2>
 
         <div className="mx-auto mt-8 flex max-w-2xl flex-col gap-4">
-          <p className="text-pretty text-[15px] font-light leading-relaxed text-muted-foreground sm:text-base">
+          <p className="text-pretty text-[15px] font-light leading-relaxed text-foreground sm:text-base">
             Your next introduction could become a collaborator.
           </p>
-          <p className="text-pretty text-[15px] font-light leading-relaxed text-muted-foreground sm:text-base">
+          <p className="text-pretty text-[15px] font-light leading-relaxed text-foreground sm:text-base">
             Your next walk could solve a problem you&apos;ve been stuck on for
             weeks.
           </p>
-          <p className="text-pretty text-[15px] font-light leading-relaxed text-muted-foreground sm:text-base">
+          <p className="text-pretty text-[15px] font-light leading-relaxed text-foreground sm:text-base">
             Your next conversation could introduce you to an opportunity you
             never knew existed.
           </p>

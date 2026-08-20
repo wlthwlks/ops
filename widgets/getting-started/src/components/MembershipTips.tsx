@@ -31,7 +31,7 @@ export function MembershipTips() {
         <h2 className="text-2xl font-bold uppercase tracking-tight text-foreground sm:text-3xl">
           Getting the most from WLTH WLKS
         </h2>
-        <p className="mx-auto mt-2 max-w-xl text-pretty text-[15px] font-light leading-relaxed text-muted-foreground">
+        <p className="mx-auto mt-2 max-w-xl text-pretty text-[15px] font-light leading-relaxed text-foreground">
           The members who get the most value are the ones who participate.
         </p>
       </div>
@@ -46,7 +46,7 @@ export function MembershipTips() {
               <h3 className="text-base font-medium text-foreground">
                 {tip.title}
               </h3>
-              <p className="mt-2 text-pretty text-[15px] font-light leading-relaxed text-muted-foreground">
+              <p className="mt-2 text-pretty text-[15px] font-light leading-relaxed text-foreground">
                 {tip.text}
               </p>
             </div>

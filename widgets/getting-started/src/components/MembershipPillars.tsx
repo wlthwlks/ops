@@ -84,7 +84,7 @@ const pillars: Pillar[] = [
               <dt className="text-[13px] font-semibold uppercase tracking-brand text-primary">
                 {program.name}
               </dt>
-              <dd className="mt-2 text-[15px] font-light leading-relaxed text-muted-foreground">
+              <dd className="mt-2 text-[15px] font-light leading-relaxed text-foreground">
                 {program.text}
               </dd>
             </div>
