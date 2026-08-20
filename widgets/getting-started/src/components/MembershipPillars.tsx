@@ -194,7 +194,7 @@ export function MembershipPillars() {
               <h3 className="mt-2 text-xl font-bold uppercase tracking-tight text-foreground sm:text-2xl">
                 {p.title}
               </h3>
-              <div className="mt-6 space-y-4 text-[15px] font-light leading-relaxed text-muted-foreground">
+              <div className="mt-6 space-y-4 text-[15px] font-light leading-relaxed text-foreground/90">
                 {p.body}
               </div>
             </div>
