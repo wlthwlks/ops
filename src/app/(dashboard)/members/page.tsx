@@ -44,6 +44,9 @@ const FILTER_KEYS = [
   "expiredStillInSlack",
   "stripeConflict",
   "duplicateStripe",
+  "paused",
+  "pauseExpired",
+  "billingPaused",
   "actionableOnly",
   "informationalOnly",
   "q",
@@ -117,6 +120,9 @@ function MembersDirectoryPageInner() {
       expiredStillInSlack: flag("expiredStillInSlack"),
       stripeConflict: flag("stripeConflict"),
       duplicateStripe: flag("duplicateStripe"),
+      paused: flag("paused"),
+      pauseExpired: flag("pauseExpired"),
+      billingPaused: flag("billingPaused"),
       actionableOnly: flag("actionableOnly"),
       informationalOnly: flag("informationalOnly"),
     };
@@ -151,6 +157,8 @@ function MembersDirectoryPageInner() {
       if (view === "critical") p.set("criticalIssues", "1");
       if (view === "grace") p.set("gracePeriod", "1");
       if (view === "expired_in_slack") p.set("expiredStillInSlack", "1");
+      if (view === "paused_intros") p.set("paused", "1");
+      if (view === "billing_paused") p.set("billingPaused", "1");
 
       const res = await fetch(`/api/ops-dashboard/members?${p}`);
       const json = await res.json();
@@ -187,6 +195,10 @@ function MembersDirectoryPageInner() {
       "membership",
       "payment",
       "serviceAccessUntil",
+      "recurringIntroStatus",
+      "recurringPauseUntil",
+      "stripeSubscriptionStatus",
+      "billingPauseUntil",
       "stripeCustomerId",
       "slackIdentityState",
       "highestSeverity",
@@ -202,6 +214,10 @@ function MembersDirectoryPageInner() {
           m.membership,
           m.payment,
           m.serviceAccessUntil,
+          m.recurringIntroStatus,
+          m.recurringPauseUntil,
+          m.stripeSubscriptionStatus,
+          m.billingPauseUntil,
           m.stripeCustomerId,
           m.slackIdentityState,
           m.highestSeverity || "",
@@ -233,6 +249,9 @@ function MembersDirectoryPageInner() {
       "expiredStillInSlack",
       "stripeConflict",
       "duplicateStripe",
+      "paused",
+      "pauseExpired",
+      "billingPaused",
       "actionableOnly",
       "informationalOnly",
     ] as const;
@@ -296,6 +315,8 @@ function MembersDirectoryPageInner() {
     { id: "critical", label: "Critical issues" },
     { id: "grace", label: "Cancelled but grace period" },
     { id: "expired_in_slack", label: "Expired still in Slack" },
+    { id: "paused_intros", label: "Paused intros" },
+    { id: "billing_paused", label: "Billing paused" },
   ];
 
   return (
@@ -449,6 +470,8 @@ function MembersDirectoryPageInner() {
         open={Boolean(selected)}
         member={selected}
         onClose={() => setSelected(null)}
+        mode={mode}
+        onChanged={load}
       />
 
       <MemberFilterDrawer

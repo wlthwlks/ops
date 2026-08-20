@@ -159,6 +159,33 @@ describe("checkMemberEligibility — introduction states", () => {
   });
 });
 
+describe("checkMemberEligibility — Stripe billing pause", () => {
+  it("excludes members whose Stripe subscription is paused, even with future access", () => {
+    const result = checkMemberEligibility(
+      member({
+        stripeSubscriptionStatus: "paused",
+        serviceAccessUntil: "2026-12-01T00:00:00Z",
+      }),
+      { cycleDate: CYCLE, runCity: null, constraints }
+    );
+    expect(result).toEqual({ eligible: false, reason: "no_service_access" });
+  });
+
+  it("treats casing-insensitively and ignores other statuses", () => {
+    const paused = checkMemberEligibility(
+      member({ stripeSubscriptionStatus: "PAUSED" }),
+      { cycleDate: CYCLE, runCity: null, constraints }
+    );
+    expect(paused).toEqual({ eligible: false, reason: "no_service_access" });
+
+    const active = checkMemberEligibility(
+      member({ stripeSubscriptionStatus: "active" }),
+      { cycleDate: CYCLE, runCity: null, constraints }
+    );
+    expect(active.eligible).toBe(true);
+  });
+});
+
 describe("checkMemberEligibility — city and postcode", () => {
   it("rejects members whose city does not match the run city", () => {
     const result = checkMemberEligibility(member({ city: "Paris" }), {

@@ -105,6 +105,8 @@ export const MEMBER_FIELDS = {
   initialReferrer: "Initial referrer",
   recurringIntroStatus: "Recurring intro status",
   recurringPauseUntil: "Recurring pause until",
+  /** Stripe pause-collection resume date; blank = paused indefinitely. */
+  billingPauseUntil: "Billing pause until",
   firstIntroductionStatus: "First introduction status",
   firstIntroductionSentAt: "First introduction sent at",
   recurringEligibleFrom: "Recurring eligible from",

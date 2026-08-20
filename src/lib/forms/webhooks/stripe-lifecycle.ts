@@ -37,7 +37,9 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
 
   switch (event.type) {
     case "customer.subscription.created":
-    case "customer.subscription.updated": {
+    case "customer.subscription.updated":
+    case "customer.subscription.paused":
+    case "customer.subscription.resumed": {
       const sub = event.data.object as Stripe.Subscription;
       const cus = customerId(sub.customer);
       if (!cus) {
@@ -80,9 +82,26 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
         } else if (accessUntil) {
           patch[MEMBER_FIELDS.cancellationEffectiveAt] = accessUntil;
         }
+      } else if (sub.status === "paused") {
+        // Stripe pause collection: indefinite (resumes_at null) or scheduled.
+        // Blocks service access (see service-access.ts billing_paused) while
+        // Membership/Payment/Service access until stay untouched — the paid
+        // period must survive the pause and resume in Stripe dashboard only.
+        patch[MEMBER_FIELDS.stripeSubscriptionStatus] = "paused";
+        const pauseCollection = sub.pause_collection as
+          | { resumes_at?: number | null }
+          | null
+          | undefined;
+        const resumesAt = pauseCollection?.resumes_at;
+        patch[MEMBER_FIELDS.billingPauseUntil] =
+          typeof resumesAt === "number" && resumesAt > 0
+            ? new Date(resumesAt * 1000).toISOString().slice(0, 10)
+            : "";
       } else if (sub.status === "active" || sub.status === "trialing") {
         patch[MEMBER_FIELDS.cancelAtPeriodEnd] = "false";
         patch[MEMBER_FIELDS.cancellationEffectiveAt] = "";
+        // Resume path (pause collection cleared) — drop any billing pause date.
+        patch[MEMBER_FIELDS.billingPauseUntil] = "";
         // NEVER claim Paid/Active/Service access from subscription lifecycle
         // events. Memberstack updates the subscription while PREPARING checkout
         // (before any payment), which fires subscription.updated with the old
@@ -133,6 +152,7 @@ export async function handleExpandedStripeEvent(event: Stripe.Event): Promise<{
           [MEMBER_FIELDS.cancellationEffectiveAt]: effectiveAt,
           [MEMBER_FIELDS.serviceAccessUntil]: effectiveAt,
           [MEMBER_FIELDS.cancelAtPeriodEnd]: "false",
+          [MEMBER_FIELDS.billingPauseUntil]: "",
         },
       });
       if (result.status === "STRIPE_MEMBER_NOT_FOUND") {

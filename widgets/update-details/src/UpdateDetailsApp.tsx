@@ -205,6 +205,18 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     currentPeriodEnd?: string | null;
     hasServiceAccess?: boolean;
     accessUntilLabel?: string;
+    billingPause?: {
+      paused?: boolean;
+      indefinite?: boolean;
+      resumesAt?: string | null;
+      behavior?: string | null;
+    } | null;
+    introPause?: {
+      state?: string;
+      isPaused?: boolean;
+      pauseUntil?: string | null;
+      missingDate?: boolean;
+    } | null;
   } | null>(null);
   const [needsRefresh, setNeedsRefresh] = useState(false);
   /** True when Airtable onboarding is not COMPLETE — use step API + resume. */
@@ -408,6 +420,32 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       hasServiceAccess: Boolean(b.hasServiceAccess),
       accessUntilLabel:
         typeof b.accessUntilLabel === "string" ? b.accessUntilLabel : undefined,
+      billingPause: (() => {
+        const bp =
+          b.billingPause && typeof b.billingPause === "object"
+            ? (b.billingPause as Record<string, unknown>)
+            : null;
+        if (!bp) return null;
+        return {
+          paused: Boolean(bp.paused),
+          indefinite: Boolean(bp.indefinite),
+          resumesAt: typeof bp.resumesAt === "string" ? bp.resumesAt : null,
+          behavior: typeof bp.behavior === "string" ? bp.behavior : null,
+        };
+      })(),
+      introPause: (() => {
+        const ip =
+          b.introPause && typeof b.introPause === "object"
+            ? (b.introPause as Record<string, unknown>)
+            : null;
+        if (!ip) return null;
+        return {
+          state: String(ip.state ?? ""),
+          isPaused: Boolean(ip.isPaused),
+          pauseUntil: typeof ip.pauseUntil === "string" ? ip.pauseUntil : null,
+          missingDate: Boolean(ip.missingDate),
+        };
+      })(),
     });
   };
 
@@ -729,6 +767,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     if (ui === "payment_problem") {
       return { showBanner: true, kind: "payment_problem" as const, endsOn };
     }
+    if (ui === "paused" || sub === "paused") {
+      return { showBanner: true, kind: "paused" as const, endsOn };
+    }
     if (ui === "incomplete_onboarding") {
       return { showBanner: true, kind: "other" as const, endsOn };
     }
@@ -943,6 +984,26 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               <button
                 type="button"
                 className="wlth-btn-secondary"
+                onClick={() => void openPortal()}
+              >
+                Manage billing
+              </button>
+            </div>
+          </>
+        ) : membershipDisplay.kind === "paused" ? (
+          <>
+            <h3>Your membership is paused</h3>
+            <p className="wlth-muted" style={{ marginBottom: 12 }}>
+              {billing.billingPause?.indefinite
+                ? "Your membership is paused indefinitely. You can resume it from Manage billing whenever you're ready."
+                : billing.billingPause?.resumesAt
+                  ? `Your membership will resume automatically on ${billing.billingPause.resumesAt}.`
+                  : "Your membership is paused. You can resume it from Manage billing."}
+            </p>
+            <div className="wlth-actions">
+              <button
+                type="button"
+                className="wlth-btn-primary"
                 onClick={() => void openPortal()}
               >
                 Manage billing
@@ -2882,6 +2943,15 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               </>
             ) : membershipDisplay.kind === "expired" ? (
               <>Membership ended</>
+            ) : membershipDisplay.kind === "paused" ? (
+              <>
+                Membership paused
+                {billing.billingPause?.indefinite
+                  ? " indefinitely"
+                  : billing.billingPause?.resumesAt
+                    ? ` — resumes on ${billing.billingPause.resumesAt}`
+                    : ""}
+              </>
             ) : membershipDisplay.kind === "none" &&
               (billing.uiState === "active" ||
                 ((billing.membership || "").toLowerCase() === "active" &&
@@ -2902,6 +2972,16 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   : ""}
               </>
             )}
+          </p>
+        )}
+
+        {billing?.introPause?.isPaused && (
+          <p className="wlth-muted" style={{ marginTop: 4 }}>
+            Introductions paused
+            {billing.introPause.pauseUntil
+              ? ` until ${billing.introPause.pauseUntil}`
+              : " until further notice"}
+            .
           </p>
         )}
 

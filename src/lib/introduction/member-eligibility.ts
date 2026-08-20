@@ -1,5 +1,6 @@
 import { normalizeCityKey } from "@/lib/ops/city-normalize";
 import { evaluateServiceAccess } from "./service-access";
+import { resolveIntroPauseState } from "./pause-state";
 import { haversineDistanceKm } from "./geo-cache";
 import {
   isMemberRecent,
@@ -37,6 +38,8 @@ export interface MemberEligibilityInput {
   membership: string | null | undefined;
   payment: string | null | undefined;
   serviceAccessUntil: string | null | undefined;
+  /** Airtable "Stripe subscription status" — "paused" blocks access. */
+  stripeSubscriptionStatus?: string | null | undefined;
   recurringIntroStatus: string | null | undefined;
   recurringPauseUntil: string | null | undefined;
   city: string | null | undefined;
@@ -60,12 +63,6 @@ export function memberKey(
   return `em:${normalizeEmailKey(email)}`;
 }
 
-function parsePauseUntil(value: string | null | undefined): Date | null {
-  if (value == null) return null;
-  const date = new Date(String(value).trim());
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
 export interface MemberEligibilityOptions {
   cycleDate: Date;
   /** Normalized city the run is scoped to; null skips the city check. */
@@ -85,21 +82,24 @@ export function checkMemberEligibility(
     member.membership ?? "",
     member.payment ?? "",
     member.serviceAccessUntil,
-    options.cycleDate
+    options.cycleDate,
+    undefined,
+    { stripeSubscriptionStatus: member.stripeSubscriptionStatus }
   );
   if (!access.accessible) {
     return { eligible: false, reason: "no_service_access" };
   }
 
-  const status = (member.recurringIntroStatus ?? "").trim();
-  if (status === "Excluded") {
+  const pause = resolveIntroPauseState(
+    member.recurringIntroStatus,
+    member.recurringPauseUntil,
+    options.cycleDate
+  );
+  if (pause.state === "excluded") {
     return { eligible: false, reason: "excluded" };
   }
-  if (status === "Paused") {
-    const pauseUntil = parsePauseUntil(member.recurringPauseUntil);
-    if (!pauseUntil || options.cycleDate.getTime() < pauseUntil.getTime()) {
-      return { eligible: false, reason: "paused" };
-    }
+  if (pause.isPaused) {
+    return { eligible: false, reason: "paused" };
   }
 
   if (options.runCity != null) {

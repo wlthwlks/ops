@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
       ? `IS_SAME(CREATED_TIME(), "${startDate}", "day")`
       : `AND(IS_AFTER(CREATED_TIME(), DATEADD("${startDate}", -1, "days")), IS_BEFORE(CREATED_TIME(), DATEADD("${endDate}", 1, "days")))`;
 
-  const formula = `AND({Membership} = "Active", {Payment} = "Paid", ${dateFilter})`;
+  const formula = `AND({Membership} = "Active", {Payment} = "Paid", NOT({Recurring intro status} = "Paused"), NOT({Stripe subscription status} = "paused"), ${dateFilter})`;
 
   const records = await airtable.listRecords("MEMBERS", {
     filterByFormula: formula,

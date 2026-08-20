@@ -36,6 +36,7 @@ import { getMemberstackPlanIdForStripePrice } from "@/lib/billing/catalog";
 import { FormsError } from "@/lib/forms/errors";
 import { isInProgressOnboarding } from "@/lib/forms/onboarding/onboarding-status";
 import { notifySignupPaidMemberOnSlack } from "@/lib/forms/billing/slack-paid-notify";
+import { introPauseClearPatch } from "@/lib/introduction/pause-state";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -893,6 +894,16 @@ export async function confirmCheckoutForMember(input: {
   // verifiedPaid is required to reach here — safe to clear stale cancel + set access.
   patch[MEMBER_FIELDS.cancelAtPeriodEnd] = false;
   patch[MEMBER_FIELDS.cancellationEffectiveAt] = "";
+  // A fresh successful payment means they are active again — resume intros
+  // (clears "Paused"; never touches "Excluded").
+  Object.assign(
+    patch,
+    introPauseClearPatch({
+      recurringIntroStatus: String(
+        existingRows[0]?.fields[MEMBER_FIELDS.recurringIntroStatus] ?? ""
+      ),
+    })
+  );
   if (paidThrough) {
     patch[MEMBER_FIELDS.serviceAccessUntil] = paidThrough.toISOString().slice(0, 10);
   }

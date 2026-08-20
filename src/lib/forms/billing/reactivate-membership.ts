@@ -20,6 +20,7 @@ import {
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 import { FormsError } from "@/lib/forms/errors";
 import { formatPaidPlansText } from "@/lib/billing/service-access-sync";
+import { introPauseClearPatch } from "@/lib/introduction/pause-state";
 
 export type ReactivateResult = {
   success: boolean;
@@ -287,6 +288,18 @@ async function reverseScheduledCancellation(
   return sub;
 }
 
+/**
+ * Reactivating billing also resumes introductions: clear a "Paused" intro
+ * state (never "Excluded"). Runs on all successful reactivation paths.
+ * Invoice-renewal webhooks do NOT use this — a mid-period renewal must not
+ * override an ops-set intro pause.
+ */
+function introPauseClearFor(fields: Record<string, unknown>): Record<string, unknown> {
+  return introPauseClearPatch({
+    recurringIntroStatus: fieldStr(fields, MEMBER_FIELDS.recurringIntroStatus),
+  });
+}
+
 async function syncReactivateBilling(input: {
   memberstackId: string;
   stripeCustomerId: string;
@@ -424,6 +437,29 @@ export async function reactivateMembershipForMember(input: {
     stripeCustomerId,
   });
 
+  // Stripe pause collection (indefinite or scheduled). Never create a second
+  // subscription for a paused one — the resume control lives in Stripe /
+  // Manage billing. Report clearly instead of charging.
+  const pausedSub = subsList.find((s) => s.status === "paused");
+  if (!fullRefunded && pausedSub) {
+    const pauseCollection = (pausedSub.pause_collection || null) as
+      | { resumes_at?: number | null }
+      | null;
+    const resumesAt =
+      pauseCollection && typeof pauseCollection.resumes_at === "number"
+        ? new Date(pauseCollection.resumes_at * 1000).toISOString().slice(0, 10)
+        : null;
+    return failResult({
+      status: "billing_paused",
+      reason: resumesAt
+        ? `Your membership is paused and will resume automatically on ${resumesAt}.`
+        : "Your membership is paused indefinitely. Resume it from Manage billing to continue.",
+      requiresPaymentMethod: false,
+      subscriptionId: pausedSub.id,
+      subscriptionStatus: pausedSub.status,
+    });
+  }
+
   const live = subsList.find(
     (s) =>
       (s.status === "active" || s.status === "trialing") && !isScheduledCancel(s)
@@ -444,6 +480,7 @@ export async function reactivateMembershipForMember(input: {
         ["Paid Plans (price ids)"]: formatPaidPlansText([subPrice, plan]),
         [MEMBER_FIELDS.cancelAtPeriodEnd]: false,
         [MEMBER_FIELDS.cancellationEffectiveAt]: "",
+        ...introPauseClearFor(fields),
         ...(next ? { [MEMBER_FIELDS.serviceAccessUntil]: next } : {}),
       },
     });
@@ -480,6 +517,7 @@ export async function reactivateMembershipForMember(input: {
         ["Paid Plans (price ids)"]: formatPaidPlansText([subPrice]),
         [MEMBER_FIELDS.cancelAtPeriodEnd]: false,
         [MEMBER_FIELDS.cancellationEffectiveAt]: "",
+        ...introPauseClearFor(fields),
         ...(next ? { [MEMBER_FIELDS.serviceAccessUntil]: next } : {}),
       },
     });
@@ -593,6 +631,7 @@ export async function reactivateMembershipForMember(input: {
       [MEMBER_FIELDS.memberstackPlanId]: plan || "",
       ["Paid Plans (price ids)"]: formatPaidPlansText([subPrice, plan]),
       [MEMBER_FIELDS.cancelAtPeriodEnd]: false,
+      ...introPauseClearFor(fields),
       ...(next ? { [MEMBER_FIELDS.serviceAccessUntil]: next } : {}),
     },
   });

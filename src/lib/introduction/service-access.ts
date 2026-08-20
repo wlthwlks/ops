@@ -19,13 +19,23 @@ export type ServiceAccessReason =
   | "paid_through_expired"
   | "missing_paid_through"
   | "invalid_paid_through"
-  | "legacy_active_paid_fallback";
+  | "legacy_active_paid_fallback"
+  | "billing_paused";
 
 export type ServiceAccessEvaluation = {
   accessible: boolean;
   policy: ServiceAccessPolicy;
   reason: ServiceAccessReason;
 };
+
+export interface ServiceAccessOptions {
+  /**
+   * Airtable "Stripe subscription status". When "paused" (Stripe pause
+   * collection), access is blocked under BOTH policies until the pause is
+   * resumed in Stripe. `Service access until` is intentionally left intact.
+   */
+  stripeSubscriptionStatus?: string | null;
+}
 
 /** Parse env flag; default OFF when missing/empty. */
 export function isServiceAccessPolicyV2Enabled(
@@ -62,8 +72,15 @@ export function evaluateServiceAccess(
   payment: string,
   serviceAccessUntil: string | null | undefined,
   referenceDate: Date,
-  policy: ServiceAccessPolicy = getActiveServiceAccessPolicy()
+  policy: ServiceAccessPolicy = getActiveServiceAccessPolicy(),
+  options?: ServiceAccessOptions
 ): ServiceAccessEvaluation {
+  const billingPaused =
+    (options?.stripeSubscriptionStatus ?? "").trim().toLowerCase() === "paused";
+  if (billingPaused) {
+    return { accessible: false, policy, reason: "billing_paused" };
+  }
+
   const parsed = parseServiceAccessUntil(serviceAccessUntil);
 
   if (policy === "v2") {
@@ -111,14 +128,16 @@ export function hasServiceAccess(
   payment: string,
   serviceAccessUntil: string | null,
   referenceDate: Date,
-  policy?: ServiceAccessPolicy
+  policy?: ServiceAccessPolicy,
+  options?: ServiceAccessOptions
 ): boolean {
   return evaluateServiceAccess(
     membership,
     payment,
     serviceAccessUntil,
     referenceDate,
-    policy ?? getActiveServiceAccessPolicy()
+    policy ?? getActiveServiceAccessPolicy(),
+    options
   ).accessible;
 }
 
@@ -136,14 +155,16 @@ export function checkServiceAccess(
   payment: string,
   serviceAccessUntil: string | null,
   referenceDate: Date,
-  policy?: ServiceAccessPolicy
+  policy?: ServiceAccessPolicy,
+  options?: ServiceAccessOptions
 ): ServiceAccessResult {
   const ev = evaluateServiceAccess(
     membership,
     payment,
     serviceAccessUntil,
     referenceDate,
-    policy ?? getActiveServiceAccessPolicy()
+    policy ?? getActiveServiceAccessPolicy(),
+    options
   );
   if (ev.accessible) {
     return { accessible: true, policy: ev.policy, reason: ev.reason };
@@ -155,7 +176,9 @@ export function checkServiceAccess(
         ? "Service access until is invalid"
         : ev.reason === "missing_paid_through"
           ? "Not paid or inactive, and no service access extension"
-          : "No verified service access";
+          : ev.reason === "billing_paused"
+            ? "Membership is paused"
+            : "No verified service access";
   return {
     accessible: false,
     policy: ev.policy,

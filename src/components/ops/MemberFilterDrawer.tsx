@@ -30,6 +30,9 @@ export type MemberFilterState = {
   informationalOnly?: boolean;
   stripeConflict?: boolean;
   duplicateStripe?: boolean;
+  paused?: boolean;
+  pauseExpired?: boolean;
+  billingPaused?: boolean;
   missingStripeId?: boolean;
   missingSlack?: boolean;
   slackIdentityUnresolved?: boolean;
@@ -200,6 +203,24 @@ export function MemberFilterDrawer(props: {
           onChange={(e) => set("duplicateStripe", e.target.checked || undefined)}
         >
           Duplicate Stripe assignment
+        </Checkbox>
+        <Checkbox
+          checked={Boolean(draft.billingPaused)}
+          onChange={(e) => set("billingPaused", e.target.checked || undefined)}
+        >
+          Billing paused (Stripe)
+        </Checkbox>
+        <Checkbox
+          checked={Boolean(draft.paused)}
+          onChange={(e) => set("paused", e.target.checked || undefined)}
+        >
+          Intros paused
+        </Checkbox>
+        <Checkbox
+          checked={Boolean(draft.pauseExpired)}
+          onChange={(e) => set("pauseExpired", e.target.checked || undefined)}
+        >
+          Pause date passed
         </Checkbox>
       </Space>
 

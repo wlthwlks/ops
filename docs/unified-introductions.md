@@ -211,6 +211,43 @@ previously imported Airtable match-group history via
 4. Data changes are additive — no destructive migration exists, so no data
    rollback is required.
 
+## 9b. Pause management
+
+Two independent pause concepts exist and both block introductions:
+
+**Intro pause** (Airtable `Recurring intro status` = `Paused` +
+`Recurring pause until`; shared logic in `src/lib/introduction/pause-state.ts`):
+
+- Managed from the ops dashboard: Member Directory → open a member → the
+  Introductions section has Pause (optional resume date; blank = indefinite)
+  and Resume buttons (`POST /api/ops-dashboard/members/pause`, live-mode
+  admin only).
+- `Paused` blocks introductions until the resume date (fail-closed when the
+  date is missing). The nightly `/api/cron/intro-pause-expiry` cron
+  (env-gated: `PAUSE_EXPIRY_CRON_ENABLED=true`) auto-switches expired pauses
+  back to `Active`; missing-date rows are never auto-resumed and are flagged
+  in the ops directory (`PAUSED_WITH_MISSING_DATE`).
+- Billing reactivation (Reactivate button / confirm-checkout) clears an intro
+  pause automatically; `Excluded` is never touched. `invoice.paid` renewals
+  do NOT clear an ops-set pause.
+
+**Billing pause** (Stripe pause collection, controlled from the Stripe
+dashboard):
+
+- `customer.subscription.updated/paused/resumed` webhooks sync
+  `Stripe subscription status = paused` and `Billing pause until`
+  (blank = indefinite) to Airtable.
+- Paused subscriptions have no service access under both policies
+  (`billing_paused` in `service-access.ts`), so they are excluded from
+  introductions until Stripe resumes them. `Service access until` is
+  intentionally left intact so remaining paid period applies on resume.
+- The Reactivate API reports `billing_paused` (resume date or indefinitely)
+  instead of creating a second subscription.
+- Ops visibility: `STRIPE_SUBSCRIPTION_PAUSED` issue, `billingPaused` /
+  `paused` / `pauseExpired` filters and quick views in the member directory.
+- When pausing in Stripe, use pause-collection behaviour `void`; leave the
+  resume date blank for an indefinite pause.
+
 ## 10. Tests run and results
 
 `npm test` (vitest, PGlite): **1090+ tests pass** including, for the engine:

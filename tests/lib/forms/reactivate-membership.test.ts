@@ -198,6 +198,103 @@ describe("reactivateMembershipForMember", () => {
     expect(subscriptionsCreate).not.toHaveBeenCalled();
   });
 
+  it("paused subscription (scheduled pause): reports billing_paused, never creates/charges", async () => {
+    const future = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 14;
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_paused",
+          status: "paused",
+          cancel_at_period_end: false,
+          pause_collection: { behavior: "void", resumes_at: future },
+          items: membershipLine("price_legacy", future),
+        },
+      ],
+    });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe("billing_paused");
+    expect(result.charged).toBe(false);
+    expect(subscriptionsCreate).not.toHaveBeenCalled();
+    expect(subscriptionsUpdate).not.toHaveBeenCalled();
+    expect(applyTrustedPaymentByMemberstackId).not.toHaveBeenCalled();
+    expect(result.message).toContain("resume automatically");
+  });
+
+  it("paused subscription (indefinite pause): reports billing_paused", async () => {
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_paused_indef",
+          status: "paused",
+          cancel_at_period_end: false,
+          pause_collection: { behavior: "void", resumes_at: null },
+          items: membershipLine("price_legacy"),
+        },
+      ],
+    });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe("billing_paused");
+    expect(result.message).toContain("indefinitely");
+    expect(subscriptionsCreate).not.toHaveBeenCalled();
+  });
+
+  it("successful reactivation clears an intro pause (never Excluded)", async () => {
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_live",
+          status: "active",
+          cancel_at_period_end: false,
+          items: membershipLine("price_legacy"),
+        },
+      ],
+    });
+    findMemberByMemberstackId.mockResolvedValue([
+      {
+        id: "rec1",
+        fields: {
+          [MEMBER_FIELDS.stripeCustomerId]: "cus_test",
+          [MEMBER_FIELDS.memberstackId]: "mem_1",
+          [MEMBER_FIELDS.recurringIntroStatus]: "Paused",
+          [MEMBER_FIELDS.recurringPauseUntil]: "2027-01-01",
+        },
+      },
+    ]);
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.success).toBe(true);
+    expect(result.status).toBe("already_active");
+    const patch = applyTrustedPaymentByMemberstackId.mock.calls[0][0]
+      .patch as Record<string, unknown>;
+    expect(patch[MEMBER_FIELDS.recurringIntroStatus]).toBe("Active");
+    expect(patch[MEMBER_FIELDS.recurringPauseUntil]).toBe("");
+
+    // Excluded members are never auto-resumed by reactivation.
+    findMemberByMemberstackId.mockResolvedValue([
+      {
+        id: "rec1",
+        fields: {
+          [MEMBER_FIELDS.stripeCustomerId]: "cus_test",
+          [MEMBER_FIELDS.memberstackId]: "mem_1",
+          [MEMBER_FIELDS.recurringIntroStatus]: "Excluded",
+        },
+      },
+    ]);
+    applyTrustedPaymentByMemberstackId.mockClear();
+    await reactivateMembershipForMember({ memberstackId: "mem_1" });
+    const excludedPatch = applyTrustedPaymentByMemberstackId.mock.calls[0][0]
+      .patch as Record<string, unknown>;
+    expect(excludedPatch[MEMBER_FIELDS.recurringIntroStatus]).toBeUndefined();
+    expect(excludedPatch[MEMBER_FIELDS.recurringPauseUntil]).toBeUndefined();
+  });
+
   it("active old-price member stays on the old price (never migrated)", async () => {
     subscriptionsList.mockResolvedValue({
       data: [

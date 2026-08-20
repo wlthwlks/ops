@@ -10,6 +10,7 @@ import { createSlackClient } from "@/lib/integrations/slack";
 import {
   type ChannelMembershipState,
   type IntegrationHealth,
+  type IntroPauseStateRow,
   type MemberHealthRow,
   type MemberHealthScanResult,
   type MemberHealthSummary,
@@ -21,6 +22,7 @@ import {
 } from "@/lib/ops/member-issue-classifier";
 import { isValidEmail } from "@/lib/billing/reconcile-stripe-customers";
 import { getIntroductionsMode } from "@/lib/introduction/runtime-mode";
+import { resolveIntroPauseState } from "@/lib/introduction/pause-state";
 import { STRIPE_CUSTOMER_ID_FIELD } from "@/lib/billing/service-access-sync";
 import {
   CITIES_TABLE,
@@ -459,6 +461,25 @@ export async function scanMemberHealth(
     const stripeCustomerId = fieldStr(r.fields, MEMBER_FIELDS.stripeCustomerId);
     const dateJoined = fieldStr(r.fields, MEMBER_FIELDS.dateJoined);
     const cancellationDate = fieldStr(r.fields, MEMBER_FIELDS.cancellationDate);
+    const recurringIntroStatus = fieldStr(
+      r.fields,
+      MEMBER_FIELDS.recurringIntroStatus
+    );
+    const recurringPauseUntil = fieldStr(r.fields, MEMBER_FIELDS.recurringPauseUntil);
+    const stripeSubscriptionStatus = fieldStr(
+      r.fields,
+      MEMBER_FIELDS.stripeSubscriptionStatus
+    );
+    const billingPauseUntil = fieldStr(r.fields, MEMBER_FIELDS.billingPauseUntil);
+    const introPauseResolved = resolveIntroPauseState(
+      recurringIntroStatus,
+      recurringPauseUntil || null,
+      referenceDate
+    );
+    const introPauseState: IntroPauseStateRow =
+      introPauseResolved.state === "paused" && !introPauseResolved.isPaused
+        ? "paused_expired"
+        : introPauseResolved.state;
 
     const cityResolved = resolveMemberCityChannel({
       memberFields: r.fields,
@@ -554,6 +575,11 @@ export async function scanMemberHealth(
         stripeCustomerId,
         stripeCustomerEmail: "",
         latestQualifyingPaidThrough: "",
+        recurringIntroStatus,
+        recurringPauseUntil,
+        introPauseState,
+        stripeSubscriptionStatus,
+        billingPauseUntil,
         activeSlackUserId: identity.user?.id || "",
         activeSlackEmail: identity.user?.email || "",
         activeSlackDisplayName: identity.user
@@ -582,6 +608,10 @@ export async function scanMemberHealth(
         stripeIdAirtableCount: stripeCustomerId.startsWith("cus_")
           ? stripeIdCounts.get(stripeCustomerId) || 1
           : 0,
+        recurringIntroStatus,
+        recurringPauseUntil,
+        stripeSubscriptionStatus,
+        billingPauseUntil,
         slackIdentityState: identity.state,
         cityChannelMembership,
         allMembersChannelMembership,
@@ -741,6 +771,12 @@ export type MemberFilterQuery = {
   duplicateStripe?: boolean;
   actionableOnly?: boolean;
   informationalOnly?: boolean;
+  /** Intro pause: "Recurring intro status" is Paused (incl. expired date). */
+  paused?: boolean;
+  /** Intro pause date has passed but status is still Paused. */
+  pauseExpired?: boolean;
+  /** Stripe subscription status is "paused" (pause collection). */
+  billingPaused?: boolean;
   accessEndingDays?: number;
   dateJoinedFrom?: string;
   dateJoinedTo?: string;
@@ -833,6 +869,19 @@ export function filterMembers(
   if (query.duplicateStripe) {
     list = list.filter((m) =>
       m.issues.some((i) => i.code === "STRIPE_CUSTOMER_ASSIGNED_TO_MULTIPLE_AIRTABLE_RECORDS")
+    );
+  }
+  if (query.paused) {
+    list = list.filter(
+      (m) => m.introPauseState === "paused" || m.introPauseState === "paused_expired"
+    );
+  }
+  if (query.pauseExpired) {
+    list = list.filter((m) => m.introPauseState === "paused_expired");
+  }
+  if (query.billingPaused) {
+    list = list.filter(
+      (m) => m.stripeSubscriptionStatus.trim().toLowerCase() === "paused"
     );
   }
   if (query.city) {
