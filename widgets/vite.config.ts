@@ -1,5 +1,7 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import prefixwrap from "postcss-prefixwrap";
 import path from "path";
 import fs from "fs";
 import {
@@ -66,9 +68,17 @@ function emitLottieAnimations(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [inlineLottieAssets(), react(), emitLottieAnimations()],
+  plugins: [inlineLottieAssets(), tailwindcss(), react(), emitLottieAnimations()],
   publicDir: false,
   assetsInclude: ["**/*.lottie"],
+  css:
+    widget === "getting-started"
+      ? {
+          postcss: {
+            plugins: [prefixwrap("#wlth-getting-started-root")],
+          },
+        }
+      : undefined,
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
   },

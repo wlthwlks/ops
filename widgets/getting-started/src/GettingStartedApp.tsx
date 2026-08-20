@@ -4,17 +4,15 @@ import {
   tryResolveSessionAccessToken,
 } from "../../shared/memberstack-auth";
 import { GsHero } from "./components/GsHero";
-import { MembershipPillars } from "./components/MembershipPillars";
 import { MonthlyRhythm } from "./components/MonthlyRhythm";
-import { CommunitySection } from "./components/CommunitySection";
+import { MembershipPillars } from "./components/MembershipPillars";
 import { MembershipTips } from "./components/MembershipTips";
-import { MemberDirectory } from "./components/MemberDirectory"; // Temporarily hidden
+import { CommunityGuidelines } from "./components/CommunityGuidelines";
+import { FaqSection } from "./components/FaqSection";
 import { ClosingCta } from "./components/ClosingCta";
 import { SiteFooter } from "./components/SiteFooter";
 
 type Props = {
-  /** Optional Member Directory CTA URL from data-directory-url — Temporarily hidden */
-  // directoryUrl?: string;
   /** When true, skip Memberstack gate (for local preview only). */
   allowAnonymous?: boolean;
 };
@@ -50,18 +48,27 @@ export function GettingStartedApp(props: Props) {
 
   if (gate === "loading") {
     return (
-      <div className="gs-gate">
-        <p className="gs-kicker">WLTH WLKS</p>
-        <p>Loading your membership…</p>
+      <div className="flex min-h-dvh flex-col items-center justify-center gap-4 px-5 text-center">
+        <p className="text-[11px] font-semibold uppercase tracking-brand text-primary">
+          WLTH WLKS
+        </p>
+        <p className="text-[15px] font-light text-muted-foreground">
+          Loading your membership…
+        </p>
       </div>
     );
   }
 
   if (gate === "logged_out") {
     return (
-      <div className="gs-gate">
-        <h2>Members only</h2>
-        <p>
+      <div className="flex min-h-dvh flex-col items-center justify-center gap-4 px-5 text-center">
+        <p className="text-[11px] font-semibold uppercase tracking-brand text-primary">
+          WLTH WLKS
+        </p>
+        <h2 className="text-2xl font-bold uppercase tracking-tight text-foreground">
+          Members only
+        </h2>
+        <p className="max-w-md text-[15px] font-light leading-relaxed text-muted-foreground">
           Log in with your WLTH WLKS Memberstack account to view Getting Started and make
           the most of your membership.
         </p>
@@ -71,22 +78,29 @@ export function GettingStartedApp(props: Props) {
 
   if (gate === "error") {
     return (
-      <div className="gs-gate">
-        <h2>Something went wrong</h2>
-        <p>{error || "Please refresh and try again."}</p>
+      <div className="flex min-h-dvh flex-col items-center justify-center gap-4 px-5 text-center">
+        <p className="text-[11px] font-semibold uppercase tracking-brand text-primary">
+          WLTH WLKS
+        </p>
+        <h2 className="text-2xl font-bold uppercase tracking-tight text-foreground">
+          Something went wrong
+        </h2>
+        <p className="max-w-md text-[15px] font-light leading-relaxed text-muted-foreground">
+          {error || "Please refresh and try again."}
+        </p>
       </div>
     );
   }
 
   return (
-    <main className="gs-main">
+    <main className="min-h-dvh overflow-x-hidden">
       <GsHero />
-      <div className="gs-stack">
-        <MembershipPillars />
+      <div className="flex flex-col gap-20 py-20 sm:gap-28 sm:py-28">
         <MonthlyRhythm />
-        <CommunitySection />
+        <MembershipPillars />
         <MembershipTips />
-        {/* <MemberDirectory directoryUrl={props.directoryUrl} /> Temporarily hidden */}
+        <CommunityGuidelines />
+        <FaqSection />
         <ClosingCta />
       </div>
       <SiteFooter />
