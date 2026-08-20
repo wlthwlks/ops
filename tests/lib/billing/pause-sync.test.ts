@@ -8,13 +8,17 @@ import {
 } from "@/lib/billing/service-access-sync";
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 
-const recordIntegrationError = vi.fn(async (_input: unknown) => undefined);
+const recordIntegrationError = vi.fn(async () => undefined);
 
 vi.mock("@/lib/forms/webhooks/store", () => ({
-  recordIntegrationError: (input: unknown) => recordIntegrationError(input),
+  recordIntegrationError: (input: unknown) => {
+    void input;
+    return recordIntegrationError();
+  },
 }));
 
 import {
+  classifyPauseTransition,
   pauseResumeDateFromSubscription,
   subscriptionPeriodEndDate,
   syncSubscriptionPausedToAirtable,
@@ -85,6 +89,75 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe("classifyPauseTransition", () => {
+  it("detects pause collection even when Stripe status stays active", () => {
+    const result = classifyPauseTransition({
+      status: "active",
+      pauseCollection: { behavior: "keep_as_draft", resumes_at: null },
+      prevPauseCollection: undefined,
+      prevStatus: undefined,
+      eventType: "customer.subscription.updated",
+    });
+    expect(result).toBe("paused");
+  });
+
+  it("detects schedule-based pauses via status paused", () => {
+    const result = classifyPauseTransition({
+      status: "paused",
+      pauseCollection: null,
+      prevPauseCollection: undefined,
+      prevStatus: "active",
+      eventType: "customer.subscription.updated",
+    });
+    expect(result).toBe("paused");
+  });
+
+  it("detects resume when pause_collection is cleared (previous_attributes)", () => {
+    const result = classifyPauseTransition({
+      status: "active",
+      pauseCollection: null,
+      prevPauseCollection: { behavior: "void", resumes_at: null },
+      prevStatus: undefined,
+      eventType: "customer.subscription.updated",
+    });
+    expect(result).toBe("resumed");
+  });
+
+  it("detects resume via the dedicated resumed event", () => {
+    const result = classifyPauseTransition({
+      status: "active",
+      pauseCollection: null,
+      prevPauseCollection: undefined,
+      prevStatus: undefined,
+      eventType: "customer.subscription.resumed",
+    });
+    expect(result).toBe("resumed");
+  });
+
+  it("detects resume via previous status paused", () => {
+    const result = classifyPauseTransition({
+      status: "active",
+      pauseCollection: null,
+      prevPauseCollection: undefined,
+      prevStatus: "paused",
+      eventType: "customer.subscription.updated",
+    });
+    expect(result).toBe("resumed");
+  });
+
+  it("returns null for ordinary active updates without pause signals", () => {
+    expect(
+      classifyPauseTransition({
+        status: "active",
+        pauseCollection: null,
+        prevPauseCollection: undefined,
+        prevStatus: undefined,
+        eventType: "customer.subscription.updated",
+      })
+    ).toBeNull();
+  });
+});
+
 describe("pauseResumeDateFromSubscription", () => {
   it("returns the resume date or null when indefinite", () => {
     const future = Math.floor(Date.parse("2026-09-15T00:00:00Z") / 1000);
@@ -129,6 +202,22 @@ describe("syncSubscriptionPausedToAirtable", () => {
     expect(fields[BILLING_PAUSE_UNTIL] ?? "").toBe("");
     expect(fields[MEMBERSHIP_FIELD]).toBe("Paused");
     expect(fields[SERVICE_ACCESS_FIELD]).toBe(NOW.toISOString());
+  });
+
+  it("writes paused state when Stripe status stays active (pause collection)", async () => {
+    const airtable = mockAirtable([memberRecord()]);
+    const result = await syncSubscriptionPausedToAirtable({
+      airtable,
+      sub: pausedSub({ status: "active" }),
+      now: NOW,
+    });
+
+    expect(result.status).toBe("updated");
+    const updates = airtable.updateRecordsBatched.mock.calls[0][1] as Array<{
+      fields: Record<string, unknown>;
+    }>;
+    expect(updates[0].fields[STRIPE_SUBSCRIPTION_STATUS_FIELD]).toBe("paused");
+    expect(updates[0].fields[MEMBERSHIP_FIELD]).toBe("Paused");
   });
 
   it("stores the resume date for scheduled pauses", async () => {

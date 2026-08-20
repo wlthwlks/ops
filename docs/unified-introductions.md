@@ -234,15 +234,19 @@ Two independent pause concepts exist and both block introductions:
 **Billing pause** (Stripe pause collection, controlled from the Stripe
 dashboard):
 
-- `customer.subscription.updated/paused/resumed` webhooks are handled in the
-  ALWAYS-ON path (independent of `NEW_STRIPE_WEBHOOKS_ENABLED` /
-  `MAKE_SHADOW_MODE`) via `src/lib/billing/pause-sync.ts`.
+- Stripe pause collection does NOT change the subscription status (it stays
+  `active`) — the pause is visible as `pause_collection` on the subscription.
+  `customer.subscription.updated` webhooks are handled in the ALWAYS-ON path
+  (independent of `NEW_STRIPE_WEBHOOKS_ENABLED` / `MAKE_SHADOW_MODE`) via
+  `src/lib/billing/pause-sync.ts`; the dedicated `paused`/`resumed` events are
+  not required.
 - On pause the member becomes inactive in Airtable immediately:
-  `Stripe subscription status` = "paused", `Billing pause until` = resume
-  date (blank = indefinite), `Service access until` = now, `Membership` =
-  "Paused". Payment stays "Paid" — pausing is not a payment failure.
-- On resume (`customer.subscription.resumed`, or `updated` with previous
-  status "paused"): status restored, `Billing pause until` cleared,
+  `Stripe subscription status` = "paused" (our marker column), `Billing pause
+  until` = resume date (blank = indefinite), `Service access until` = now,
+  `Membership` = "Paused". Payment stays "Paid" — pausing is not a payment
+  failure.
+- On resume (pause_collection cleared, status `paused → active`, or the
+  `resumed` event): status restored, `Billing pause until` cleared,
   `Membership` = "Active", and `Service access until` restored from the
   Stripe period end when it is still in the future. A period that lapsed
   during a long pause is left to the resume charge's `invoice.paid`.

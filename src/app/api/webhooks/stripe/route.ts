@@ -27,6 +27,7 @@ import { getFormFeatureFlags } from "@/lib/forms/feature-flags";
 import {
   syncSubscriptionPausedToAirtable,
   syncSubscriptionResumedToAirtable,
+  classifyPauseTransition,
 } from "@/lib/billing/pause-sync";
 
 export const runtime = "nodejs";
@@ -300,14 +301,25 @@ export async function POST(request: NextRequest) {
     try {
       const sub = event.data.object as Stripe.Subscription;
       const cus = getStripeCustomerId(sub.customer);
-      const prevStatus = (
-        event.data as { previous_attributes?: { status?: string } }
-      ).previous_attributes?.status;
+      const prev = (event.data as {
+        previous_attributes?: {
+          status?: string;
+          pause_collection?: unknown;
+        };
+      }).previous_attributes;
 
-      const isResumeTransition =
-        event.type === "customer.subscription.resumed" || prevStatus === "paused";
+      // Stripe pause collection does NOT change subscription status (it stays
+      // "active") — the pause lives in `pause_collection`. Dedicated
+      // paused/resumed events exist for schedule-based pauses (status changes).
+      const transition = classifyPauseTransition({
+        status: sub.status,
+        pauseCollection: sub.pause_collection,
+        prevPauseCollection: prev?.pause_collection,
+        prevStatus: prev?.status,
+        eventType: event.type,
+      });
 
-      if (cus && (sub.status === "paused" || isResumeTransition)) {
+      if (cus && transition) {
         const airtableToken = process.env.AIRTABLE_GET_DATA_TOKEN;
         const airtableBase = process.env.AIRTABLE_BASE_ID;
         if (!airtableToken || !airtableBase) {
@@ -319,7 +331,7 @@ export async function POST(request: NextRequest) {
         });
 
         const sync =
-          sub.status === "paused"
+          transition === "paused"
             ? await syncSubscriptionPausedToAirtable({ airtable, sub })
             : await syncSubscriptionResumedToAirtable({ airtable, sub });
 

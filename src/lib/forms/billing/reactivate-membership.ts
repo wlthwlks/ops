@@ -440,7 +440,11 @@ export async function reactivateMembershipForMember(input: {
   // Stripe pause collection (indefinite or scheduled). Never create a second
   // subscription for a paused one — the resume control lives in Stripe /
   // Manage billing. Report clearly instead of charging.
-  const pausedSub = subsList.find((s) => s.status === "paused");
+  // NOTE: pause collection does NOT change subscription status (it stays
+  // "active") — the pause is visible as `pause_collection` on the object.
+  const pausedSub = subsList.find(
+    (s) => s.status === "paused" || s.pause_collection != null
+  );
   if (!fullRefunded && pausedSub) {
     const pauseCollection = (pausedSub.pause_collection || null) as
       | { resumes_at?: number | null }

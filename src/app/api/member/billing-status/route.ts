@@ -70,14 +70,17 @@ function subscriptionToSnapshot(sub: Stripe.Subscription) {
     pauseCollection && typeof pauseCollection.resumes_at === "number"
       ? pauseCollection.resumes_at
       : null;
+  // Stripe pause collection does NOT change subscription status — the pause
+  // is only visible as pause_collection on the object.
+  const paused = sub.status === "paused" || pauseCollection != null;
   return {
     subscriptionStatus: sub.status,
     cancelAtPeriodEnd: isScheduledToCancel(sub),
     currentPeriodEnd: periodEndFromSub(sub),
     subscriptionId: sub.id,
     billingPause: {
-      paused: sub.status === "paused",
-      indefinite: sub.status === "paused" && !resumesAt,
+      paused,
+      indefinite: paused && !resumesAt,
       resumesAt: resumesAt
         ? new Date(resumesAt * 1000).toISOString().slice(0, 10)
         : null,
@@ -292,6 +295,12 @@ export async function GET(request: Request) {
       fieldStr(row.fields, MEMBER_FIELDS.stripeSubscriptionStatus) ||
       null;
 
+    // Stripe pause collection keeps the subscription status "active" — surface
+    // it as a pause for classification (and keep the real status in the payload).
+    const classifiedSubscriptionStatus = live.billingPause?.paused
+      ? "paused"
+      : stripeSubscriptionStatus;
+
     const accessUntilLabel = resolveAccessUntilLabel({
       serviceAccessUntil: profile.serviceAccessUntil,
       currentPeriodEnd: live.currentPeriodEnd,
@@ -303,7 +312,7 @@ export async function GET(request: Request) {
       payment: profile.payment,
       serviceAccessUntil: profile.serviceAccessUntil || accessUntilLabel,
       cancelAtPeriodEnd,
-      stripeSubscriptionStatus,
+      stripeSubscriptionStatus: classifiedSubscriptionStatus,
       hasPaymentMethod,
       currentPeriodEnd: live.currentPeriodEnd,
       cancellationEffectiveAt: cancelEffective || cancelDateLegacy,

@@ -4,7 +4,8 @@
  * Two modes:
  *
  * 1) Pause backfill (default)
- *    Lists every Stripe subscription with status "paused" and applies the same
+ *    Lists every Stripe subscription with pause_collection set (status stays
+ *    "active" for pause collection) or status "paused" and applies the same
  *    Airtable sync as the always-on webhook: Stripe subscription status =
  *    "paused", Billing pause until = resume date (blank = indefinite),
  *    Service access until = now, Membership = "Paused".
@@ -71,12 +72,18 @@ async function main() {
 
   if (!reconcileResumes) {
     // ── Mode 1: Stripe → Airtable pause backfill ──
+    // Pause collection does NOT change subscription status (it stays
+    // "active") — list active/paused subs and filter on pause_collection.
     const subs = [];
-    for await (const sub of stripe.subscriptions.list({
-      status: "paused",
-      limit: 100,
-    })) {
-      subs.push(sub);
+    for (const status of ["active", "paused"] as const) {
+      for await (const sub of stripe.subscriptions.list({
+        status,
+        limit: 100,
+      })) {
+        if (sub.pause_collection != null || sub.status === "paused") {
+          subs.push(sub);
+        }
+      }
     }
     console.log(
       `Found ${subs.length} paused Stripe subscription(s) (mode: ${apply ? "apply" : "dry-run"})`
@@ -123,7 +130,7 @@ async function main() {
     try {
       const subs = await stripe.subscriptions.list({ customer: cus, status: "all", limit: 10 });
       for (const sub of subs.data) {
-        if (sub.status === "paused") {
+        if (sub.status === "paused" || sub.pause_collection != null) {
           stillPaused = true;
           break;
         }

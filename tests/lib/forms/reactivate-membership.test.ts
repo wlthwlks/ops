@@ -244,6 +244,30 @@ describe("reactivateMembershipForMember", () => {
     expect(subscriptionsCreate).not.toHaveBeenCalled();
   });
 
+  it("pause collection with Stripe status still active: reports billing_paused", async () => {
+    const future = Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 14;
+    subscriptionsList.mockResolvedValue({
+      data: [
+        {
+          id: "sub_pause_collection",
+          status: "active",
+          cancel_at_period_end: false,
+          pause_collection: { behavior: "keep_as_draft", resumes_at: future },
+          items: membershipLine("price_legacy", future),
+        },
+      ],
+    });
+
+    const result = await reactivateMembershipForMember({ memberstackId: "mem_1" });
+
+    expect(result.success).toBe(false);
+    expect(result.status).toBe("billing_paused");
+    expect(result.message).toContain("resume automatically");
+    expect(subscriptionsCreate).not.toHaveBeenCalled();
+    expect(subscriptionsUpdate).not.toHaveBeenCalled();
+    expect(applyTrustedPaymentByMemberstackId).not.toHaveBeenCalled();
+  });
+
   it("successful reactivation clears an intro pause (never Excluded)", async () => {
     subscriptionsList.mockResolvedValue({
       data: [

@@ -62,6 +62,49 @@ export function pauseResumeDateFromSubscription(sub: Stripe.Subscription): strin
     : null;
 }
 
+export interface PauseTransitionInput {
+  /** Subscription status from the event payload. */
+  status: string | null | undefined;
+  /** Subscription pause_collection from the event payload. */
+  pauseCollection: unknown;
+  /** previous_attributes.pause_collection (only present when it changed). */
+  prevPauseCollection: unknown;
+  /** previous_attributes.status (only present when it changed). */
+  prevStatus: string | null | undefined;
+  /** Stripe event type. */
+  eventType: string;
+}
+
+/**
+ * Classify a subscription webhook event as a pause or resume transition.
+ *
+ * IMPORTANT: Stripe pause collection does NOT change the subscription status —
+ * it stays "active" and the pause is only visible as `pause_collection` on the
+ * subscription object (resumes_at null = indefinite). The dedicated
+ * customer.subscription.paused/resumed events belong to other flows (e.g.
+ * subscription schedules that DO set status "paused"), so we support both.
+ *
+ * Returns "paused", "resumed", or null (no pause transition — caller should
+ * fall through to normal handling).
+ */
+export function classifyPauseTransition(input: PauseTransitionInput): "paused" | "resumed" | null {
+  const hasPauseCollection = input.pauseCollection != null;
+  const hadPauseCollection = input.prevPauseCollection != null;
+  const statusLower = (input.status ?? "").trim().toLowerCase();
+
+  if (statusLower === "paused" || hasPauseCollection) return "paused";
+
+  if (
+    input.eventType === "customer.subscription.resumed" ||
+    hadPauseCollection ||
+    (input.prevStatus ?? "").trim().toLowerCase() === "paused"
+  ) {
+    return "resumed";
+  }
+
+  return null;
+}
+
 /** ISO date of the subscription period end, or null. */
 export function subscriptionPeriodEndDate(sub: Stripe.Subscription): string | null {
   const itemEnd = sub.items?.data?.[0]?.current_period_end;
