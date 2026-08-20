@@ -24,6 +24,10 @@ import {
 } from "@/lib/forms/webhooks/store";
 import { handleExpandedStripeEvent } from "@/lib/forms/webhooks/stripe-lifecycle";
 import { getFormFeatureFlags } from "@/lib/forms/feature-flags";
+import {
+  syncSubscriptionPausedToAirtable,
+  syncSubscriptionResumedToAirtable,
+} from "@/lib/billing/pause-sync";
 
 export const runtime = "nodejs";
 
@@ -282,6 +286,68 @@ export async function POST(request: NextRequest) {
       await updateWebhookEventStatus(stored.id, "FAILED");
       return NextResponse.json({ error: "Webhook processing failed" }, { status: 500 });
     }
+  }
+
+  // —— Always-on: Stripe pause collection (NOT gated by NEW_STRIPE_WEBHOOKS_ENABLED) ——
+  // Pausing is a native Stripe billing state: the member must become inactive
+  // in Airtable (status=paused, Membership=Paused, access-until zeroed) and be
+  // restored on resume — regardless of the forms webhook cutover flags.
+  if (
+    event.type === "customer.subscription.updated" ||
+    event.type === "customer.subscription.paused" ||
+    event.type === "customer.subscription.resumed"
+  ) {
+    try {
+      const sub = event.data.object as Stripe.Subscription;
+      const cus = getStripeCustomerId(sub.customer);
+      const prevStatus = (
+        event.data as { previous_attributes?: { status?: string } }
+      ).previous_attributes?.status;
+
+      const isResumeTransition =
+        event.type === "customer.subscription.resumed" || prevStatus === "paused";
+
+      if (cus && (sub.status === "paused" || isResumeTransition)) {
+        const airtableToken = process.env.AIRTABLE_GET_DATA_TOKEN;
+        const airtableBase = process.env.AIRTABLE_BASE_ID;
+        if (!airtableToken || !airtableBase) {
+          return NextResponse.json({ error: "Airtable not configured" }, { status: 500 });
+        }
+        const airtable = createAirtableClient({
+          apiKey: airtableToken,
+          baseId: airtableBase,
+        });
+
+        const sync =
+          sub.status === "paused"
+            ? await syncSubscriptionPausedToAirtable({ airtable, sub })
+            : await syncSubscriptionResumedToAirtable({ airtable, sub });
+
+        await updateWebhookEventStatus(stored.id, "SUCCEEDED", {
+          processedAt: new Date(),
+        }).catch(() => undefined);
+
+        return NextResponse.json({
+          received: true,
+          processed: true,
+          eventType: event.type,
+          status: sync.status,
+          stripeCustomerId: sync.stripeCustomerId,
+          airtableRecordsMatched: sync.airtableRecordsMatched,
+          airtableRecordsUpdated: sync.airtableRecordsUpdated,
+          duplicateAirtableRecords: sync.duplicateAirtableRecords,
+          reason: sync.reason,
+        });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(
+        JSON.stringify({ event: "stripe_pause_sync_failed", error: msg })
+      );
+      await updateWebhookEventStatus(stored.id, "FAILED");
+      return NextResponse.json({ error: "Pause sync failed" }, { status: 500 });
+    }
+    // Not a pause transition — fall through to the expanded handler.
   }
 
   // —— Expanded lifecycle (feature-flagged) ——

@@ -234,17 +234,26 @@ Two independent pause concepts exist and both block introductions:
 **Billing pause** (Stripe pause collection, controlled from the Stripe
 dashboard):
 
-- `customer.subscription.updated/paused/resumed` webhooks sync
-  `Stripe subscription status = paused` and `Billing pause until`
-  (blank = indefinite) to Airtable.
-- Paused subscriptions have no service access under both policies
-  (`billing_paused` in `service-access.ts`), so they are excluded from
-  introductions until Stripe resumes them. `Service access until` is
-  intentionally left intact so remaining paid period applies on resume.
+- `customer.subscription.updated/paused/resumed` webhooks are handled in the
+  ALWAYS-ON path (independent of `NEW_STRIPE_WEBHOOKS_ENABLED` /
+  `MAKE_SHADOW_MODE`) via `src/lib/billing/pause-sync.ts`.
+- On pause the member becomes inactive in Airtable immediately:
+  `Stripe subscription status` = "paused", `Billing pause until` = resume
+  date (blank = indefinite), `Service access until` = now, `Membership` =
+  "Paused". Payment stays "Paid" — pausing is not a payment failure.
+- On resume (`customer.subscription.resumed`, or `updated` with previous
+  status "paused"): status restored, `Billing pause until` cleared,
+  `Membership` = "Active", and `Service access until` restored from the
+  Stripe period end when it is still in the future. A period that lapsed
+  during a long pause is left to the resume charge's `invoice.paid`.
 - The Reactivate API reports `billing_paused` (resume date or indefinitely)
   instead of creating a second subscription.
 - Ops visibility: `STRIPE_SUBSCRIPTION_PAUSED` issue, `billingPaused` /
   `paused` / `pauseExpired` filters and quick views in the member directory.
+- Missed webhooks can be repaired with
+  `npm run billing:backfill-pauses` (Stripe→Airtable pause backfill) and
+  `npm run billing:backfill-pauses -- --reconcile-resumes` (detects members
+  whose subscription is no longer paused).
 - When pausing in Stripe, use pause-collection behaviour `void`; leave the
   resume date blank for an indefinite pause.
 
