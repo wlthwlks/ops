@@ -20,6 +20,7 @@ import {
 } from "@/lib/ops/member-health";
 import type { MemberHealthRow } from "@/lib/ops/member-health-types";
 import {
+  classifySlackScopes,
   detectSlackRemovalCapabilities,
   type SlackRemovalCapabilities,
 } from "@/lib/ops/slack-removal";
@@ -80,9 +81,9 @@ export type SlackCommunityCapabilities = SlackRemovalCapabilities & {
 export async function detectSlackCommunityCapabilities(): Promise<SlackCommunityCapabilities> {
   const removal = await detectSlackRemovalCapabilities();
   const scopes = removal.scopes;
+  const scopeCaps = classifySlackScopes(scopes);
 
-  const canInviteToChannels =
-    scopes.includes("groups:write") || scopes.includes("channels:manage");
+  const canInviteToChannels = scopeCaps.canInviteToChannels;
   const inviteToChannelsReason = canInviteToChannels
     ? ""
     : "Bot needs groups:write or channels:manage (and membership in private channels) to add people to private city channels.";

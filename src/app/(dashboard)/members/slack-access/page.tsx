@@ -792,7 +792,7 @@ function SlackAccessPageInner() {
                 </Typography.Text>
               ))}
               <Typography.Link
-                href="https://wlthwlks.slack.com/admin"
+                href="https://wlth-wlks.slack.com/admin"
                 target="_blank"
                 rel="noreferrer"
               >
@@ -939,7 +939,7 @@ function SlackAccessPageInner() {
                     Remove selected from Slack ({selectedRemoval.size})
                   </Button>
                   <Button
-                    href="https://wlthwlks.slack.com/admin"
+                    href="https://wlth-wlks.slack.com/admin"
                     target="_blank"
                     rel="noreferrer"
                   >

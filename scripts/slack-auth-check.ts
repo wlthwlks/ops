@@ -14,9 +14,9 @@ dotenv.config({ path: ".env.development.local" });
 
 const SLACK_API = "https://slack.com/api";
 
-async function slackGet(method: string, token: string, params: Record<string, string> = {}) {
+async function slackPost(method: string, token: string, params: Record<string, string> = {}) {
   const body = new URLSearchParams(params).toString();
-  const res = await fetch(`${SLACK_API}/${method}`, {
+  return fetch(`${SLACK_API}/${method}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -24,7 +24,6 @@ async function slackGet(method: string, token: string, params: Record<string, st
     },
     body,
   });
-  return res.json() as Promise<Record<string, unknown>>;
 }
 
 async function main() {
@@ -36,7 +35,8 @@ async function main() {
   console.log(`Token prefix: ${token.slice(0, 5)}…  length: ${token.length}`);
 
   // 1. auth.test — the definitive "is this token alive" check.
-  const auth = await slackGet("auth.test", token);
+  const authRes = await slackPost("auth.test", token);
+  const auth = (await authRes.json()) as Record<string, unknown>;
   if (!auth.ok) {
     console.error(`✗ auth.test failed: ${auth.error}`);
     if (auth.error === "account_inactive") {
@@ -53,20 +53,40 @@ async function main() {
   console.log(`  bot user:  ${auth.user} (${auth.user_id})`);
   console.log(`  url:       ${auth.url}`);
 
+  const scopesHeader = authRes.headers.get("x-oauth-scopes") || "";
+  const scopes = scopesHeader.split(",").map((s) => s.trim()).filter(Boolean);
+  console.log(`  scopes:    ${scopes.length > 0 ? scopes.join(", ") : "(none reported)"}`);
+  const communityScopes = [
+    "users:read",
+    "users:read.email",
+    "channels:read",
+    "groups:read",
+    "groups:write",
+    "channels:manage",
+  ];
+  const missing = communityScopes.filter((s) => !scopes.includes(s));
+  if (missing.length > 0) {
+    console.warn(`  ⚠ missing for community access operations: ${missing.join(", ")}`);
+    console.warn("    → api.slack.com/apps/A0B7861TNM9 → OAuth & Permissions → add them, then reinstall on wlth-wlks.slack.com");
+  } else {
+    console.log("  ✓ all scopes needed for community access operations are present");
+  }
+
   // 2. Optional scope check — users:read.email
   const email = process.argv[2];
   if (email) {
-    const lookup = await slackGet("users.lookupByEmail", token, { email });
-    if (lookup.ok) {
-      const u = lookup.user as { id: string; real_name?: string; name?: string };
+    const lookup = await slackPost("users.lookupByEmail", token, { email });
+    const lookupJson = (await lookup.json()) as Record<string, unknown>;
+    if (lookupJson.ok) {
+      const u = lookupJson.user as { id: string; real_name?: string; name?: string };
       console.log(`✓ users.lookupByEmail OK — ${email} → ${u.real_name || u.name} (${u.id})`);
-    } else if (lookup.error === "users_not_found") {
+    } else if (lookupJson.error === "users_not_found") {
       console.log(`✓ users.lookupByEmail scope OK — ${email} simply isn't in the workspace (expected for many members)`);
-    } else if (lookup.error === "missing_scope") {
+    } else if (lookupJson.error === "missing_scope") {
       console.error(`✗ Missing scope for users.lookupByEmail — add 'users:read.email' and reinstall.`);
       process.exit(1);
     } else {
-      console.error(`✗ users.lookupByEmail failed: ${lookup.error}`);
+      console.error(`✗ users.lookupByEmail failed: ${lookupJson.error}`);
       process.exit(1);
     }
   } else {

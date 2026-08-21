@@ -143,16 +143,22 @@ See `src/lib/introduction/` for shared helpers: reservations, history, service a
 
 ### Slack scopes required
 
+`SLACK_BOT_TOKEN` is the bot on the **customer community workspace `wlth-wlks.slack.com`** (`wlth_wlks_matcher`); it powers Slack Email linking, removal and invites. `SLACK_WW_BOT_TOKEN` is a separate bot on the **internal workspace `wlthwlks.slack.com`** (new-member notifications only — do not use it for community operations).
+
+Required scopes on the community bot (api.slack.com → app A0B7861TNM9):
+
 - `users:read` — list workspace users
 - `users:read.email` — resolve Slack user emails from Airtable
 - `groups:read` — read members of private city channels
-- `groups:write` / `channels:manage` — add members to private city channels (`conversations.invite`)
+- `groups:write` — add/remove members in private city channels (`conversations.invite` / `conversations.kick`)
+- `channels:manage` — add/remove members in the public #introductions channel
 - `channels:read` — read members of public channels
-- `channels:write` / `groups:write` — remove members from channels (`conversations.kick`)
 - `mpim:write`, `mpim:read` — open and write to group DMs
 - `chat:write` — post introduction messages
 - `app_mentions:read` — optional, for future reply handling
 - `admin.users:write` (via `SLACK_ADMIN_USER_TOKEN`, Enterprise Grid only) — workspace invite (`admin.users.invite`) and account deactivation (`admin.users.setInactive`)
+
+The community-wide channel is **#introductions** (renamed from all-wlth-wlks); `SLACK_ALL_MEMBERS_CHANNEL_ID` points to it. Verify scopes with `npx tsx scripts/slack-auth-check.ts`.
 
 ### Introductions runtime modes
 
@@ -248,7 +254,7 @@ SLACK_WORKSPACE_INVITE_URL=
 SLACK_JOIN_URL=                 # fallback invite URL
 SLACK_WORKSPACE_URL=            # for channel deep links
 SLACK_ALL_MEMBERS_CHANNEL_ID=
-SLACK_ALL_MEMBERS_CHANNEL_NAME=all-wlth-wlks
+SLACK_ALL_MEMBERS_CHANNEL_NAME=introductions  # community-wide channel (renamed from all-wlth-wlks)
 SLACK_OUTREACH_COOLDOWN_DAYS=7
 SLACK_ADMIN_USER_TOKEN=         # optional: Enterprise Grid admin token (admin.users:write)
 RESEND_API_KEY=

@@ -42,6 +42,29 @@ export type SlackRemovalCapabilities = {
   scopes: string[];
 };
 
+export type SlackScopeCapabilities = {
+  canKickFromChannels: boolean;
+  canInviteToChannels: boolean;
+  canReadChannels: boolean;
+};
+
+/**
+ * Pure mapping from bot OAuth scopes to what the community operations can do.
+ * Kept free of env access so it is unit-testable.
+ */
+export function classifySlackScopes(scopes: string[]): SlackScopeCapabilities {
+  return {
+    canKickFromChannels:
+      scopes.includes("channels:write") ||
+      scopes.includes("groups:write") ||
+      scopes.includes("channels:manage"),
+    canInviteToChannels:
+      scopes.includes("groups:write") || scopes.includes("channels:manage"),
+    canReadChannels:
+      scopes.includes("channels:read") || scopes.includes("groups:read"),
+  };
+}
+
 export async function detectSlackRemovalCapabilities(): Promise<SlackRemovalCapabilities> {
   const token = process.env.SLACK_BOT_TOKEN?.trim();
   if (!token) {
@@ -56,10 +79,7 @@ export async function detectSlackRemovalCapabilities(): Promise<SlackRemovalCapa
     const slack = createSlackClient({ botToken: token });
     const auth = await slack.authTest();
     const scopes = auth.scopes || [];
-    const canKick =
-      scopes.includes("channels:write") ||
-      scopes.includes("groups:write") ||
-      scopes.includes("channels:manage");
+    const canKick = classifySlackScopes(scopes).canKickFromChannels;
     // Deactivation needs a real admin token with admin.users:write (Enterprise Grid).
     let hasAdminRemove = false;
     let deactivateReason = "";
@@ -228,7 +248,7 @@ export async function buildRemovalQueue(): Promise<{
     }
     if (member.allMembersChannelMembership === "member") {
       currentChannels.push(
-        getAllMembersChannelConfig().name || "all-wlth-wlks"
+        getAllMembersChannelConfig().name || "introductions"
       );
     }
 
@@ -320,7 +340,7 @@ export async function buildRemovalPlan(
   }
   const allCfg = getAllMembersChannelConfig();
   if (member.allMembersChannelMembership === "member" && allCfg.id) {
-    channelsToRemove.push({ id: allCfg.id, name: allCfg.name || "all-wlth-wlks" });
+    channelsToRemove.push({ id: allCfg.id, name: allCfg.name || "introductions" });
   }
 
   return {
