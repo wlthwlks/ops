@@ -120,7 +120,7 @@ function SlackAccessPageInner() {
   const [linkRows, setLinkRows] = useState<LinkRow[]>([]);
   const [linkOptions, setLinkOptions] = useState<SlackFilterOptions>(EMPTY_OPTIONS);
   const [linkFilters, setLinkFilters] = useState<SlackFilterState>(EMPTY_FILTERS);
-  const [linkConfidence, setLinkConfidence] = useState<string>("all");
+  const [linkConfidence, setLinkConfidence] = useState<string>("high");
   const [selectedLinks, setSelectedLinks] = useState<Set<string>>(new Set());
   const [busyLinkIds, setBusyLinkIds] = useState<Set<string>>(new Set());
 
@@ -136,7 +136,7 @@ function SlackAccessPageInner() {
   const [inviteOptions, setInviteOptions] = useState<SlackFilterOptions>(EMPTY_OPTIONS);
   const [inviteFilters, setInviteFilters] = useState<SlackFilterState>(EMPTY_FILTERS);
   const [inviteView, setInviteView] = useState<"invite" | "channel-add">("invite");
-  const [inviteStatus, setInviteStatus] = useState<string>("all");
+  const [inviteStatus, setInviteStatus] = useState<string>("not_invited");
   const [selectedInvites, setSelectedInvites] = useState<Set<string>>(new Set());
   const [selectedChannelAdds, setSelectedChannelAdds] = useState<Set<string>>(new Set());
   const [inviting, setInviting] = useState(false);
@@ -243,7 +243,8 @@ function SlackAccessPageInner() {
 
   // ---------- Tab 1: linking ----------
   const filteredLinks = useMemo(() => {
-    let rows = linkRows;
+    // Only members with a Slack profile suggestion are shown.
+    let rows = linkRows.filter((r) => Boolean(r.suggestion));
     rows = filterBySearch(rows, linkFilters.q || "", (r) => [
       r.name,
       r.primaryEmail,
@@ -267,7 +268,6 @@ function SlackAccessPageInner() {
     rows = filterByDateRange(rows, linkFilters.dateFrom, linkFilters.dateTo, (r) => r.dateJoined);
     if (linkConfidence === "high") rows = rows.filter((r) => r.suggestion?.confidence === "high");
     if (linkConfidence === "low") rows = rows.filter((r) => r.suggestion?.confidence === "low");
-    if (linkConfidence === "none") rows = rows.filter((r) => !r.suggestion);
     return rows;
   }, [linkRows, linkFilters, linkConfidence]);
 
@@ -705,10 +705,8 @@ function SlackAccessPageInner() {
   const linkTabExtra = (
     <Segmented
       options={[
-        { label: "All", value: "all" },
         { label: "High confidence", value: "high" },
         { label: "Low confidence", value: "low" },
-        { label: "No suggestion", value: "none" },
       ]}
       value={linkConfidence}
       onChange={(v) => setLinkConfidence(String(v))}
@@ -746,7 +744,6 @@ function SlackAccessPageInner() {
   const inviteTabExtra = (
     <Segmented
       options={[
-        { label: "All", value: "all" },
         { label: "Not invited", value: "not_invited" },
         { label: "Invited recently", value: "invited" },
       ]}
@@ -809,7 +806,7 @@ function SlackAccessPageInner() {
         items={[
           {
             key: "link",
-            label: `Link Slack emails (${linkRows.length})`,
+            label: `Link Slack emails (${linkRows.filter((r) => r.suggestion).length})`,
             children: (
               <>
                 <SlackCommunityFilters
@@ -847,7 +844,7 @@ function SlackAccessPageInner() {
                     emptyText: (
                       <EmptyState
                         title="No members to link"
-                        description="Everyone without a Slack Email already matches a workspace user, or filters exclude them."
+                        description="No members with a suggested Slack profile match the current filters."
                       />
                     ),
                   }}

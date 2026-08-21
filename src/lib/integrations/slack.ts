@@ -204,7 +204,7 @@ export function createSlackClient(config: SlackConfig) {
     let page = 0;
     do {
       page++;
-      const data = (await slackApi("users.list", { limit: 200, ...(cursor ? { cursor } : {}) })) as {
+      const data = (await slackApi("users.list", { limit: 1000, ...(cursor ? { cursor } : {}) })) as {
         members?: SlackApiUser[];
         has_more?: boolean;
         response_metadata?: { next_cursor?: string };

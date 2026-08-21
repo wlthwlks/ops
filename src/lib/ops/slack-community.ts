@@ -46,6 +46,26 @@ function normalizeName(name: string): string {
     .trim();
 }
 
+/**
+ * Short-lived in-memory cache for the workspace user list. users.list over a
+ * large workspace is the slowest part of every community scan — share it
+ * across the link/compare/invite builders instead of re-fetching per tab.
+ */
+let workspaceUsersCache: { at: number; users: SlackUser[] } | null = null;
+const WORKSPACE_USERS_TTL_MS = 60_000;
+
+async function listWorkspaceUsersCached(): Promise<SlackUser[]> {
+  const token = process.env.SLACK_BOT_TOKEN;
+  if (!token) throw new Error("SLACK_BOT_TOKEN is not configured");
+  if (workspaceUsersCache && Date.now() - workspaceUsersCache.at < WORKSPACE_USERS_TTL_MS) {
+    return workspaceUsersCache.users;
+  }
+  const slack = createSlackClient({ botToken: token });
+  const users = await slack.listUsers();
+  workspaceUsersCache = { at: Date.now(), users };
+  return users;
+}
+
 function splitWords(name: string): Set<string> {
   return new Set(
     normalizeName(name)
@@ -199,12 +219,16 @@ export async function buildLinkQueue(): Promise<LinkQueueResult> {
   if (!slackToken) throw new Error("SLACK_BOT_TOKEN is not configured");
 
   const airtable = createAirtableClient({ apiKey: token, baseId });
-  const slack = createSlackClient({ botToken: slackToken });
 
-  const memberRecords = await airtable.listRecords(MEMBERS_TABLE, {
-    fields: MEMBER_LIST_FIELDS,
-  });
-  const slackUsers = await slack.listUsers();
+  const [memberRecords, slackUsers] = await Promise.all([
+    airtable.listRecords(MEMBERS_TABLE, {
+      fields: MEMBER_LIST_FIELDS,
+      // Only members with an empty "Slack Email" can be linked — filter
+      // server-side so large bases don't blow the function timeout.
+      filterByFormula: 'OR({Slack Email} = "", {Slack Email} = BLANK())',
+    }),
+    listWorkspaceUsersCached(),
+  ]);
   const activeUsers = slackUsers.filter(
     (u) => !u.deleted && !u.isBot && !u.isAppUser
   );
@@ -381,7 +405,7 @@ export async function buildCompare(
 
   const [record, users] = await Promise.all([
     airtable.getRecord(MEMBERS_TABLE, airtableRecordId),
-    slack.listUsers(),
+    listWorkspaceUsersCached(),
   ]);
   const activeUsers = users.filter((u) => !u.deleted && !u.isBot && !u.isAppUser);
   const target = activeUsers.find((u) => u.id === slackUserId) || null;
