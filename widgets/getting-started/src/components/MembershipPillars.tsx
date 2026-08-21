@@ -99,7 +99,9 @@ const pillars: Pillar[] = [
           wherever you happen to be.
         </p>
         <div className="pt-2">
-          <BrandButton>Add WLTH WLKS Community Calendar</BrandButton>
+          <BrandButton href="https://calendar.google.com/calendar/u/0?cid=Y183ZWYzNDIzNTUxZDllMDMyNTEzYTgwMGZlZjliY2YyMWZlOGU0ZDJkNTlhNTEwODExOTJjOWM1M2YxYmIxOTAxQGdyb3VwLmNhbGVuZGFyLmdvb2dsZS5jb20">
+            Add WLTH WLKS Community Calendar
+          </BrandButton>
         </div>
       </>
     ),
@@ -129,9 +131,11 @@ const pillars: Pillar[] = [
           there next. And if you want to be the one who brings it to your city,
           I&apos;d love to hear from you.
         </p>
+        {/* Temporarily hidden — will be used in a later phase
         <div className="pt-2">
           <BrandButton>Upcoming CITY WLKS</BrandButton>
         </div>
+        */}
       </>
     ),
   },
@@ -158,9 +162,11 @@ const pillars: Pillar[] = [
           from your membership; your introductions and activities will keep
           coming.
         </p>
+        {/* Temporarily hidden — will be used in a later phase
         <div className="pt-2">
           <BrandButton>Join WLTH WLKS Slack Community</BrandButton>
         </div>
+        */}
       </>
     ),
   },
