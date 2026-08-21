@@ -69,6 +69,7 @@ type InviteRow = {
   cooldownActive: boolean;
   lastInvitedAt: string | null;
   eligibilityReasons: string[];
+  deactivated: boolean;
 };
 
 type ChannelAddRow = {
@@ -83,6 +84,8 @@ type Capabilities = {
   inviteToChannelsReason: string;
   canInviteToWorkspace: boolean;
   inviteToWorkspaceReason: string;
+  canReactivateUsers: boolean;
+  reactivateReason: string;
   scopes: string[];
 };
 
@@ -141,6 +144,7 @@ function SlackAccessPageInner() {
   const [selectedChannelAdds, setSelectedChannelAdds] = useState<Set<string>>(new Set());
   const [inviting, setInviting] = useState(false);
   const [addingChannels, setAddingChannels] = useState(false);
+  const [reactivating, setReactivating] = useState(false);
 
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [selectedMember, setSelectedMember] = useState<MemberHealthRow | null>(null);
@@ -672,6 +676,50 @@ function SlackAccessPageInner() {
     });
   };
 
+  const reactivateMember = (recordId: string, name: string) => {
+    if (!canMutate) {
+      message.warning("Reactivating requires LIVE mode and admin role");
+      return;
+    }
+    modal.confirm({
+      title: `Reactivate ${name} in Slack?`,
+      content: (
+        <div>
+          <p>Their Slack account is deactivated but still exists in the workspace.</p>
+          <p>
+            Reactivation restores sign-in and memberships. After reactivating, add them
+            back to #introductions and their private city channel from the
+            &quot;Add to city channel&quot; view.
+          </p>
+        </div>
+      ),
+      okText: "Reactivate",
+      onOk: async () => {
+        setReactivating(true);
+        try {
+          const res = await fetch("/api/ops-dashboard/slack/reactivate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ airtableRecordIds: [recordId] }),
+          });
+          const json = await res.json();
+          if (!res.ok || json.success === false) throw new Error(json.message || "Reactivate failed");
+          const result = json.results?.[0];
+          if (result?.status === "completed") {
+            message.success(`${name} reactivated in Slack`);
+          } else {
+            message.error(`${name}: ${result?.error || "reactivation failed"}`);
+          }
+        } catch (e) {
+          message.error(e instanceof Error ? e.message : "Reactivate failed");
+        } finally {
+          setReactivating(false);
+          void loadInvite();
+        }
+      },
+    });
+  };
+
   const capabilityChecks = useMemo(() => {
     if (!capabilities) return [];
     return [
@@ -695,7 +743,7 @@ function SlackAccessPageInner() {
       },
       {
         key: "deactivate",
-        label: "Deactivate workspace accounts",
+        label: "Deactivate / reactivate workspace accounts",
         ok: capabilities.canDeactivateWorkspaceUser,
         reason: capabilities.deactivateReason,
       },
@@ -1092,7 +1140,7 @@ function SlackAccessPageInner() {
                         selectedRowKeys: [...selectedInvites],
                         onChange: (keys) => setSelectedInvites(new Set(keys.map(String))),
                         getCheckboxProps: (r) => ({
-                          disabled: r.eligibilityReasons.length > 0,
+                          disabled: r.eligibilityReasons.length > 0 || r.deactivated,
                         }),
                       }}
                       onRow={(r) => ({
@@ -1131,7 +1179,9 @@ function SlackAccessPageInner() {
                           title: "Status",
                           width: 130,
                           render: (_, r) =>
-                            r.cooldownActive ? (
+                            r.deactivated ? (
+                              <Tag color="error">Deactivated</Tag>
+                            ) : r.cooldownActive ? (
                               <Tag color="processing">
                                 Invited {fmtDate(r.lastInvitedAt || "")}
                               </Tag>
@@ -1144,53 +1194,84 @@ function SlackAccessPageInner() {
                         {
                           title: "Blockers",
                           render: (_, r) =>
-                            r.eligibilityReasons.length > 0
-                              ? r.eligibilityReasons.join("; ")
-                              : "—",
+                            r.deactivated
+                              ? "Slack account deactivated — reactivate to restore community access."
+                              : r.eligibilityReasons.length > 0
+                                ? r.eligibilityReasons.join("; ")
+                                : "—",
                           ellipsis: true,
                         },
                         {
                           title: "Action",
-                          width: 130,
-                          render: (_, r) => (
-                            <Space>
-                              <Button
-                                size="small"
-                                type="primary"
-                                disabled={
-                                  !canMutate ||
-                                  inviting ||
-                                  r.eligibilityReasons.length > 0 ||
-                                  r.cooldownActive
-                                }
-                                loading={inviting}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void sendInvites(
-                                    [r.member.airtableRecordId || r.member.primaryEmail],
-                                    false
-                                  );
-                                }}
-                              >
-                                Invite
-                              </Button>
-                              {r.cooldownActive && r.eligibilityReasons.length === 0 && (
+                          width: 170,
+                          render: (_, r) =>
+                            r.deactivated ? (
+                              capabilities?.canReactivateUsers ? (
                                 <Button
                                   size="small"
-                                  disabled={!canMutate || inviting}
+                                  type="primary"
+                                  disabled={!canMutate || reactivating}
+                                  loading={reactivating}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void reactivateMember(
+                                      r.member.airtableRecordId || r.member.primaryEmail,
+                                      r.member.name
+                                    );
+                                  }}
+                                >
+                                  Reactivate
+                                </Button>
+                              ) : (
+                                <Button
+                                  size="small"
+                                  href="https://wlth-wlks.slack.com/admin"
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  Open Slack Admin
+                                </Button>
+                              )
+                            ) : (
+                              <Space>
+                                <Button
+                                  size="small"
+                                  type="primary"
+                                  disabled={
+                                    !canMutate ||
+                                    inviting ||
+                                    r.eligibilityReasons.length > 0 ||
+                                    r.cooldownActive
+                                  }
+                                  loading={inviting}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     void sendInvites(
                                       [r.member.airtableRecordId || r.member.primaryEmail],
-                                      true
+                                      false
                                     );
                                   }}
                                 >
-                                  Resend
+                                  Invite
                                 </Button>
-                              )}
-                            </Space>
-                          ),
+                                {r.cooldownActive && r.eligibilityReasons.length === 0 && (
+                                  <Button
+                                    size="small"
+                                    disabled={!canMutate || inviting}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void sendInvites(
+                                        [r.member.airtableRecordId || r.member.primaryEmail],
+                                        true
+                                      );
+                                    }}
+                                  >
+                                    Resend
+                                  </Button>
+                                )}
+                              </Space>
+                            ),
                         },
                       ]}
                     />

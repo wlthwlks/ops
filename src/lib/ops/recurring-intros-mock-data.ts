@@ -171,6 +171,9 @@ export function createMockSlack(): SlackClient {
     deactivateUser: async (userId: string) => {
       console.log(`[mock-slack] admin.users.setInactive → ${userId}`);
     },
+    reactivateUser: async (userId: string) => {
+      console.log(`[mock-slack] admin.users.setRegular → ${userId}`);
+    },
     getUserInfo: async (userId: string) =>
       FAKE_MEMBERS.slack.find((u) => u.id === userId) || null,
   };
@@ -274,6 +277,9 @@ export function createSlackMockFromMembers(memberRecords: AirtableRecord[]): Sla
       throw new Error("Write blocked — Safe Preview mode");
     },
     deactivateUser: async () => {
+      throw new Error("Write blocked — Safe Preview mode");
+    },
+    reactivateUser: async () => {
       throw new Error("Write blocked — Safe Preview mode");
     },
     getUserInfo: async (userId: string) => users.find((u) => u.id === userId) || null,

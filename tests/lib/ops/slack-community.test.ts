@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { sortByDateJoinedDesc, pickSlackProfileFields } from "@/lib/ops/slack-community";
+import {
+  sortByDateJoinedDesc,
+  pickSlackProfileFields,
+  isInviteCandidateIdentityState,
+} from "@/lib/ops/slack-community";
 import type { SlackUser } from "@/lib/integrations/slack";
 
 describe("sortByDateJoinedDesc", () => {
@@ -55,5 +59,24 @@ describe("pickSlackProfileFields", () => {
     expect(byLabel["Status"]).toBe(":walk: on a walk");
     expect(byLabel["Role"]).toContain("Owner");
     expect(byLabel["Slack ID"]).toBe("U1");
+  });
+});
+
+describe("isInviteCandidateIdentityState", () => {
+  it("accepts not_found and stale_slack_email", () => {
+    expect(isInviteCandidateIdentityState("not_found")).toBe(true);
+    expect(isInviteCandidateIdentityState("stale_slack_email")).toBe(true);
+  });
+
+  it("accepts deactivated accounts (reactivate flow)", () => {
+    expect(isInviteCandidateIdentityState("deactivated")).toBe(true);
+  });
+
+  it("rejects matched, name-suggested and ambiguous identities", () => {
+    expect(isInviteCandidateIdentityState("matched_primary_email")).toBe(false);
+    expect(isInviteCandidateIdentityState("matched_slack_email")).toBe(false);
+    expect(isInviteCandidateIdentityState("suggested_name")).toBe(false);
+    expect(isInviteCandidateIdentityState("ambiguous")).toBe(false);
+    expect(isInviteCandidateIdentityState("not_checked")).toBe(false);
   });
 });

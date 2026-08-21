@@ -330,6 +330,14 @@ export function createSlackClient(config: SlackConfig) {
     await slackAdminApi("admin.users.setInactive", { user_id: userId });
   }
 
+  /**
+   * Reactivate a previously deactivated workspace user. Requires an admin
+   * token with admin.users:write (Enterprise Grid only).
+   */
+  async function reactivateUser(userId: string): Promise<void> {
+    await slackAdminApi("admin.users.setRegular", { user_id: userId });
+  }
+
   /** Get full profile for one user (for side-by-side comparison). */
   async function getUserInfo(userId: string): Promise<SlackUser | null> {
     try {
@@ -394,6 +402,7 @@ export function createSlackClient(config: SlackConfig) {
     inviteToChannel,
     inviteUsersToWorkspace,
     deactivateUser,
+    reactivateUser,
     getUserInfo,
   };
 }

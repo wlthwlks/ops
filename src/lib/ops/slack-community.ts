@@ -92,6 +92,8 @@ export type SlackCommunityCapabilities = SlackRemovalCapabilities & {
   inviteToChannelsReason: string;
   canInviteToWorkspace: boolean;
   inviteToWorkspaceReason: string;
+  canReactivateUsers: boolean;
+  reactivateReason: string;
 };
 
 /**
@@ -110,20 +112,31 @@ export async function detectSlackCommunityCapabilities(): Promise<SlackCommunity
 
   let canInviteToWorkspace = false;
   let inviteToWorkspaceReason = "";
+  let canReactivateUsers = false;
+  let reactivateReason = "";
   const adminToken = process.env.SLACK_ADMIN_USER_TOKEN?.trim();
   if (!adminToken) {
     inviteToWorkspaceReason =
       "SLACK_ADMIN_USER_TOKEN is not configured — workspace invites go out by email (join link). API workspace invite needs an Enterprise Grid admin token with admin.users:write.";
+    reactivateReason =
+      "SLACK_ADMIN_USER_TOKEN is not configured — reactivate deactivated accounts manually in Slack Admin.";
   } else {
     try {
       const admin = createSlackClient({ botToken: adminToken });
       const auth = await admin.authTest();
-      canInviteToWorkspace = (auth.scopes || []).includes("admin.users:write");
-      inviteToWorkspaceReason = canInviteToWorkspace
+      const adminWrite = (auth.scopes || []).includes("admin.users:write");
+      canInviteToWorkspace = adminWrite;
+      canReactivateUsers = adminWrite;
+      inviteToWorkspaceReason = adminWrite
         ? ""
         : "Admin token is present but lacks admin.users:write — workspace invites go out by email (join link).";
+      reactivateReason = adminWrite
+        ? ""
+        : "Admin token is present but lacks admin.users:write — reactivate deactivated accounts manually in Slack Admin.";
     } catch (e) {
-      inviteToWorkspaceReason = e instanceof Error ? e.message : "Admin token check failed";
+      const msg = e instanceof Error ? e.message : "Admin token check failed";
+      inviteToWorkspaceReason = msg;
+      reactivateReason = msg;
     }
   }
 
@@ -133,6 +146,8 @@ export async function detectSlackCommunityCapabilities(): Promise<SlackCommunity
     inviteToChannelsReason,
     canInviteToWorkspace,
     inviteToWorkspaceReason,
+    canReactivateUsers,
+    reactivateReason,
   };
 }
 
@@ -472,7 +487,20 @@ export type InviteRow = {
   cooldownActive: boolean;
   lastInvitedAt: string | null;
   eligibilityReasons: string[];
+  /** Account exists in the workspace but is deactivated — reactivate, don't email-invite. */
+  deactivated: boolean;
 };
+
+/** Identity states that qualify a current-access member for the invite queue. */
+export function isInviteCandidateIdentityState(
+  state: MemberHealthRow["slackIdentityState"]
+): boolean {
+  return (
+    state === "not_found" ||
+    state === "stale_slack_email" ||
+    state === "deactivated"
+  );
+}
 
 export type ChannelAddRow = {
   member: MemberHealthRow;
@@ -552,14 +580,20 @@ export async function buildInviteQueue(): Promise<InviteQueueResult> {
 
     // Not matched — invite only when we are confident they are not in the
     // workspace under another identity (name-only matches go to linking).
-    if (m.slackIdentityState === "not_found" || m.slackIdentityState === "stale_slack_email") {
-      const eligibility = memberEligibleForSlackOutreach(m);
+    // Deactivated accounts are in the workspace but cannot sign in: surface
+    // them here so they can be reactivated instead of email-invited.
+    if (isInviteCandidateIdentityState(m.slackIdentityState)) {
+      const deactivated = m.slackIdentityState === "deactivated";
+      const eligibility = deactivated
+        ? { reasons: [] }
+        : memberEligibleForSlackOutreach(m);
       const lastInvited = lastInviteByMember.get(m.airtableRecordId)?.at || null;
       inviteRows.push({
         member: m,
         cooldownActive: Boolean(lastInvited),
         lastInvitedAt: lastInvited,
         eligibilityReasons: eligibility.reasons,
+        deactivated,
       });
     }
   }
@@ -723,6 +757,95 @@ export async function executeChannelInvite(input: {
   try {
     const slack = createSlackClient({ botToken: process.env.SLACK_BOT_TOKEN! });
     await slack.inviteToChannel(plan.channelId, plan.slackUserId);
+    await db
+      .update(slackAccessActions)
+      .set({ status: "completed", completedAt: new Date() })
+      .where(eq(slackAccessActions.id, rowId));
+    return { status: "completed" };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    try {
+      await db
+        .update(slackAccessActions)
+        .set({ status: "failed", error: msg, completedAt: new Date() })
+        .where(eq(slackAccessActions.id, rowId));
+    } catch {
+      /* ignore */
+    }
+    return { status: "failed", error: msg };
+  }
+}
+
+/**
+ * Reactivate a deactivated workspace account (admin.users.setRegular).
+ * Revalidates current access + deactivated identity before calling Slack.
+ */
+export async function executeWorkspaceReactivation(input: {
+  airtableRecordId: string;
+  clerkUserId: string;
+  runtimeMode: string;
+  idempotencyKey: string;
+}): Promise<{ status: string; error?: string }> {
+  const capabilities = await detectSlackCommunityCapabilities();
+  const scan = await scanMemberHealth({
+    includeSlack: true,
+    includeChannelMembership: false,
+  });
+  const member = scan.members.find(
+    (m) => m.airtableRecordId === input.airtableRecordId
+  );
+
+  if (!member) {
+    return { status: "skipped_revalidated", error: "Member not found in Airtable" };
+  }
+  if (!member.hasCurrentServiceAccess) {
+    return {
+      status: "skipped_revalidated",
+      error: "Member no longer has current service access (revalidated)",
+    };
+  }
+  if (member.slackIdentityState !== "deactivated") {
+    return {
+      status: "skipped_revalidated",
+      error: "Slack identity is not a deactivated account (revalidated)",
+    };
+  }
+  const slackUserId = member.activeSlackUserId;
+  if (!slackUserId) {
+    return {
+      status: "skipped_revalidated",
+      error: "No Slack user id resolved for the deactivated account",
+    };
+  }
+  if (!capabilities.canReactivateUsers) {
+    return { status: "failed", error: capabilities.reactivateReason };
+  }
+
+  const rowId = randomUUID();
+  try {
+    await db.insert(slackAccessActions).values({
+      id: rowId,
+      actionType: "workspace_reactivate",
+      airtableRecordId: input.airtableRecordId,
+      slackUserId,
+      status: "running",
+      initiatedByClerkUserId: input.clerkUserId,
+      runtimeMode: input.runtimeMode,
+      idempotencyKey: input.idempotencyKey,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/unique|duplicate/i.test(msg)) {
+      return { status: "failed", error: "Duplicate idempotency key" };
+    }
+  }
+
+  try {
+    const slack = createSlackClient({
+      botToken: process.env.SLACK_BOT_TOKEN!,
+      adminToken: process.env.SLACK_ADMIN_USER_TOKEN,
+    });
+    await slack.reactivateUser(slackUserId);
     await db
       .update(slackAccessActions)
       .set({ status: "completed", completedAt: new Date() })
