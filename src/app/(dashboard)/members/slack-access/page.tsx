@@ -924,7 +924,8 @@ function SlackAccessPageInner() {
                   </Button>
                   <Typography.Text type="secondary">
                     Members whose email is not found in Slack — matched by name and other
-                    profile data. Use Compare to review before linking.
+                    profile data. Only members currently being serviced are listed. Use
+                    Compare to review before linking.
                   </Typography.Text>
                 </Space>
                 <Table

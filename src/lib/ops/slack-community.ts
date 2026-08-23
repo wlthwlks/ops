@@ -18,6 +18,7 @@ import {
   memberEligibleForSlackOutreach,
   scanMemberHealth,
 } from "@/lib/ops/member-health";
+import { hasServiceAccess } from "@/lib/introduction/service-access";
 import type { MemberHealthRow } from "@/lib/ops/member-health-types";
 import {
   classifySlackScopes,
@@ -306,6 +307,8 @@ export async function buildLinkQueue(): Promise<LinkQueueResult> {
   const memberships = new Set<string>();
   const payments = new Set<string>();
 
+  const referenceDate = new Date();
+
   const rows: LinkRow[] = [];
   for (const r of memberRecords) {
     const name = fieldStr(r.fields, MEMBER_FIELDS.name);
@@ -316,12 +319,22 @@ export async function buildLinkQueue(): Promise<LinkQueueResult> {
     const payment = fieldStr(r.fields, MEMBER_FIELDS.payment);
     const dateJoined = fieldStr(r.fields, MEMBER_FIELDS.dateJoined);
 
+    // Only members without a Slack Email field are linkable
+    if (slackEmail) continue;
+
+    // Only members currently being serviced (Airtable rule: Active+Paid or a
+    // valid future "Service access until") are part of the community.
+    const beingServiced = hasServiceAccess(
+      membership,
+      payment,
+      fieldStr(r.fields, MEMBER_FIELDS.serviceAccessUntil) || null,
+      referenceDate
+    );
+    if (!beingServiced) continue;
+
     if (city) cities.add(city);
     if (membership) memberships.add(membership);
     if (payment) payments.add(payment);
-
-    // Only members without a Slack Email field are linkable
-    if (slackEmail) continue;
 
     // Email column is the default identity source — if it already matches a
     // Slack user, the member is known and needs no manual linking.
