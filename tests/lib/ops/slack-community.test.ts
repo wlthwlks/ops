@@ -3,8 +3,28 @@ import {
   sortByDateJoinedDesc,
   pickSlackProfileFields,
   isInviteCandidateIdentityState,
+  primaryEmailMatchesActiveSlackUser,
+  suggestLinkByName,
 } from "@/lib/ops/slack-community";
+import { buildSlackMaps } from "@/lib/ops/member-health";
 import type { SlackUser } from "@/lib/integrations/slack";
+
+function slackUser(
+  id: string,
+  email: string,
+  realName: string,
+  deleted = false
+): SlackUser {
+  return {
+    id,
+    email,
+    name: realName.toLowerCase().replace(/\s+/g, "."),
+    realName,
+    deleted,
+    isBot: false,
+    isAppUser: false,
+  };
+}
 
 describe("sortByDateJoinedDesc", () => {
   const rows = [
@@ -78,5 +98,74 @@ describe("isInviteCandidateIdentityState", () => {
     expect(isInviteCandidateIdentityState("suggested_name")).toBe(false);
     expect(isInviteCandidateIdentityState("ambiguous")).toBe(false);
     expect(isInviteCandidateIdentityState("not_checked")).toBe(false);
+  });
+});
+
+describe("primaryEmailMatchesActiveSlackUser", () => {
+  const maps = buildSlackMaps([
+    slackUser("U1", "ada@ex.com", "Ada Lovelace"),
+    slackUser("U2", "grace@ex.com", "Grace Hopper"),
+  ]);
+
+  it("matches a unique active user by email (case/space insensitive)", () => {
+    expect(primaryEmailMatchesActiveSlackUser(" ADA@EX.COM ", maps)).toBe(true);
+  });
+
+  it("is false when the email is not in the workspace", () => {
+    expect(primaryEmailMatchesActiveSlackUser("nobody@ex.com", maps)).toBe(false);
+  });
+
+  it("is false when the email belongs to a deactivated account", () => {
+    const deletedMaps = buildSlackMaps([
+      slackUser("U3", "gone@ex.com", "Gone User", true),
+    ]);
+    expect(primaryEmailMatchesActiveSlackUser("gone@ex.com", deletedMaps)).toBe(false);
+  });
+
+  it("is false when two active users share the email", () => {
+    const dupMaps = buildSlackMaps([
+      slackUser("U4", "shared@ex.com", "First Shared"),
+      slackUser("U5", "shared@ex.com", "Second Shared"),
+    ]);
+    expect(primaryEmailMatchesActiveSlackUser("shared@ex.com", dupMaps)).toBe(false);
+  });
+});
+
+describe("suggestLinkByName", () => {
+  const maps = buildSlackMaps([
+    slackUser("U1", "ada@ex.com", "Ada Lovelace"),
+    slackUser("U2", "grace@ex.com", "Grace Hopper"),
+  ]);
+
+  it("high confidence for a single exact name match", () => {
+    expect(suggestLinkByName("Ada Lovelace", maps)).toEqual({
+      slackUserId: "U1",
+      slackEmail: "ada@ex.com",
+      slackName: "Ada Lovelace",
+      confidence: "high",
+      kind: "exact_name",
+    });
+  });
+
+  it("low confidence for multiple same-name users", () => {
+    const dupMaps = buildSlackMaps([
+      slackUser("U4", "first@ex.com", "Sam Smith"),
+      slackUser("U5", "second@ex.com", "Sam Smith"),
+    ]);
+    expect(suggestLinkByName("Sam Smith", dupMaps)).toEqual({
+      slackUserId: "U4",
+      slackEmail: "first@ex.com",
+      slackName: "Sam Smith",
+      confidence: "low",
+      kind: "ambiguous_name",
+    });
+  });
+
+  it("null when no name matches", () => {
+    expect(suggestLinkByName("Zed Unknown", maps)).toBeNull();
+  });
+
+  it("null for empty names", () => {
+    expect(suggestLinkByName("", maps)).toBeNull();
   });
 });
