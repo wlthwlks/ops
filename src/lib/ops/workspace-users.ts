@@ -161,7 +161,7 @@ export async function scanWorkspaceUsers(): Promise<WorkspaceUsersResult> {
     if (id) channelDefs.push({ id, name: name || id });
   }
   if (allMembers.id && !channelDefs.some((c) => c.id === allMembers.id)) {
-    channelDefs.unshift({ id: allMembers.id, name: allMembers.name || "all-wlth-wlks" });
+    channelDefs.unshift({ id: allMembers.id, name: allMembers.name || "introductions" });
   }
 
   // Reverse index: userId → channel memberships (one call per channel)

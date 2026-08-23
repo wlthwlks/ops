@@ -453,8 +453,8 @@ export default function RecurringIntrosPage() {
         title="Slack tools moved"
         description={
           <span>
-            Slack Email Resolver and Workspace Users now live under{" "}
-            <a href="/members/slack-access">Member Management → Slack Access</a>.
+            Slack linking, removal and invites now live under{" "}
+            <a href="/members/slack-access">Member Management → Slack Community</a>.
             This page focuses only on recurring introductions.
           </span>
         }

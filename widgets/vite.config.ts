@@ -1,5 +1,8 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
+import prefixwrap from "postcss-prefixwrap";
+import type { AtRule, Plugin as PostcssPlugin } from "postcss";
 import path from "path";
 import fs from "fs";
 import {
@@ -65,10 +68,36 @@ function emitLottieAnimations(): Plugin {
   };
 }
 
+/**
+ * Tailwind v4 emits everything inside cascade layers, which lose to any
+ * unlayered host-page CSS (Webflow, Memberstack) regardless of specificity.
+ * Unwrap all @layer rules so the scoped widget styles win those fights.
+ */
+const removeCssLayers: PostcssPlugin = {
+  postcssPlugin: "wlth-remove-css-layers",
+  AtRule: {
+    layer(atRule: AtRule) {
+      if (atRule.nodes && atRule.nodes.length > 0) {
+        atRule.replaceWith(...atRule.nodes);
+      } else {
+        atRule.remove();
+      }
+    },
+  },
+};
+
 export default defineConfig({
-  plugins: [inlineLottieAssets(), react(), emitLottieAnimations()],
+  plugins: [inlineLottieAssets(), tailwindcss(), react(), emitLottieAnimations()],
   publicDir: false,
   assetsInclude: ["**/*.lottie"],
+  css:
+    widget === "getting-started"
+      ? {
+          postcss: {
+            plugins: [removeCssLayers, prefixwrap("#wlth-getting-started-root")],
+          },
+        }
+      : undefined,
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
   },

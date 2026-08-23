@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyRemovalReadiness } from "@/lib/ops/slack-removal";
+import { classifyRemovalReadiness, isPausedMember } from "@/lib/ops/slack-removal";
 import type { MemberHealthRow } from "@/lib/ops/member-health-types";
 import { makeIssue } from "@/lib/ops/member-issue-classifier";
 
@@ -74,5 +74,29 @@ describe("classifyRemovalReadiness", () => {
     expect(
       classifyRemovalReadiness(row({ slackIdentityState: "deactivated" }))
     ).toBe("already_deactivated");
+  });
+});
+
+describe("isPausedMember", () => {
+  it("not paused when intro pause is active and billing is not paused", () => {
+    expect(isPausedMember(row({}))).toBe(false);
+  });
+
+  it("paused when recurring intro status is Paused", () => {
+    expect(isPausedMember(row({ introPauseState: "paused" }))).toBe(true);
+  });
+
+  it("paused when pause date has passed but status is still Paused", () => {
+    expect(isPausedMember(row({ introPauseState: "paused_expired" }))).toBe(true);
+  });
+
+  it("paused when excluded from intros", () => {
+    expect(isPausedMember(row({ introPauseState: "excluded" }))).toBe(true);
+  });
+
+  it("paused when Stripe subscription is paused", () => {
+    expect(
+      isPausedMember(row({ stripeSubscriptionStatus: "paused" }))
+    ).toBe(true);
   });
 });

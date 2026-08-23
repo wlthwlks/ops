@@ -431,7 +431,7 @@ export async function scanChannelMemberships(input?: {
   if (allMembersCfg.id) {
     defs.unshift({
       airtableRecordId: "",
-      channelName: allMembersCfg.name || "all-wlth-wlks",
+      channelName: allMembersCfg.name || "introductions",
       cityNames: ["(all)"],
       statusRaw: "Active",
       statusKind: "active",

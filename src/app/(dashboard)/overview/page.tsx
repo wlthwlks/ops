@@ -184,7 +184,7 @@ export default function OverviewPage() {
               <KpiCard
                 title="Paying missing Slack"
                 value={s.payingMissingSlack}
-                href="/members/slack-access?tab=needs"
+                href="/members/slack-access?tab=invite"
                 status={s.payingMissingSlack ? "danger" : "default"}
                 tooltip={OVERVIEW_KPI_TOOLTIPS.payingMissingSlack}
               />
@@ -221,7 +221,7 @@ export default function OverviewPage() {
               <KpiCard
                 title="Channel gaps"
                 value={s.channelGaps}
-                href="/members/slack-access?tab=channels"
+                href="/members/slack-access?tab=invite"
                 status={s.channelGaps ? "warning" : "default"}
                 hint="Run channel scan for accuracy"
                 tooltip={OVERVIEW_KPI_TOOLTIPS.channelGaps}

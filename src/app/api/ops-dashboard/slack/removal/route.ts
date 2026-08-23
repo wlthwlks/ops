@@ -5,6 +5,7 @@ import {
   buildRemovalPlan,
   detectSlackRemovalCapabilities,
   executeChannelRemovals,
+  executeWorkspaceDeactivation,
 } from "@/lib/ops/slack-removal";
 
 export const runtime = "nodejs";
@@ -81,6 +82,75 @@ export async function POST(request: Request) {
           idempotencyKey: ids.length > 1 ? `${idempotencyKey}:${randomUUID().slice(0, 8)}` : idempotencyKey,
         });
         results.push({ airtableRecordId: id, ...result });
+      }
+      return jsonOk({ results, capabilities, mode: admin.mode });
+    }
+
+    if (action === "remove_and_deactivate") {
+      // Kick from WLTH channels first, then deactivate the workspace account
+      // when an admin token is available. Channel removal still succeeds
+      // without deactivation capability.
+      const channelIds: string[] = Array.isArray(body.channelIds)
+        ? body.channelIds.map(String)
+        : [];
+      const results = [];
+      for (const id of ids) {
+        const plan = await buildRemovalPlan(id, capabilities);
+        const targets =
+          channelIds.length > 0
+            ? channelIds
+            : plan.channelsToRemove.map((c) => c.id);
+        const baseKey =
+          String(body.idempotencyKey || "") ||
+          `remove_all:${id}:${targets.sort().join(",")}:${new Date().toISOString().slice(0, 13)}`;
+        const suffix =
+          ids.length > 1 ? `:${randomUUID().slice(0, 8)}` : "";
+
+        const kickResult =
+          targets.length > 0
+            ? await executeChannelRemovals({
+                airtableRecordId: id,
+                channelIds: targets,
+                clerkUserId: admin.userId,
+                runtimeMode: admin.mode,
+                idempotencyKey: `${baseKey}:kick${suffix}`,
+              })
+            : { status: "no_channels", results: [] };
+
+        let deactivateStatus: string | undefined;
+        let deactivateError: string | undefined;
+        if (
+          capabilities.canDeactivateWorkspaceUser &&
+          plan.eligible &&
+          plan.slackUserId
+        ) {
+          const deactivated = await executeWorkspaceDeactivation({
+            airtableRecordId: id,
+            clerkUserId: admin.userId,
+            runtimeMode: admin.mode,
+            idempotencyKey: `${baseKey}:deactivate${suffix}`,
+          });
+          deactivateStatus = deactivated.status;
+          deactivateError = deactivated.error;
+        } else if (!capabilities.canDeactivateWorkspaceUser) {
+          deactivateStatus = "deactivate_unavailable";
+          deactivateError = capabilities.deactivateReason;
+        }
+
+        results.push({
+          airtableRecordId: id,
+          status: kickResult.status,
+          kickResults: kickResult.results,
+          kickError: kickResult.error,
+          deactivateStatus,
+          deactivateError,
+          slackUserId: plan.slackUserId,
+          memberName: plan.memberName,
+          ok:
+            ["completed", "no_channels", "already_removed"].includes(kickResult.status) &&
+            (deactivateStatus === "completed" ||
+              deactivateStatus === "deactivate_unavailable"),
+        });
       }
       return jsonOk({ results, capabilities, mode: admin.mode });
     }

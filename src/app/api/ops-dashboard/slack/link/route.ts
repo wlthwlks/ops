@@ -1,7 +1,9 @@
 import { requireOpsViewer } from "@/lib/ops/auth";
 import { handleOpsApiError, jsonOk } from "@/lib/ops/api-response";
-import { buildRemovalQueue } from "@/lib/ops/slack-removal";
-import { detectSlackCommunityCapabilities } from "@/lib/ops/slack-community";
+import {
+  buildLinkQueue,
+  detectSlackCommunityCapabilities,
+} from "@/lib/ops/slack-community";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -9,14 +11,17 @@ export const maxDuration = 120;
 export async function GET() {
   try {
     await requireOpsViewer();
-    const [result, capabilities] = await Promise.all([
-      buildRemovalQueue(),
+    const [queue, capabilities] = await Promise.all([
+      buildLinkQueue(),
       detectSlackCommunityCapabilities(),
     ]);
     return jsonOk({
-      scannedAt: result.scannedAt,
-      total: result.rows.length,
-      rows: result.rows,
+      scannedAt: queue.scannedAt,
+      total: queue.rows.length,
+      rows: queue.rows,
+      memberCount: queue.memberCount,
+      slackUserCount: queue.slackUserCount,
+      options: queue.options,
       capabilities,
     });
   } catch (err) {

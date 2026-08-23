@@ -58,7 +58,7 @@ export function getAllMembersChannelConfig(): {
 } {
   return {
     id: (process.env.SLACK_ALL_MEMBERS_CHANNEL_ID || "").trim(),
-    name: (process.env.SLACK_ALL_MEMBERS_CHANNEL_NAME || "all-wlth-wlks").trim(),
+    name: (process.env.SLACK_ALL_MEMBERS_CHANNEL_NAME || "introductions").trim(),
   };
 }
 
