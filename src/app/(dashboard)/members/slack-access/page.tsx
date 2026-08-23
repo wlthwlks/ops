@@ -520,6 +520,56 @@ function SlackAccessPageInner() {
     });
   };
 
+  const copySelectedEmails = async () => {
+    const emails = filteredRemoval
+      .filter(
+        (r) =>
+          r.member.airtableRecordId && selectedRemoval.has(r.member.airtableRecordId)
+      )
+      .map((r) => r.member.primaryEmail)
+      .filter(Boolean);
+    if (emails.length === 0) return;
+    try {
+      await navigator.clipboard.writeText(emails.join("\n"));
+      message.success(`${emails.length} email(s) copied`);
+    } catch {
+      message.error("Could not copy emails");
+    }
+  };
+
+  const exportSelectedCsv = () => {
+    const rows = filteredRemoval.filter(
+      (r) => r.member.airtableRecordId && selectedRemoval.has(r.member.airtableRecordId)
+    );
+    if (rows.length === 0) return;
+    const cell = (v: string | number | null | undefined) =>
+      `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lines = [
+      "email,name,city,dateJoined,serviceAccessUntil,daysExpired,readiness,channels",
+      ...rows.map((r) =>
+        [
+          r.member.primaryEmail,
+          r.member.name,
+          r.member.city,
+          r.member.dateJoined,
+          r.member.serviceAccessUntil,
+          r.daysExpired ?? "",
+          r.readiness,
+          r.currentChannels.join("; "),
+        ]
+          .map(cell)
+          .join(",")
+      ),
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "removal-queue.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    message.success(`Exported ${rows.length} row(s) to removal-queue.csv`);
+  };
+
   // ---------- Tab 3: invites ----------
   const filteredInvites = useMemo(() => {
     let rows = inviteRows;
@@ -982,6 +1032,18 @@ function SlackAccessPageInner() {
                     onClick={() => void runRemoval([...selectedRemoval])}
                   >
                     Remove selected from Slack ({selectedRemoval.size})
+                  </Button>
+                  <Button
+                    disabled={selectedRemoval.size === 0}
+                    onClick={() => void copySelectedEmails()}
+                  >
+                    Copy selected emails
+                  </Button>
+                  <Button
+                    disabled={selectedRemoval.size === 0}
+                    onClick={exportSelectedCsv}
+                  >
+                    Export selected CSV
                   </Button>
                   <Button
                     href="https://wlth-wlks.slack.com/admin"

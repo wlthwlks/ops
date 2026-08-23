@@ -9,9 +9,8 @@ import {
   BookOutlined,
   SwapOutlined,
   DashboardOutlined,
-  AlertOutlined,
+  // Hidden pages (revisit later): AlertOutlined (Data Issues), DollarOutlined (Billing Integrity)
   SlackOutlined,
-  DollarOutlined,
   ToolOutlined,
   UnorderedListOutlined,
   WarningOutlined,
@@ -48,9 +47,11 @@ const NAV: NavItem[] = [
     label: "Member Management",
     children: [
       { key: "/members", icon: <UnorderedListOutlined />, label: "Member Directory" },
-      { key: "/members/issues", icon: <AlertOutlined />, label: "Data Issues" },
+      // Hidden for now — pages still exist, likely reused in the future:
+      // { key: "/members/issues", icon: <AlertOutlined />, label: "Data Issues" },
       { key: "/members/slack-access", icon: <SlackOutlined />, label: "Slack Community" },
-      { key: "/members/billing", icon: <DollarOutlined />, label: "Billing Integrity" },
+      // Hidden for now — pages still exist, likely reused in the future:
+      // { key: "/members/billing", icon: <DollarOutlined />, label: "Billing Integrity" },
       {
         key: "/get-daily-new-customers-for-cities",
         icon: <TeamOutlined />,
