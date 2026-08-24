@@ -15,7 +15,6 @@ import {
   SEMANTIC_KINDS,
   buildSemanticTexts,
   computeProfileHash,
-  hasNoSemanticContent,
   recordIdFromVectorId,
   semanticFieldsFromRecord,
   vectorIdFor,
@@ -57,11 +56,61 @@ function buildCityFilter(cityGroup: CityGroup): string {
   const conditions = [cityGroup.label, ...cityGroup.alternatives].map(
     (name) => `FIND(LOWER("${name}"), LOWER({City}))`
   );
-  return `AND({Membership} = "Active", {Cancellation date} = "", NOT({Recurring intro status} = "Paused"), OR(${conditions.join(", ")}))`;
+  // Trialing Stripe subscriptions may not yet carry Membership="Active" in
+  // Airtable — they must still appear in Pinecone, so treat the trialing
+  // subscription status as an alternative to Active.
+  return `AND(OR({Membership} = "Active", {Stripe subscription status} = "trialing"), {Cancellation date} = "", NOT({Recurring intro status} = "Paused"), OR(${conditions.join(", ")}))`;
 }
 
 function buildAllCitiesFilter(): string {
-  return `AND({Membership} = "Active", {Cancellation date} = "", NOT({Recurring intro status} = "Paused"))`;
+  return `AND(OR({Membership} = "Active", {Stripe subscription status} = "trialing"), {Cancellation date} = "", NOT({Recurring intro status} = "Paused"))`;
+}
+
+export interface SemanticReconcileDeps {
+  airtable: AirtableClient;
+  pinecone: PineconeClient;
+  log: (message: string) => void;
+}
+
+/**
+ * Delete semantic-namespace vectors whose member record is no longer in the
+ * active set (cancelled, paused, neither Active nor a trialing Stripe
+ * subscription, or deleted from Airtable).
+ *
+ * Deletion-only and bounded: one minimal Airtable list (email field only),
+ * one Pinecone list walk and batched deletes — no embeddings, no OpenAI
+ * calls. Used by the daily cleanup cron and by all-cities sync runs
+ * (which pass their already-fetched active ids).
+ */
+export async function reconcileSemanticNamespace(
+  deps: SemanticReconcileDeps,
+  options: { namespace?: string; activeRecordIds?: Set<string>; vectorIds?: string[] } = {}
+): Promise<{ deletedVectors: number; namespaceVectorCount: number }> {
+  const namespace = options.namespace ?? DEFAULT_SEMANTIC_NAMESPACE;
+  let activeIds = options.activeRecordIds;
+  if (!activeIds) {
+    deps.log(`Fetching active member ids for namespace "${namespace}" reconciliation...`);
+    const activeRecords = await deps.airtable.listRecords("MEMBERS", {
+      filterByFormula: buildAllCitiesFilter(),
+      fields: ["email"],
+    });
+    activeIds = new Set(activeRecords.map((r) => r.id));
+  }
+
+  deps.log(`Reconciling namespace "${namespace}"...`);
+  const vectorIds = options.vectorIds ?? (await deps.pinecone.listAllIds(namespace));
+  const stale: string[] = [];
+  for (const vectorId of vectorIds) {
+    const base = recordIdFromVectorId(vectorId);
+    if (!base || !activeIds.has(base)) stale.push(vectorId);
+  }
+  if (stale.length > 0) {
+    deps.log(`Deleting ${stale.length} stale vector(s)`);
+    await deps.pinecone.deleteByIds(stale, namespace);
+  } else {
+    deps.log(`No stale vectors (namespace has ${vectorIds.length} vector(s))`);
+  }
+  return { deletedVectors: stale.length, namespaceVectorCount: vectorIds.length };
 }
 
 const SYNC_FIELDS = [
@@ -86,7 +135,6 @@ interface MemberEmbedInput {
   email: string;
   city: string;
   hash: string;
-  noContent: boolean;
   nonEmptyKinds: SemanticKind[];
   texts: Record<SemanticKind, string>;
 }
@@ -108,7 +156,6 @@ function prepareMember(record: AirtableRecord): MemberEmbedInput | null {
     email,
     city: String(record.fields["City"] ?? ""),
     hash: computeProfileHash(fields),
-    noContent: hasNoSemanticContent(texts),
     nonEmptyKinds,
     texts: kinds,
   };
@@ -189,25 +236,46 @@ export async function runIntroProfileSync(
         .from(introductionMemberProfiles)
         .where(inArray(introductionMemberProfiles.airtableRecordId, [...preparedById.keys()]))
     : [];
-  const storedHashById = new Map(storedRows.map((r) => [r.airtableRecordId, r.profileHash]));
+  const storedById = new Map(storedRows.map((r) => [r.airtableRecordId, r]));
+
+  // On all-cities runs we walk the namespace once (reused by reconciliation)
+  // and use it to detect members whose ledger says "synced" but whose vectors
+  // are actually missing (e.g. deleted by a pause cleanup) — those must be
+  // re-embedded, never skipped.
+  const namespaceVectorIds: string[] = [];
+  let namespaceIdSet: Set<string> | null = null;
+  if (isAllCities) {
+    deps.log(`Listing existing vector ids in namespace "${namespace}"...`);
+    namespaceVectorIds.push(...(await deps.pinecone.listAllIds(namespace)));
+    namespaceIdSet = new Set(namespaceVectorIds);
+  }
 
   const toEmbed: MemberEmbedInput[] = [];
   let unchanged = 0;
-  let noContent = 0;
   for (const member of prepared) {
-    if (member.noContent) {
-      noContent += 1;
-      continue;
-    }
-    if (storedHashById.get(member.record.id) === member.hash) {
-      unchanged += 1;
-      continue;
+    // Skip only members whose vectors are provably current. Ledger rows with
+    // status "error" (or any non-synced status) are re-attempted so a failed
+    // embedding batch never strands a member out of Pinecone permanently.
+    const stored = storedById.get(member.record.id);
+    if (stored && stored.profileHash === member.hash && stored.status === "synced") {
+      // The ledger only proves the hash was embedded at some point — verify
+      // the vectors still exist in the namespace before trusting it.
+      const expectedIds = member.nonEmptyKinds.map((kind) =>
+        vectorIdFor(member.record.id, kind)
+      );
+      if (!namespaceIdSet || expectedIds.every((id) => namespaceIdSet!.has(id))) {
+        unchanged += 1;
+        continue;
+      }
+      deps.log(
+        `Ledger says synced but vector(s) missing for ${member.record.id} — re-embedding`
+      );
     }
     toEmbed.push(member);
   }
 
   deps.log(
-    `Classification: ${toEmbed.length} to embed, ${unchanged} unchanged, ${noContent} without semantic content, ${noEmail} without email`
+    `Classification: ${toEmbed.length} to embed, ${unchanged} unchanged, ${noEmail} without email`
   );
 
   // ─── Dry run: report only ───
@@ -216,7 +284,7 @@ export async function runIntroProfileSync(
       `${records.length} fetched`,
       `${toEmbed.length} would embed`,
       `${unchanged} unchanged`,
-      `${noContent} skipped (no semantic content)`,
+      `${noEmail} skipped (no email)`,
     ].join(", ");
     deps.log(`Dry run complete: ${summary}`);
     return {
@@ -225,7 +293,7 @@ export async function runIntroProfileSync(
       fetched: records.length,
       embedded: 0,
       vectorsUpserted: 0,
-      skipped: noContent,
+      skipped: noEmail,
       unchanged,
       deletedVectors: 0,
       errors,
@@ -240,10 +308,15 @@ export async function runIntroProfileSync(
 
   if (toEmbed.length > 0) {
     const jobs: Array<{ member: MemberEmbedInput; kind: SemanticKind; text: string }> = [];
+    const staleKindIds: string[] = [];
     for (const member of [...toEmbed].sort((a, b) => a.record.id.localeCompare(b.record.id))) {
       for (const kind of SEMANTIC_KINDS) {
         if (member.nonEmptyKinds.includes(kind)) {
           jobs.push({ member, kind, text: member.texts[kind] });
+        } else {
+          // Content for this kind was cleared — remove the stale vector
+          // (delete is a no-op when the id doesn't exist).
+          staleKindIds.push(vectorIdFor(member.record.id, kind));
         }
       }
     }
@@ -263,6 +336,10 @@ export async function runIntroProfileSync(
         },
       }));
       vectorsUpserted = await deps.pinecone.upsertVectors(vectors, namespace);
+      if (staleKindIds.length > 0) {
+        await deps.pinecone.deleteByIds(staleKindIds, namespace);
+        deps.log(`Deleted ${staleKindIds.length} vector(s) for cleared kinds`);
+      }
       embedded = toEmbed.length;
       deps.log(`Upserted ${vectorsUpserted} vector(s) into namespace "${namespace}"`);
     } catch (err) {
@@ -297,7 +374,7 @@ export async function runIntroProfileSync(
         fetched: records.length,
         embedded: 0,
         vectorsUpserted: 0,
-        skipped: noContent,
+        skipped: noEmail,
         unchanged,
         deletedVectors: 0,
         errors,
@@ -307,9 +384,9 @@ export async function runIntroProfileSync(
     }
   }
 
-  // ─── Persist profile ledger (only members with semantic content) ───
+  // ─── Persist profile ledger ───
   const embeddedIds = new Set(toEmbed.map((m) => m.record.id));
-  const ledgerRows = prepared.filter((m) => !m.noContent);
+  const ledgerRows = prepared;
   if (ledgerRows.length > 0) {
     await deps.db
       .insert(introductionMemberProfiles)
@@ -341,27 +418,25 @@ export async function runIntroProfileSync(
   // ─── Reconcile stale vectors (all-cities runs only) ───
   let deletedVectors = 0;
   if (isAllCities) {
-    deps.log(`Reconciling namespace "${namespace}"...`);
-    const activeIds = new Set(records.map((r) => r.id));
-    const vectorIds = await deps.pinecone.listAllIds(namespace);
-    const stale: string[] = [];
-    for (const vectorId of vectorIds) {
-      const base = recordIdFromVectorId(vectorId);
-      if (!base || !activeIds.has(base)) stale.push(vectorId);
-    }
-    if (stale.length > 0) {
-      deps.log(`Deleting ${stale.length} stale vector(s)`);
-      await deps.pinecone.deleteByIds(stale, namespace);
-      deletedVectors = stale.length;
-    } else {
-      deps.log(`No stale vectors (namespace has ${vectorIds.length} vector(s))`);
-    }
+    const reconciled = await reconcileSemanticNamespace(
+      {
+        airtable: deps.airtable,
+        pinecone: deps.pinecone,
+        log: deps.log,
+      },
+      {
+        namespace,
+        activeRecordIds: new Set(records.map((r) => r.id)),
+        vectorIds: namespaceVectorIds,
+      }
+    );
+    deletedVectors = reconciled.deletedVectors;
   }
 
   const summary = [
     `${embedded} embedded (${vectorsUpserted} vectors)`,
     `${unchanged} unchanged`,
-    `${noContent} skipped (no semantic content)`,
+    `${noEmail} skipped (no email)`,
     deletedVectors ? `${deletedVectors} stale vectors deleted` : null,
   ]
     .filter(Boolean)
@@ -374,7 +449,7 @@ export async function runIntroProfileSync(
     fetched: records.length,
     embedded,
     vectorsUpserted,
-    skipped: noContent,
+    skipped: noEmail,
     unchanged,
     deletedVectors,
     errors,

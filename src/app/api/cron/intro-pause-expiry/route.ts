@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, connection } from "next/server";
 import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
 import {
   autoResumeExpiredPauses,
@@ -22,6 +22,7 @@ export const maxDuration = 120;
  *   PAUSE_EXPIRY_CRON_ENABLED=true   enables the route (fail-closed otherwise)
  */
 export async function GET(request: Request) {
+  await connection();
   const denied = rejectUnauthorizedCron(request);
   if (denied) return denied;
 
@@ -63,5 +64,6 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  await connection();
   return GET(request);
 }

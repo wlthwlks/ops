@@ -11,6 +11,7 @@ import {
   verifyMemberstackToken,
 } from "@/lib/forms/memberstack/auth";
 import { confirmCheckoutForMember } from "@/lib/forms/billing/confirm-checkout";
+import { syncMemberSemanticProfile } from "@/lib/introduction/member-profile-sync";
 import { FormsError } from "@/lib/forms/errors";
 import { enforcePublicWriteRateLimit } from "@/lib/forms/http";
 
@@ -53,6 +54,14 @@ export async function POST(request: Request) {
       memberstackRaw: member.raw,
       checkoutSessionId: sessionId,
     });
+
+    // Create/refresh the member's semantic Pinecone vectors as soon as they
+    // pay — right after the new-paid-member Slack notification that runs
+    // inside the confirmation flow. Best-effort: never blocks or fails the
+    // payment response.
+    if (result.record && result.paymentConfirmed && !result.shadowed) {
+      await syncMemberSemanticProfile(result.record);
+    }
 
     return withCors(
       NextResponse.json({

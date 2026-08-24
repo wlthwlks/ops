@@ -27,6 +27,10 @@
     {
       "path": "/api/cron/intro-pause-expiry",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/pinecone-semantic-cleanup",
+      "schedule": "0 * * * *"
     }
   ]
 }

@@ -19,6 +19,7 @@
     "airtable:update-intro-fields": "npx tsx scripts/update-intro-fields.ts",
     "airtable:import-history": "npx tsx scripts/import-introduction-history.ts",
     "intro:backfill-embeddings": "npx tsx scripts/backfill-intro-embeddings.ts",
+    "intro:backfill-embeddings:local": "npx tsx scripts/backfill-intro-embeddings.ts --env-file=.env.local",
     "airtable:backfill-service-access": "npx tsx scripts/backfill-service-access-until.ts",
     "airtable:reconcile-stripe-customers": "npx tsx scripts/reconcile-stripe-customer-ids.ts",
     "airtable:historical-stripe-repair": "npx tsx scripts/sync-paying-stripe-members-to-airtable.ts",

@@ -37,6 +37,7 @@ import { FormsError } from "@/lib/forms/errors";
 import { isInProgressOnboarding } from "@/lib/forms/onboarding/onboarding-status";
 import { notifySignupPaidMemberOnSlack } from "@/lib/forms/billing/slack-paid-notify";
 import { introPauseClearPatch } from "@/lib/introduction/pause-state";
+import type { AirtableRecord } from "@/lib/integrations/airtable";
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -393,6 +394,8 @@ export type ConfirmCheckoutResult = {
   shadowed?: boolean;
   qualificationMode?: string;
   ownershipMethod?: string;
+  /** Airtable member record after a successful payment write (null otherwise). */
+  record?: AirtableRecord | null;
 };
 
 export async function confirmCheckoutForMember(input: {
@@ -946,6 +949,7 @@ export async function confirmCheckoutForMember(input: {
     paymentConfirmed: result.status === "updated" || result.status === "shadowed",
     status: result.status,
     stripeCustomerId,
+    record: result.record ?? null,
     reason:
       result.status === "updated"
         ? `Paid/Active + Stripe Price ID=${primaryPriceId || "—"} Status=${subscriptionStatus || "active"} Memberstack Plan ID=${planIdToPersist || "—"}`

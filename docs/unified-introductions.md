@@ -28,6 +28,8 @@ Legacy systems run untouched until the cutover steps below.
 - `pair-history.ts` (repeat history: new ledger + legacy match_events union)
 - `geo-cache.ts` (cached Google geocoding, haversine)
 - `semantic-profile.ts` (semantic-only embedding texts + hashes)
+- `member-profile-sync.ts` (write-behind single-member sync for payment/profile-update hooks; pause deletion)
+- `preplan-sync.ts` (blocking pre-match sync — previews and the city scheduler abort when it fails)
 - `scoring.ts` (7 normalized 0–1 components + weighted combination)
 - `grouping.ts` (deterministic seeded city grouping with locks)
 - `plan.ts` (preview orchestration + plan edits)
@@ -42,7 +44,7 @@ Legacy systems run untouched until the cutover steps below.
 
 ### Sync op + scripts
 - `src/lib/ops/sync-intro-profiles.ts` (op `sync-intro-profiles`)
-- `scripts/backfill-intro-embeddings.ts` (npm `intro:backfill-embeddings`)
+- `scripts/backfill-intro-embeddings.ts` (npm `intro:backfill-embeddings`; local env via `intro:backfill-embeddings:local` or `--env-file=.env.local`)
 
 ### API routes (`src/app/api/introductions/`)
 - `config`, `profiles`, `profiles/[profileId]`, `profiles/[profileId]/versions`
@@ -53,6 +55,7 @@ Legacy systems run untouched until the cutover steps below.
   `templates/[templateId]/publish`, `templates/[templateId]/restore`,
   `templates/preview`, `templates/[templateId]/test-send`
 - Cron: `src/app/api/cron/intro-deliveries` (worker), `src/app/api/cron/intro-city-scheduler`
+- Cron: `src/app/api/cron/pinecone-semantic-cleanup` (hourly self-healing `intro_v2` sync, env-gated `INTRO_PINECONE_CLEANUP_CRON_ENABLED`)
 - Webhook: `src/app/api/webhooks/resend`
 
 ### Ops UI (`src/app/(dashboard)/introductions/`)
@@ -151,9 +154,11 @@ Reused: `POSTGRES_URL`, `AIRTABLE_GET_DATA_TOKEN`, `AIRTABLE_BASE_ID`,
 ```bash
 npm run db:migrate:preview          # preview DB
 npm run db:migrate:prod             # production (after review)
-npx tsx scripts/backfill-intro-embeddings.ts --dry-run
+npx tsx scripts/backfill-intro-embeddings.ts --dry-run        # .env (default)
 npm run intro:backfill-embeddings   # all cities (idempotent, hash-skipped)
 npx tsx scripts/backfill-intro-embeddings.ts --city=London
+npm run intro:backfill-embeddings:local                       # .env.local (e.g. preview)
+npx tsx scripts/backfill-intro-embeddings.ts --env-file=.env.local --dry-run
 ```
 
 Repeat-pair avoidance already includes legacy data: the new ledger (with the

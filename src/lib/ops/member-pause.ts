@@ -9,6 +9,10 @@
 import { createAirtableClient, type AirtableClient, type AirtableRecord } from "@/lib/integrations/airtable";
 import { MEMBERS_TABLE, MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 import { parsePauseUntil, resolveIntroPauseState } from "@/lib/introduction/pause-state";
+import {
+  deleteMemberSemanticVectors,
+  syncMemberSemanticProfile,
+} from "@/lib/introduction/member-profile-sync";
 
 const PAUSE_FIELDS = [
   MEMBER_FIELDS.name,
@@ -121,7 +125,7 @@ export async function setMemberPause(
       id: input.airtableRecordId,
       fields: {
         [MEMBER_FIELDS.recurringIntroStatus]: "Paused",
-        [MEMBER_FIELDS.recurringPauseUntil]: pauseUntilValue,
+        [MEMBER_FIELDS.recurringPauseUntil]: pauseUntilValue || null,
       },
     },
   ]);
@@ -130,6 +134,8 @@ export async function setMemberPause(
     indefinite: !pauseUntilValue,
   });
   const record = await airtable.getRecord(MEMBERS_TABLE, input.airtableRecordId);
+  // Paused members leave the semantic namespace immediately (best-effort).
+  await deleteMemberSemanticVectors(input.airtableRecordId);
   return { record, warnings };
 }
 
@@ -142,12 +148,14 @@ export async function resumeMemberIntros(
       id: input.airtableRecordId,
       fields: {
         [MEMBER_FIELDS.recurringIntroStatus]: "Active",
-        [MEMBER_FIELDS.recurringPauseUntil]: "",
+        [MEMBER_FIELDS.recurringPauseUntil]: null,
       },
     },
   ]);
   logPauseEvent("intro_pause_resumed", input);
   const record = await airtable.getRecord(MEMBERS_TABLE, input.airtableRecordId);
+  // Restore the semantic vectors immediately (full record was just fetched).
+  await syncMemberSemanticProfile(record);
   return { record };
 }
 

@@ -127,16 +127,35 @@ describe("runIntroProfileSync — embedding", () => {
     expect(rows[0].lastSyncedAt).not.toBeNull();
   });
 
-  it("skips members whose profile hash is unchanged", async () => {
+  it("skips members whose profile hash is unchanged and vectors exist", async () => {
     airtableList.mockResolvedValue([alice]);
     await runIntroProfileSync(makeDeps(), {});
     const firstEmbedCalls = vi.mocked(embedTexts).mock.calls.length;
+
+    // The namespace must contain the member's vectors for the skip to apply.
+    pineconeList.mockResolvedValue(
+      ["profile", "help", "expertise", "goal"].map((k) => `rec_alice1234567:${k}`)
+    );
 
     const second = await runIntroProfileSync(makeDeps(), {});
     expect(second.embedded).toBe(0);
     expect(second.unchanged).toBe(1);
     expect(vi.mocked(embedTexts).mock.calls.length).toBe(firstEmbedCalls);
     expect(pineconeUpsert).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-embeds unchanged members whose vectors are missing from the namespace", async () => {
+    airtableList.mockResolvedValue([alice]);
+    await runIntroProfileSync(makeDeps(), {});
+    const firstEmbedCalls = vi.mocked(embedTexts).mock.calls.length;
+
+    // Ledger says synced, but the vectors were deleted (e.g. pause cleanup).
+    pineconeList.mockResolvedValue([]);
+
+    const second = await runIntroProfileSync(makeDeps(), {});
+    expect(second.embedded).toBe(1);
+    expect(vi.mocked(embedTexts).mock.calls.length).toBe(firstEmbedCalls + 1);
+    expect(pineconeUpsert).toHaveBeenCalledTimes(2);
   });
 
   it("re-embeds when the semantic profile changed", async () => {
@@ -154,19 +173,31 @@ describe("runIntroProfileSync — embedding", () => {
     expect(pineconeUpsert).toHaveBeenCalledTimes(2);
   });
 
-  it("skips members with no semantic content and no email", async () => {
-    const blank = memberRecord("rec_blank1234567", { email: "blank@example.com", City: "London" });
+  it("embeds a name-based fallback vector for members with no semantic content", async () => {
+    const blank = memberRecord("rec_blank1234567", {
+      email: "blank@example.com",
+      City: "London",
+      Name: "Blank Slate",
+    });
     const noEmail = memberRecord("rec_noemail12345", { City: "London", "Profile Bio": "Bio" });
     airtableList.mockResolvedValue([blank, noEmail]);
 
     const result = await runIntroProfileSync(makeDeps(), {});
     expect(result.success).toBe(true);
-    expect(result.embedded).toBe(0);
+    expect(result.embedded).toBe(1);
     expect(result.skipped).toBe(1);
-    expect(embedTexts).not.toHaveBeenCalled();
+    expect(embedTexts).toHaveBeenCalledTimes(1);
+    const texts = vi.mocked(embedTexts).mock.calls[0][0] as string[];
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain("Member profile: Blank Slate");
+
+    const [vectors] = pineconeUpsert.mock.calls[0];
+    expect(vectors.map((v: { id: string }) => v.id)).toEqual(["rec_blank1234567:profile"]);
 
     const rows = await db.select().from(introductionMemberProfiles);
-    expect(rows).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].airtableRecordId).toBe("rec_blank1234567");
+    expect(rows[0].status).toBe("synced");
   });
 
   it("marks ledger rows as error when embedding fails", async () => {
@@ -181,6 +212,45 @@ describe("runIntroProfileSync — embedding", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].status).toBe("error");
     expect(rows[0].lastError).toContain("openai down");
+  });
+
+  it("retries members whose ledger rows are stuck in error status", async () => {
+    airtableList.mockResolvedValue([alice]);
+    vi.mocked(embedTexts).mockRejectedValueOnce(new Error("openai down"));
+    await runIntroProfileSync(makeDeps(), {});
+
+    const failed = await db.select().from(introductionMemberProfiles);
+    expect(failed).toHaveLength(1);
+    expect(failed[0].status).toBe("error");
+
+    const second = await runIntroProfileSync(makeDeps(), {});
+    expect(second.success).toBe(true);
+    expect(second.embedded).toBe(1);
+
+    const rows = await db.select().from(introductionMemberProfiles);
+    expect(rows[0].status).toBe("synced");
+    expect(rows[0].profileHash).toBe(computeProfileHash(semanticFieldsFromRecord(alice)));
+  });
+
+  it("deletes vectors for kinds whose content was cleared", async () => {
+    airtableList.mockResolvedValue([alice]);
+    await runIntroProfileSync(makeDeps(), {});
+    expect(pineconeDelete).not.toHaveBeenCalled();
+
+    const cleared = memberRecord("rec_alice1234567", {
+      ...alice.fields,
+      "Help wanted": [],
+      "Help wanted context": "",
+    });
+    airtableList.mockResolvedValue([cleared]);
+
+    const result = await runIntroProfileSync(makeDeps(), {});
+    expect(result.success).toBe(true);
+    expect(result.embedded).toBe(1);
+    expect(pineconeDelete).toHaveBeenCalledTimes(1);
+    const [ids, namespace] = pineconeDelete.mock.calls[0];
+    expect(ids).toEqual(["rec_alice1234567:help"]);
+    expect(namespace).toBe(DEFAULT_SEMANTIC_NAMESPACE);
   });
 });
 
@@ -248,6 +318,22 @@ describe("runIntroProfileSync — city handling", () => {
     await runIntroProfileSync(makeDeps(), { cityLabel: "London" });
     const [, options] = airtableList.mock.calls[0];
     expect(options.filterByFormula).toContain('FIND(LOWER("London")');
+  });
+
+  it("includes trialing Stripe subscriptions alongside Active members", async () => {
+    airtableList.mockResolvedValue([alice]);
+    await runIntroProfileSync(makeDeps(), {});
+    const [, options] = airtableList.mock.calls[0];
+    expect(options.filterByFormula).toContain('OR({Membership} = "Active", {Stripe subscription status} = "trialing")');
+    expect(options.filterByFormula).toContain('{Cancellation date} = ""');
+    expect(options.filterByFormula).toContain('NOT({Recurring intro status} = "Paused")');
+  });
+
+  it("includes trialing members in city-scoped filters too", async () => {
+    airtableList.mockResolvedValue([alice]);
+    await runIntroProfileSync(makeDeps(), { cityLabel: "London" });
+    const [, options] = airtableList.mock.calls[0];
+    expect(options.filterByFormula).toContain('OR({Membership} = "Active", {Stripe subscription status} = "trialing")');
   });
 });
 

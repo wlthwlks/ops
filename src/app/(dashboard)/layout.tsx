@@ -18,6 +18,7 @@ import {
   SettingOutlined,
   MailOutlined,
   SendOutlined,
+  HistoryOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
@@ -73,6 +74,7 @@ const NAV: NavItem[] = [
       { key: "/introductions/settings", icon: <SettingOutlined />, label: "Matching Settings" },
       { key: "/introductions/templates", icon: <MailOutlined />, label: "Email Templates" },
       { key: "/introductions/deliveries", icon: <SendOutlined />, label: "Delivery History" },
+      { key: "/introductions/history", icon: <HistoryOutlined />, label: "Match History" },
     ],
   },
   {
@@ -107,6 +109,7 @@ function selectedKey(pathname: string): string {
   if (pathname.startsWith("/introductions/settings")) return "/introductions/settings";
   if (pathname.startsWith("/introductions/templates")) return "/introductions/templates";
   if (pathname.startsWith("/introductions/deliveries")) return "/introductions/deliveries";
+  if (pathname.startsWith("/introductions/history")) return "/introductions/history";
   if (pathname.startsWith("/introductions")) return "/introductions";
   if (pathname.startsWith("/recurring-intros")) return "/recurring-intros";
   if (pathname.startsWith("/get-matched")) return "/get-matched";

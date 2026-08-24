@@ -1,9 +1,19 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   expiredPausesFromRecords,
   pauseSnapshotFromRecord,
+  resumeMemberIntros,
+  setMemberPause,
 } from "@/lib/ops/member-pause";
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
+
+const deleteMemberSemanticVectors = vi.fn(async () => ({ status: "deleted", deleted: 4 }));
+const syncMemberSemanticProfile = vi.fn(async () => ({ status: "embedded", vectorsUpserted: 1, vectorsDeleted: 0 }));
+
+vi.mock("@/lib/introduction/member-profile-sync", () => ({
+  deleteMemberSemanticVectors: (id: string) => deleteMemberSemanticVectors(id),
+  syncMemberSemanticProfile: (record: unknown) => syncMemberSemanticProfile(record),
+}));
 
 const NOW = new Date("2026-08-20T12:00:00Z");
 
@@ -79,5 +89,84 @@ describe("expiredPausesFromRecords", () => {
       }),
     ];
     expect(expiredPausesFromRecords(rows, NOW)).toHaveLength(1);
+  });
+});
+
+describe("setMemberPause / resumeMemberIntros — Pinecone hooks", () => {
+  const updateRecords = vi.fn(async () => undefined);
+  const getRecord = vi.fn();
+
+  function makeAirtable() {
+    return {
+      updateRecords,
+      getRecord,
+    } as unknown as import("@/lib/integrations/airtable").AirtableClient;
+  }
+
+  const INPUT = {
+    airtableRecordId: "rec_pause1",
+    clerkUserId: "ops_user",
+    mode: "live",
+    pauseUntil: "2026-09-01",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getRecord.mockResolvedValue(
+      record({ [MEMBER_FIELDS.email]: "ada@x.com", [MEMBER_FIELDS.name]: "Ada" }, "rec_pause1")
+    );
+  });
+
+  it("pausing deletes the member's semantic vectors immediately", async () => {
+    await setMemberPause(INPUT, makeAirtable());
+    expect(updateRecords).toHaveBeenCalledWith(
+      "MEMBERS",
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "rec_pause1",
+          fields: expect.objectContaining({ [MEMBER_FIELDS.recurringIntroStatus]: "Paused" }),
+        }),
+      ])
+    );
+    expect(deleteMemberSemanticVectors).toHaveBeenCalledWith("rec_pause1");
+  });
+
+  it("resuming re-embeds the member's semantic vectors immediately", async () => {
+    await resumeMemberIntros(INPUT, makeAirtable());
+    expect(updateRecords).toHaveBeenCalledWith(
+      "MEMBERS",
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "rec_pause1",
+          fields: expect.objectContaining({ [MEMBER_FIELDS.recurringIntroStatus]: "Active" }),
+        }),
+      ])
+    );
+    expect(syncMemberSemanticProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "rec_pause1" })
+    );
+  });
+
+  it("sends null (not empty string) to clear the pause-until date column", async () => {
+    await setMemberPause({ ...INPUT, pauseUntil: null }, makeAirtable());
+    expect(updateRecords).toHaveBeenCalledWith(
+      "MEMBERS",
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "rec_pause1",
+          fields: expect.objectContaining({ [MEMBER_FIELDS.recurringPauseUntil]: null }),
+        }),
+      ])
+    );
+    await resumeMemberIntros(INPUT, makeAirtable());
+    expect(updateRecords).toHaveBeenCalledWith(
+      "MEMBERS",
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "rec_pause1",
+          fields: expect.objectContaining({ [MEMBER_FIELDS.recurringPauseUntil]: null }),
+        }),
+      ])
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, connection } from "next/server";
 import { createAirtableClient } from "@/lib/integrations/airtable";
 import { createKlaviyoClient } from "@/lib/integrations/klaviyo";
 import {
@@ -50,6 +50,7 @@ export const maxDuration = 300;
  *   KLAVIYO_API_REVISION            optional JSON:API revision (default 2026-07-15)
  */
 export async function POST(request: NextRequest) {
+  await connection();
   const denied = rejectUnauthorizedCron(request);
   if (denied) return denied;
 
@@ -299,5 +300,6 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  await connection();
   return POST(request);
 }

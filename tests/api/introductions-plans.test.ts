@@ -42,6 +42,12 @@ vi.mock("@/lib/introduction/plan", async (importOriginal) => {
   };
 });
 
+const syncPineconeBeforePlan = vi.fn(async () => ({ success: true, summary: "sync ok" }));
+
+vi.mock("@/lib/introduction/preplan-sync", () => ({
+  syncPineconeBeforePlan: () => syncPineconeBeforePlan(),
+}));
+
 const previewRoute = await import("@/app/api/introductions/preview/route");
 const runsRoute = await import("@/app/api/introductions/runs/route");
 const runRoute = await import("@/app/api/introductions/runs/[runId]/route");
@@ -99,6 +105,7 @@ describe("/api/introductions/preview", () => {
       mode: "read_only",
     });
     vi.mocked(plan.runIntroductionPreview).mockResolvedValue(basePreview);
+    syncPineconeBeforePlan.mockResolvedValue({ success: true, summary: "sync ok" });
   });
 
   afterEach(() => {
@@ -113,10 +120,23 @@ describe("/api/introductions/preview", () => {
     expect(body.runId).toBe("run_1");
     expect(body.report.groups).toBe(2);
     expect(Array.isArray(body.logs)).toBe(true);
+    expect(syncPineconeBeforePlan).toHaveBeenCalledTimes(1);
     expect(plan.runIntroductionPreview).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ cityCode: "rec_city_london" })
     );
+  });
+
+  it("POST aborts with 500 when the pre-match Pinecone sync fails", async () => {
+    syncPineconeBeforePlan.mockResolvedValue({
+      success: false,
+      summary: "embedding failed — openai down",
+    });
+    const response = await previewRoute.POST(post({ cityCode: "rec_city_london" }));
+    const body = await response.json();
+    expect(response.status).toBe(500);
+    expect(body.code).toBe("PINECONE_SYNC_FAILED");
+    expect(plan.runIntroductionPreview).not.toHaveBeenCalled();
   });
 
   it("POST requires an admin", async () => {

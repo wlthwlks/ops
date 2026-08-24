@@ -401,6 +401,7 @@ Reports land in `reports/city-relation-repair/<timestamp>/`.
 | `/api/recurring-intros/resolve-emails` | POST | Cross-reference Airtable members with Slack users |
 | `/api/recurring-intros/slack-users` | POST | Fetch all workspace Slack users |
 | `/api/cron/recurring-intros` | GET | Vercel cron entry (bypasses Clerk, protected by CRON_SECRET) |
+| `/api/cron/pinecone-semantic-cleanup` | GET | Hourly self-healing sync of the `intro_v2` namespace (embeds missing/changed, deletes stale; env-gated: `INTRO_PINECONE_CLEANUP_CRON_ENABLED=true`) |
 
 ### Plan/Send flow
 

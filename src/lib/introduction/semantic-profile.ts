@@ -12,7 +12,8 @@ import type { AirtableRecord } from "@/lib/integrations/airtable";
  * independently and configurably, and must not be hidden inside the vector.
  *
  * Each member produces up to four vectors in the semantic namespace:
- *   {recordId}:profile   — overall semantic profile (AI correlation)
+ *   {recordId}:profile   — overall semantic profile (AI correlation); always
+ *                          present (name-based fallback for empty profiles)
  *   {recordId}:help      — help-wanted text (complementarity A→B)
  *   {recordId}:expertise — expertise text (complementarity B→A)
  *   {recordId}:goal      — current 90-day goal text (goal relevance)
@@ -22,6 +23,7 @@ export const SEMANTIC_KINDS = ["profile", "help", "expertise", "goal"] as const;
 export type SemanticKind = (typeof SEMANTIC_KINDS)[number];
 
 export interface SemanticProfileFields {
+  name?: string | null;
   professionalHeadline?: string | null;
   profileBio?: string | null;
   businessDescription?: string | null;
@@ -79,6 +81,12 @@ export function buildSemanticTexts(fields: SemanticProfileFields): SemanticTexts
     .filter(Boolean)
     .join(". ");
 
+  // Members with zero semantic content still need a Pinecone record (created
+  // as soon as they pay). The name-based fallback keeps the text deterministic
+  // (hash-stable) and non-empty (OpenAI rejects empty embedding input).
+  const name = fieldToText(fields.name);
+  const fallbackProfileText = name ? `Member profile: ${name}` : "Member profile";
+
   const helpText = [fieldToText(fields.helpWanted), fieldToText(fields.helpWantedContext)]
     .filter(Boolean)
     .join(". ");
@@ -89,7 +97,12 @@ export function buildSemanticTexts(fields: SemanticProfileFields): SemanticTexts
 
   const goalText = fieldToText(fields.ninetyDayGoal);
 
-  return { profileText, helpText, expertiseText, goalText };
+  return {
+    profileText: profileText || fallbackProfileText,
+    helpText,
+    expertiseText,
+    goalText,
+  };
 }
 
 /** Stable change-detection hash over the four semantic texts. */
@@ -129,7 +142,14 @@ export function recordIdFromVectorId(vectorId: string): string | null {
 /** Map Airtable MEMBERS fields to SemanticProfileFields using the canonical field names. */
 export function semanticFieldsFromRecord(record: AirtableRecord): SemanticProfileFields {
   const f = record.fields;
+  const name =
+    fieldToText(f[MEMBER_FIELDS.name]) ||
+    [f[MEMBER_FIELDS.firstName], f[MEMBER_FIELDS.lastName]]
+      .map((v) => fieldToText(v))
+      .filter(Boolean)
+      .join(" ");
   return {
+    name,
     professionalHeadline: String(f[MEMBER_FIELDS.professionalHeadline] ?? ""),
     profileBio: String(f[MEMBER_FIELDS.profileBio] ?? ""),
     businessDescription: String(f[MEMBER_FIELDS.businessDescription] ?? ""),
@@ -140,14 +160,4 @@ export function semanticFieldsFromRecord(record: AirtableRecord): SemanticProfil
     expertiseContext: String(f[MEMBER_FIELDS.expertiseContext] ?? ""),
     connectionType: fieldToText(f[MEMBER_FIELDS.connectionType]),
   };
-}
-
-/** True when none of the four semantic texts has any content. */
-export function hasNoSemanticContent(texts: SemanticTexts): boolean {
-  return (
-    !texts.profileText &&
-    !texts.helpText &&
-    !texts.expertiseText &&
-    !texts.goalText
-  );
 }

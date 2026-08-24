@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, connection } from "next/server";
 import { db } from "@/db";
 import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
 import { getIntroductionsMode, IntroductionsConfigError } from "@/lib/introduction/runtime-mode";
@@ -10,7 +10,6 @@ import {
   type CitySchedulerDeps,
 } from "@/lib/introduction/scheduler";
 
-export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 /**
@@ -21,6 +20,7 @@ export const maxDuration = 300;
  * delivery worker.
  */
 export async function POST(request: NextRequest) {
+  await connection();
   const unauthorized = rejectUnauthorizedCron(request);
   if (unauthorized) return unauthorized;
 
@@ -57,13 +57,28 @@ export async function POST(request: NextRequest) {
 
   try {
     const result = await runCityIntroductionScheduler(deps);
+    console.log(
+      JSON.stringify({
+        event: "intro_city_scheduler_tick",
+        live,
+        dueCities: result.dueCities,
+        results: result.results.map((r) => ({
+          cityCode: r.cityCode,
+          outcome: r.outcome,
+          runId: r.runId,
+          error: r.error,
+        })),
+      })
+    );
     return jsonOk({ ...result, logs });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    console.log(JSON.stringify({ event: "intro_city_scheduler_tick", skipped: true, reason: "scheduler_failed", error: message }));
     return jsonOk({ processed: false, skipped: true, reason: "scheduler_failed", error: message }, 500);
   }
 }
 
 export async function GET(request: NextRequest) {
+  await connection();
   return POST(request);
 }
