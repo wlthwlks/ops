@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Alert, App, Button, Card, Descriptions, Flex, Select, Space, Table, Tag, Typography } from "antd";
-import { ReloadOutlined } from "@ant-design/icons";
+import { Alert, App, Button, Card, Descriptions, Flex, Popconfirm, Select, Space, Table, Tag, Typography } from "antd";
+import { ReloadOutlined, ThunderboltOutlined } from "@ant-design/icons";
 
 const { Title, Text } = Typography;
 
@@ -58,6 +58,7 @@ export default function IntroductionsDeliveriesPage() {
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [workerLoading, setWorkerLoading] = useState(false);
 
   const loadRuns = useCallback(async () => {
     try {
@@ -88,6 +89,31 @@ export default function IntroductionsDeliveriesPage() {
     [message]
   );
 
+  const runWorkerNow = useCallback(async () => {
+    setWorkerLoading(true);
+    try {
+      const res = await fetch("/api/introductions/deliveries/run-worker", {
+        method: "POST",
+      });
+      const body = await res.json();
+      if (!res.ok || body.processed === false) {
+        message.error(body.message ?? body.reason ?? "Worker tick did not run");
+        return;
+      }
+      message.success(
+        `Worker tick done: ${body.claimed ?? 0} claimed, ${body.sent ?? 0} sent, ${body.failed ?? 0} failed, ${body.deferred ?? 0} deferred`
+      );
+      if (selectedRunId) {
+        void loadDeliveries(selectedRunId);
+      }
+      void loadRuns();
+    } catch {
+      message.error("Could not run the delivery worker");
+    } finally {
+      setWorkerLoading(false);
+    }
+  }, [message, selectedRunId, loadDeliveries, loadRuns]);
+
   useEffect(() => {
     void loadRuns();
     const params = new URLSearchParams(window.location.search);
@@ -113,9 +139,23 @@ export default function IntroductionsDeliveriesPage() {
         <Title level={4} style={{ margin: 0 }}>
           Delivery History
         </Title>
-        <Button icon={<ReloadOutlined />} onClick={() => selectedRunId && void loadDeliveries(selectedRunId)}>
-          Refresh
-        </Button>
+        <Space>
+          <Popconfirm
+            title="Send pending deliveries now via Resend?"
+            description="Runs one delivery-worker tick. Real emails are sent to pending production/canary recipients."
+            onConfirm={() => void runWorkerNow()}
+          >
+            <Button icon={<ThunderboltOutlined />} loading={workerLoading}>
+              Run delivery worker now
+            </Button>
+          </Popconfirm>
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => selectedRunId && void loadDeliveries(selectedRunId)}
+          >
+            Refresh
+          </Button>
+        </Space>
       </Flex>
 
       <Flex gap={16} align="center">
