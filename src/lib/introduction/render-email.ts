@@ -3,6 +3,10 @@ import {
   extractPlaceholders,
   KNOWN_PLACEHOLDERS,
 } from "./templates";
+import {
+  parseSocialMediaField,
+  SOCIAL_PLATFORM_LABELS,
+} from "@/lib/forms/validation/profile-urls";
 
 /**
  * Server-side rendering of introduction group emails. Admin templates only
@@ -124,7 +128,10 @@ export function websiteHref(value: string | null | undefined): string | null {
   return `https://${raw}`;
 }
 
-export function renderMemberCard(member: MemberCardData): string {
+export function renderMemberCard(
+  member: MemberCardData,
+  optionLabels?: Map<string, string> | null
+): string {
   const displayName = member.fullName || member.firstName || member.key;
   const lines: string[] = [];
   const title = member.professionalHeadline
@@ -144,7 +151,19 @@ export function renderMemberCard(member: MemberCardData): string {
       `<p style="margin: 0 0 4px 0;"><strong>Phone number:</strong> ${esc(member.phone)}</p>`
     );
   }
-  if (member.socialMedia) {
+  const socialLinks = member.socialMedia ? parseSocialMediaField(member.socialMedia) : [];
+  if (socialLinks.length > 0) {
+    lines.push(
+      `<p style="margin: 0 0 4px 0;"><strong>Social media:</strong> ${socialLinks
+        .map(
+          (link) =>
+            `<a href="${esc(link.url)}" rel="noopener noreferrer">${esc(
+              SOCIAL_PLATFORM_LABELS[link.platform] ?? link.platform
+            )}</a>`
+        )
+        .join(" · ")}</p>`
+    );
+  } else if (member.socialMedia) {
     lines.push(
       `<p style="margin: 0 0 4px 0;"><strong>Social media:</strong> ${esc(member.socialMedia)}</p>`
     );
@@ -156,17 +175,18 @@ export function renderMemberCard(member: MemberCardData): string {
         `<a href="${esc(href)}" rel="noopener noreferrer">${esc(member.website)}</a></p>`
     );
   }
+  const optionLabel = (code: string) => optionLabels?.get(code) ?? prettifyCode(code);
   if (member.helpWanted.length > 0) {
     lines.push(
       `<p style="margin: 0 0 4px 0;"><strong>Seeking help with:</strong> ${esc(
-        member.helpWanted.map(prettifyCode).join(", ")
+        member.helpWanted.map(optionLabel).join(", ")
       )}</p>`
     );
   }
   if (member.expertise.length > 0) {
     lines.push(
       `<p style="margin: 0 0 4px 0;"><strong>Can help with:</strong> ${esc(
-        member.expertise.map(prettifyCode).join(", ")
+        member.expertise.map(optionLabel).join(", ")
       )}</p>`
     );
   }
@@ -219,6 +239,8 @@ export interface RenderIntroductionEmailInput {
   groupScoreBreakdown?: Partial<Record<ScoreComponent, number>> | null;
   /** "HH:mm" local time for {{meetup_suggestion}}; defaults to 10:00. */
   meetupTime?: string;
+  /** Catalog option code → display label for help/expertise cards. */
+  optionLabels?: Map<string, string> | null;
 }
 
 export interface RenderedEmail {
@@ -231,7 +253,9 @@ export function renderIntroductionEmail(input: RenderIntroductionEmailInput): Re
     .map((m) => m.firstName ?? (m.fullName ? m.fullName.split(" ")[0] : ""))
     .filter(Boolean) as string[];
 
-  const membersBlock = input.members.map(renderMemberCard).join("\n");
+  const membersBlock = input.members
+    .map((member) => renderMemberCard(member, input.optionLabels))
+    .join("\n");
   const whyBlock = renderWhyMatched(input.groupScoreBreakdown);
   const coordination = renderCoordinationText();
 
@@ -284,7 +308,8 @@ export const SAMPLE_MEMBER_CARDS: MemberCardData[] = [
     helpWanted: ["FUNDRAISING"],
     expertise: ["GROWTH_MARKETING"],
     phone: "+44 7700 900123",
-    socialMedia: "@sarahsmith",
+    socialMedia:
+      "linkedin|https://www.linkedin.com/in/sarahsmith\ninstagram|https://www.instagram.com/sarahsmith",
     website: "www.sarahsmith.example",
   },
   {
@@ -298,7 +323,7 @@ export const SAMPLE_MEMBER_CARDS: MemberCardData[] = [
     helpWanted: ["HIRING"],
     expertise: ["FUNDRAISING", "FINANCE"],
     phone: "+44 7700 900456",
-    socialMedia: "@priyapatel",
+    socialMedia: "linkedin|https://www.linkedin.com/in/priyapatel",
     website: "www.priyapatel.example",
   },
   {
@@ -312,7 +337,7 @@ export const SAMPLE_MEMBER_CARDS: MemberCardData[] = [
     helpWanted: ["SALES"],
     expertise: ["PRODUCT"],
     phone: "+44 7700 900789",
-    socialMedia: "@jamesokafor",
+    socialMedia: "instagram|https://www.instagram.com/jamesokafor",
     website: "www.jamesokafor.example",
   },
 ];

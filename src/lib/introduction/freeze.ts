@@ -14,6 +14,7 @@ import {
 import { getGlobalIntroductionConfig } from "./settings";
 import { resolveEffectiveTemplate } from "./templates";
 import { renderIntroductionEmail } from "./render-email";
+import { loadMatchingOptionsCatalog } from "@/lib/forms/reference-data/matching-options-catalog";
 import type { PlanMemberRegistryEntry } from "./plan";
 import type { ScoreComponent } from "./profiles";
 
@@ -234,6 +235,15 @@ export async function freezeIntroductionRun(
   let deliveryCount = 0;
   let groupIndex = 0;
 
+  // Resolve help/expertise option record ids to display labels for the
+  // member cards. Falls back to prettified codes when the catalog is
+  // unavailable (e.g., missing env credentials).
+  const catalog = await loadMatchingOptionsCatalog();
+  const optionLabels = new Map<string, string>();
+  for (const option of [...catalog.helpWantedOptions, ...catalog.expertiseOptions]) {
+    if (option.code && option.label) optionLabels.set(option.code, option.label);
+  }
+
   for (const { group, members } of grouped) {
     const originalEmails = members.map((m) => m.emailSnapshot);
     if (members.length === 0) {
@@ -271,6 +281,7 @@ export async function freezeIntroductionRun(
         website: m.snapshot?.website ?? null,
       })),
       groupScoreBreakdown: scoreBreakdown,
+      optionLabels,
     });
 
     await db
@@ -352,6 +363,14 @@ export async function freezeIntroductionRun(
       totalDeliveries: deliveryCount,
     })
     .where(eq(introductionRuns.id, run.id));
+
+  // Frozen groups become claimable by the delivery worker. They stay
+  // "planned" until this point so an edit or a failed freeze can never
+  // leak a half-frozen group into the send queue.
+  await db
+    .update(introductionGroups)
+    .set({ status: "approved", claimedAt: null, sendError: null })
+    .where(eq(introductionGroups.runId, run.id));
 
   return {
     success: true,

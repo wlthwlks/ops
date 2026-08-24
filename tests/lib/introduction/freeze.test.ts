@@ -7,6 +7,7 @@ import {
   FreezeError,
 } from "@/lib/introduction/freeze";
 import { runIntroductionPreview, applyPlanEdit, type IntroductionPlanDeps } from "@/lib/introduction/plan";
+import { processDeliveryBatch } from "@/lib/introduction/delivery-queue";
 import {
   introductionRuns,
   introductionGroups,
@@ -16,6 +17,7 @@ import {
 } from "@/db/schema";
 import { setGlobalIntroductionConfig, upsertCitySettings } from "@/lib/introduction/settings";
 import { ensureDefaultTemplate, createEmailTemplate, publishEmailTemplate } from "@/lib/introduction/templates";
+import { setMatchingOptionsCatalogForTests } from "@/lib/forms/reference-data/matching-options-catalog";
 import { eq } from "drizzle-orm";
 import type { AirtableClient, AirtableRecord } from "@/lib/integrations/airtable";
 import type { PineconeClient, VectorRecord } from "@/lib/integrations/pinecone";
@@ -171,6 +173,7 @@ describe("freezeIntroductionRun", () => {
 
     const groups = await db.select().from(introductionGroups).where(eq(introductionGroups.runId, runId));
     for (const group of groups) {
+      expect(group.status).toBe("approved");
       expect(group.emailSubjectSnapshot).not.toBeNull();
       expect(group.emailSubjectSnapshot).toContain("London");
       expect(group.emailHtmlSnapshot).toContain("reply-all");
@@ -229,6 +232,29 @@ describe("freezeIntroductionRun", () => {
     expect(groups[0].emailHtmlSnapshot).toContain("August 12th at 2:30 pm");
   });
 
+  it("renders catalog option labels for help/expertise cards (not raw record ids)", async () => {
+    setMatchingOptionsCatalogForTests({
+      source: "airtable",
+      fetchedAt: new Date().toISOString(),
+      helpWantedOptions: [
+        { code: "FUNDRAISING", label: "Fundraising support", kind: "help" },
+      ],
+      expertiseOptions: [
+        { code: "GROWTH_MARKETING", label: "Growth marketing", kind: "expertise" },
+      ],
+    });
+    await ensureDefaultTemplate(db);
+    const runId = await makePlan();
+    await freezeIntroductionRun(db, { runId, deliveryMode: "simulation" });
+
+    const groups = await db
+      .select()
+      .from(introductionGroups)
+      .where(eq(introductionGroups.runId, runId));
+    expect(groups[0].emailHtmlSnapshot).toContain("Fundraising support");
+    expect(groups[0].emailHtmlSnapshot).toContain("Growth marketing");
+  });
+
   it("rejects re-freezing an approved run", async () => {
     await ensureDefaultTemplate(db);
     const runId = await makePlan();
@@ -273,6 +299,39 @@ describe("freezeIntroductionRun", () => {
 
     const runs = await db.select().from(introductionRuns).where(eq(introductionRuns.id, runId));
     expect(runs[0].status).toBe("planned");
+
+    // A failed freeze must never leave claimable groups behind.
+    const groups = await db.select().from(introductionGroups).where(eq(introductionGroups.runId, runId));
+    for (const group of groups) {
+      expect(group.status).toBe("planned");
+    }
+  });
+
+  it("frozen groups are claimable by the delivery worker (regression: freeze→claim)", async () => {
+    await ensureDefaultTemplate(db);
+    const runId = await makePlan();
+
+    const freeze = await freezeIntroductionRun(db, { runId, deliveryMode: "production" });
+    expect(freeze.success).toBe(true);
+
+    const sender = { sendBatch: vi.fn() };
+    sender.sendBatch.mockImplementation(async (messages: Array<{ groupId: string }>) =>
+      messages.map((m) => ({ ok: true, permanent: false, id: `resend-${m.groupId}` }))
+    );
+
+    const tick = await processDeliveryBatch(
+      {
+        db,
+        sender,
+        log: () => {},
+        live: true,
+        now: new Date("2026-08-17T10:00:00Z"),
+      },
+      { batchSize: 10 }
+    );
+    expect(tick.claimed).toBeGreaterThan(0);
+    expect(tick.sent).toBe(tick.claimed);
+    expect(sender.sendBatch).toHaveBeenCalledTimes(1);
   });
 
   it("provider-test mode uses provider-test addresses", async () => {

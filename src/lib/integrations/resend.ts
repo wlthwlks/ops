@@ -122,19 +122,28 @@ export function createResendClient(config: ResendConfig) {
         console.error("Resend batch rejected:", message);
         return messages.map(() => ({ ok: false, permanent: false, id: null, error: message }));
       }
+      // The Resend SDK wraps the batch response one level deeper than its
+      // own types suggest: runtime shape is
+      //   { data: { data: [{ id }], errors: [{ index, message }] } }
+      // while the SDK types claim a flat `{ data: [{ id }] }`. Accept both.
       const success = response as unknown as {
-        data?: Array<{ id: string }>;
+        data?:
+          | Array<{ id: string }>
+          | { data?: Array<{ id: string }>; errors?: Array<{ index: number; message: string }> };
         errors?: Array<{ index: number; message: string }>;
       };
+      const payload = Array.isArray(success.data)
+        ? { data: success.data, errors: success.errors ?? [] }
+        : { data: success.data?.data ?? [], errors: success.data?.errors ?? [] };
       const errors = new Map(
-        (success.errors ?? []).map((e: { index: number; message: string }) => [e.index, e.message])
+        (payload.errors ?? []).map((e: { index: number; message: string }) => [e.index, e.message])
       );
       return messages.map((_, index) => {
         const error = errors.get(index);
         if (error) {
           return { ok: false, permanent: isPermanentResendError(error), id: null, error };
         }
-        const id = success.data?.[index]?.id;
+        const id = payload.data[index]?.id;
         if (id) return { ok: true, permanent: false, id, error: null };
         return { ok: false, permanent: false, id: null, error: "No message id returned" };
       });

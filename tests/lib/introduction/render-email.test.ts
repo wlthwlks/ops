@@ -35,7 +35,8 @@ const members: MemberCardData[] = [
     helpWanted: ["FUNDRAISING"],
     expertise: ["GROWTH_MARKETING"],
     phone: "+44 7700 900123",
-    socialMedia: "@sarahsmith",
+    socialMedia:
+      "linkedin|https://www.linkedin.com/in/sarahsmith\ninstagram|https://www.instagram.com/sarahsmith",
     website: "www.sarahsmith.example",
   },
   {
@@ -100,10 +101,53 @@ describe("renderMemberCard", () => {
     expect(html).toContain("Phone number:");
     expect(html).toContain("+44 7700 900123");
     expect(html).toContain("Social media:");
-    expect(html).toContain("@sarahsmith");
+    expect(html).toContain('href="https://www.linkedin.com/in/sarahsmith"');
+    expect(html).toContain("LinkedIn");
+    expect(html).toContain('href="https://www.instagram.com/sarahsmith"');
+    expect(html).toContain("Instagram");
+    expect(html).not.toContain("linkedin|https");
     expect(html).toContain("Website:");
     expect(html).toContain('href="https://www.sarahsmith.example"');
     expect(html).toContain("www.sarahsmith.example");
+  });
+
+  it("parses social media links beautifully (single and multiple platforms)", () => {
+    const single = renderMemberCard({
+      ...members[1],
+      socialMedia: "linkedin|https://www.linkedin.com/in/priyapatel",
+    });
+    expect(single).toContain("LinkedIn");
+    expect(single).toContain('href="https://www.linkedin.com/in/priyapatel"');
+
+    const multi = renderMemberCard({
+      ...members[1],
+      socialMedia:
+        "instagram|https://www.instagram.com/priya\nlinkedin|https://www.linkedin.com/in/priyapatel",
+    });
+    expect(multi).toContain("Instagram");
+    expect(multi).toContain("LinkedIn");
+    expect(multi).toContain('href="https://www.instagram.com/priya"');
+    expect(multi).toContain('href="https://www.linkedin.com/in/priyapatel"');
+    expect(multi).not.toContain("|");
+  });
+
+  it("falls back to raw escaped text when social media cannot be parsed", () => {
+    const html = renderMemberCard({
+      ...members[1],
+      socialMedia: "call me on myspace",
+    });
+    expect(html).toContain("Social media:");
+    expect(html).toContain("call me on myspace");
+    expect(html).not.toContain("<a ");
+  });
+
+  it("never links unsafe social URLs", () => {
+    const html = renderMemberCard({
+      ...members[1],
+      socialMedia: "linkedin|javascript:alert(1)",
+    });
+    expect(html).not.toContain('href="javascript:');
+    expect(html).not.toContain("LinkedIn");
   });
 
   it("normalizes and escapes website values safely", () => {

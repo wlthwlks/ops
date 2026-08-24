@@ -146,4 +146,27 @@ describe("setMemberPause / resumeMemberIntros — Pinecone hooks", () => {
       expect.objectContaining({ id: "rec_pause1" })
     );
   });
+
+  it("sends null (not empty string) to clear the pause-until date column", async () => {
+    await setMemberPause({ ...INPUT, pauseUntil: null }, makeAirtable());
+    expect(updateRecords).toHaveBeenCalledWith(
+      "MEMBERS",
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "rec_pause1",
+          fields: expect.objectContaining({ [MEMBER_FIELDS.recurringPauseUntil]: null }),
+        }),
+      ])
+    );
+    await resumeMemberIntros(INPUT, makeAirtable());
+    expect(updateRecords).toHaveBeenCalledWith(
+      "MEMBERS",
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "rec_pause1",
+          fields: expect.objectContaining({ [MEMBER_FIELDS.recurringPauseUntil]: null }),
+        }),
+      ])
+    );
+  });
 });

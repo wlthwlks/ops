@@ -125,7 +125,7 @@ export async function setMemberPause(
       id: input.airtableRecordId,
       fields: {
         [MEMBER_FIELDS.recurringIntroStatus]: "Paused",
-        [MEMBER_FIELDS.recurringPauseUntil]: pauseUntilValue,
+        [MEMBER_FIELDS.recurringPauseUntil]: pauseUntilValue || null,
       },
     },
   ]);
@@ -148,7 +148,7 @@ export async function resumeMemberIntros(
       id: input.airtableRecordId,
       fields: {
         [MEMBER_FIELDS.recurringIntroStatus]: "Active",
-        [MEMBER_FIELDS.recurringPauseUntil]: "",
+        [MEMBER_FIELDS.recurringPauseUntil]: null,
       },
     },
   ]);
