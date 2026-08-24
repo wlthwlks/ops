@@ -10,6 +10,7 @@ import { cityScheduleSchema, type CitySchedule } from "./settings";
 import { syncCitiesFromAirtable } from "./city-sync";
 import { runIntroductionPreview, type IntroductionPlanDeps } from "./plan";
 import { freezeIntroductionRun, type DeliveryMode } from "./freeze";
+import { syncPineconeBeforePlan } from "./preplan-sync";
 
 /**
  * City-level monthly scheduler for the unified introduction engine.
@@ -121,6 +122,29 @@ export async function runCityIntroductionScheduler(
 
   const due = await listDueCities(deps.db, now);
   const results: SchedulerCityResult[] = [];
+
+  // Blocking pre-match sync — fresh vectors before any matching is built.
+  // Runs once per tick (not per city). On failure the whole tick aborts and
+  // every due city stays due (next_run_at untouched, retried next hour).
+  if (due.length > 0) {
+    const preSync = await syncPineconeBeforePlan(deps);
+    if (!preSync.success) {
+      const message = `Pre-plan Pinecone sync failed: ${preSync.summary}`;
+      deps.log(message);
+      for (const city of due) {
+        const cycleDate = now.toISOString().slice(0, 10);
+        results.push({
+          cityCode: city.cityCode,
+          cycleDate,
+          outcome: "failed",
+          runId: null,
+          error: message,
+          nextRunAt: null,
+        });
+      }
+      return { processed: true, live, dueCities: due.length, results };
+    }
+  }
 
   for (const city of due) {
     const cycleDate = now.toISOString().slice(0, 10);

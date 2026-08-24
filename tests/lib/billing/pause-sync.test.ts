@@ -17,6 +17,13 @@ vi.mock("@/lib/forms/webhooks/store", () => ({
   },
 }));
 
+const deleteMemberSemanticVectors = vi.fn(async () => ({ status: "deleted", deleted: 4 }));
+
+vi.mock("@/lib/introduction/member-profile-sync", () => ({
+  deleteMemberSemanticVectors: (id: string) => deleteMemberSemanticVectors(id),
+  syncMemberSemanticProfile: vi.fn(),
+}));
+
 import {
   classifyPauseTransition,
   pauseResumeDateFromSubscription,
@@ -249,6 +256,41 @@ describe("syncSubscriptionPausedToAirtable", () => {
     });
     expect(result.status).toBe("already_up_to_date");
     expect(airtable.updateRecordsBatched).not.toHaveBeenCalled();
+  });
+
+  it("deletes the member's semantic vectors immediately on pause", async () => {
+    const airtable = mockAirtable([memberRecord()]);
+    await syncSubscriptionPausedToAirtable({
+      airtable,
+      sub: pausedSub(),
+      now: NOW,
+    });
+    expect(deleteMemberSemanticVectors).toHaveBeenCalledWith("rec1");
+  });
+
+  it("skips vector deletion when nothing changed or in dry-run", async () => {
+    const airtable = mockAirtable([
+      memberRecord({
+        [SERVICE_ACCESS_FIELD]: "2026-01-01T00:00:00.000Z",
+        [STRIPE_SUBSCRIPTION_STATUS_FIELD]: "paused",
+        [MEMBERSHIP_FIELD]: "Paused",
+      }),
+    ]);
+    await syncSubscriptionPausedToAirtable({
+      airtable,
+      sub: pausedSub(),
+      now: NOW,
+    });
+    expect(deleteMemberSemanticVectors).not.toHaveBeenCalled();
+
+    const airtable2 = mockAirtable([memberRecord()]);
+    await syncSubscriptionPausedToAirtable({
+      airtable: airtable2,
+      sub: pausedSub(),
+      now: NOW,
+      dryRun: true,
+    });
+    expect(deleteMemberSemanticVectors).not.toHaveBeenCalled();
   });
 
   it("reports no_airtable_member and never creates members", async () => {

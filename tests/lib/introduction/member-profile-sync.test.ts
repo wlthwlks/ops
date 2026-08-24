@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterAll, beforeAll, beforeEach } from "vitest";
 import { createTestDb, resetIntroductionsV2Tables } from "../../helpers/test-db";
 import {
+  deleteMemberSemanticVectors,
   syncMemberSemanticProfile,
   type MemberProfileSyncDeps,
 } from "@/lib/introduction/member-profile-sync";
@@ -25,6 +26,7 @@ let close: () => Promise<void>;
 
 const pineconeUpsert = vi.fn();
 const pineconeDelete = vi.fn();
+const pineconeFetch = vi.fn();
 const logs: string[] = [];
 
 function makeDeps(): MemberProfileSyncDeps {
@@ -32,6 +34,7 @@ function makeDeps(): MemberProfileSyncDeps {
     pinecone: {
       upsertVectors: pineconeUpsert,
       deleteByIds: pineconeDelete,
+      fetchByIds: pineconeFetch,
     } as unknown as PineconeClient,
     db,
     log: (message) => logs.push(message),
@@ -68,6 +71,7 @@ beforeEach(async () => {
   await resetIntroductionsV2Tables(db);
   pineconeUpsert.mockImplementation(async (vectors: unknown[]) => (vectors as unknown[]).length);
   pineconeDelete.mockResolvedValue(undefined);
+  pineconeFetch.mockResolvedValue(new Map());
 });
 
 describe("syncMemberSemanticProfile", () => {
@@ -119,14 +123,36 @@ describe("syncMemberSemanticProfile", () => {
     expect(vectors.map((v: { id: string }) => v.id)).toEqual(["rec_blank1234567:profile"]);
   });
 
-  it("skips as no-op when the ledger hash matches and status is synced", async () => {
+  it("skips as no-op when the ledger hash matches, status is synced and vectors exist", async () => {
     await syncMemberSemanticProfile(alice, makeDeps());
     const firstUpserts = pineconeUpsert.mock.calls.length;
+
+    // Verify-before-noop: all expected vectors must exist in the namespace.
+    pineconeFetch.mockResolvedValue(
+      new Map(
+        ["profile", "help", "goal"].map((kind) => [
+          `rec_alice1234567:${kind}`,
+          { id: `rec_alice1234567:${kind}`, values: [1, 0], metadata: {} },
+        ])
+      )
+    );
 
     const second = await syncMemberSemanticProfile(alice, makeDeps());
     expect(second.status).toBe("noop");
     expect(second.vectorsUpserted).toBe(0);
     expect(pineconeUpsert.mock.calls.length).toBe(firstUpserts);
+  });
+
+  it("re-embeds when the ledger says synced but vectors are missing from Pinecone", async () => {
+    await syncMemberSemanticProfile(alice, makeDeps());
+
+    // Pause cleanup deleted the vectors; the ledger still says synced.
+    pineconeFetch.mockResolvedValue(new Map());
+
+    const result = await syncMemberSemanticProfile(alice, makeDeps());
+    expect(result.status).toBe("embedded");
+    expect(result.vectorsUpserted).toBe(3);
+    expect(pineconeUpsert).toHaveBeenCalledTimes(2);
   });
 
   it("returns no_email for records without an email", async () => {
@@ -168,5 +194,34 @@ describe("syncMemberSemanticProfile", () => {
   it("returns config_missing when deps are not provided and env is absent", async () => {
     const result = await syncMemberSemanticProfile(alice, null);
     expect(result.status).toBe("config_missing");
+  });
+});
+
+describe("deleteMemberSemanticVectors", () => {
+  it("deletes all four kind vectors for the member", async () => {
+    const result = await deleteMemberSemanticVectors("rec_alice1234567", makeDeps());
+    expect(result.status).toBe("deleted");
+    expect(result.deleted).toBe(4);
+    expect(pineconeDelete).toHaveBeenCalledWith(
+      [
+        "rec_alice1234567:profile",
+        "rec_alice1234567:help",
+        "rec_alice1234567:expertise",
+        "rec_alice1234567:goal",
+      ],
+      "intro_v2"
+    );
+  });
+
+  it("never throws and reports config_missing without deps", async () => {
+    const result = await deleteMemberSemanticVectors("rec_x", null);
+    expect(result.status).toBe("config_missing");
+  });
+
+  it("never throws when the delete fails", async () => {
+    pineconeDelete.mockRejectedValueOnce(new Error("pinecone down"));
+    const result = await deleteMemberSemanticVectors("rec_x", makeDeps());
+    expect(result.status).toBe("error");
+    expect(result.message).toContain("pinecone down");
   });
 });

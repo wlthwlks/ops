@@ -56,11 +56,14 @@ function buildCityFilter(cityGroup: CityGroup): string {
   const conditions = [cityGroup.label, ...cityGroup.alternatives].map(
     (name) => `FIND(LOWER("${name}"), LOWER({City}))`
   );
-  return `AND({Membership} = "Active", {Cancellation date} = "", NOT({Recurring intro status} = "Paused"), OR(${conditions.join(", ")}))`;
+  // Trialing Stripe subscriptions may not yet carry Membership="Active" in
+  // Airtable — they must still appear in Pinecone, so treat the trialing
+  // subscription status as an alternative to Active.
+  return `AND(OR({Membership} = "Active", {Stripe subscription status} = "trialing"), {Cancellation date} = "", NOT({Recurring intro status} = "Paused"), OR(${conditions.join(", ")}))`;
 }
 
 function buildAllCitiesFilter(): string {
-  return `AND({Membership} = "Active", {Cancellation date} = "", NOT({Recurring intro status} = "Paused"))`;
+  return `AND(OR({Membership} = "Active", {Stripe subscription status} = "trialing"), {Cancellation date} = "", NOT({Recurring intro status} = "Paused"))`;
 }
 
 export interface SemanticReconcileDeps {
@@ -71,7 +74,8 @@ export interface SemanticReconcileDeps {
 
 /**
  * Delete semantic-namespace vectors whose member record is no longer in the
- * active set (cancelled, paused, non-Active or deleted from Airtable).
+ * active set (cancelled, paused, neither Active nor a trialing Stripe
+ * subscription, or deleted from Airtable).
  *
  * Deletion-only and bounded: one minimal Airtable list (email field only),
  * one Pinecone list walk and batched deletes — no embeddings, no OpenAI
@@ -80,7 +84,7 @@ export interface SemanticReconcileDeps {
  */
 export async function reconcileSemanticNamespace(
   deps: SemanticReconcileDeps,
-  options: { namespace?: string; activeRecordIds?: Set<string> } = {}
+  options: { namespace?: string; activeRecordIds?: Set<string>; vectorIds?: string[] } = {}
 ): Promise<{ deletedVectors: number; namespaceVectorCount: number }> {
   const namespace = options.namespace ?? DEFAULT_SEMANTIC_NAMESPACE;
   let activeIds = options.activeRecordIds;
@@ -94,7 +98,7 @@ export async function reconcileSemanticNamespace(
   }
 
   deps.log(`Reconciling namespace "${namespace}"...`);
-  const vectorIds = await deps.pinecone.listAllIds(namespace);
+  const vectorIds = options.vectorIds ?? (await deps.pinecone.listAllIds(namespace));
   const stale: string[] = [];
   for (const vectorId of vectorIds) {
     const base = recordIdFromVectorId(vectorId);
@@ -234,6 +238,18 @@ export async function runIntroProfileSync(
     : [];
   const storedById = new Map(storedRows.map((r) => [r.airtableRecordId, r]));
 
+  // On all-cities runs we walk the namespace once (reused by reconciliation)
+  // and use it to detect members whose ledger says "synced" but whose vectors
+  // are actually missing (e.g. deleted by a pause cleanup) — those must be
+  // re-embedded, never skipped.
+  const namespaceVectorIds: string[] = [];
+  let namespaceIdSet: Set<string> | null = null;
+  if (isAllCities) {
+    deps.log(`Listing existing vector ids in namespace "${namespace}"...`);
+    namespaceVectorIds.push(...(await deps.pinecone.listAllIds(namespace)));
+    namespaceIdSet = new Set(namespaceVectorIds);
+  }
+
   const toEmbed: MemberEmbedInput[] = [];
   let unchanged = 0;
   for (const member of prepared) {
@@ -242,8 +258,18 @@ export async function runIntroProfileSync(
     // embedding batch never strands a member out of Pinecone permanently.
     const stored = storedById.get(member.record.id);
     if (stored && stored.profileHash === member.hash && stored.status === "synced") {
-      unchanged += 1;
-      continue;
+      // The ledger only proves the hash was embedded at some point — verify
+      // the vectors still exist in the namespace before trusting it.
+      const expectedIds = member.nonEmptyKinds.map((kind) =>
+        vectorIdFor(member.record.id, kind)
+      );
+      if (!namespaceIdSet || expectedIds.every((id) => namespaceIdSet!.has(id))) {
+        unchanged += 1;
+        continue;
+      }
+      deps.log(
+        `Ledger says synced but vector(s) missing for ${member.record.id} — re-embedding`
+      );
     }
     toEmbed.push(member);
   }
@@ -398,7 +424,11 @@ export async function runIntroProfileSync(
         pinecone: deps.pinecone,
         log: deps.log,
       },
-      { namespace, activeRecordIds: new Set(records.map((r) => r.id)) }
+      {
+        namespace,
+        activeRecordIds: new Set(records.map((r) => r.id)),
+        vectorIds: namespaceVectorIds,
+      }
     );
     deletedVectors = reconciled.deletedVectors;
   }

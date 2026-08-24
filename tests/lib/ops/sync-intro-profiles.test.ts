@@ -127,16 +127,35 @@ describe("runIntroProfileSync — embedding", () => {
     expect(rows[0].lastSyncedAt).not.toBeNull();
   });
 
-  it("skips members whose profile hash is unchanged", async () => {
+  it("skips members whose profile hash is unchanged and vectors exist", async () => {
     airtableList.mockResolvedValue([alice]);
     await runIntroProfileSync(makeDeps(), {});
     const firstEmbedCalls = vi.mocked(embedTexts).mock.calls.length;
+
+    // The namespace must contain the member's vectors for the skip to apply.
+    pineconeList.mockResolvedValue(
+      ["profile", "help", "expertise", "goal"].map((k) => `rec_alice1234567:${k}`)
+    );
 
     const second = await runIntroProfileSync(makeDeps(), {});
     expect(second.embedded).toBe(0);
     expect(second.unchanged).toBe(1);
     expect(vi.mocked(embedTexts).mock.calls.length).toBe(firstEmbedCalls);
     expect(pineconeUpsert).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-embeds unchanged members whose vectors are missing from the namespace", async () => {
+    airtableList.mockResolvedValue([alice]);
+    await runIntroProfileSync(makeDeps(), {});
+    const firstEmbedCalls = vi.mocked(embedTexts).mock.calls.length;
+
+    // Ledger says synced, but the vectors were deleted (e.g. pause cleanup).
+    pineconeList.mockResolvedValue([]);
+
+    const second = await runIntroProfileSync(makeDeps(), {});
+    expect(second.embedded).toBe(1);
+    expect(vi.mocked(embedTexts).mock.calls.length).toBe(firstEmbedCalls + 1);
+    expect(pineconeUpsert).toHaveBeenCalledTimes(2);
   });
 
   it("re-embeds when the semantic profile changed", async () => {
@@ -299,6 +318,22 @@ describe("runIntroProfileSync — city handling", () => {
     await runIntroProfileSync(makeDeps(), { cityLabel: "London" });
     const [, options] = airtableList.mock.calls[0];
     expect(options.filterByFormula).toContain('FIND(LOWER("London")');
+  });
+
+  it("includes trialing Stripe subscriptions alongside Active members", async () => {
+    airtableList.mockResolvedValue([alice]);
+    await runIntroProfileSync(makeDeps(), {});
+    const [, options] = airtableList.mock.calls[0];
+    expect(options.filterByFormula).toContain('OR({Membership} = "Active", {Stripe subscription status} = "trialing")');
+    expect(options.filterByFormula).toContain('{Cancellation date} = ""');
+    expect(options.filterByFormula).toContain('NOT({Recurring intro status} = "Paused")');
+  });
+
+  it("includes trialing members in city-scoped filters too", async () => {
+    airtableList.mockResolvedValue([alice]);
+    await runIntroProfileSync(makeDeps(), { cityLabel: "London" });
+    const [, options] = airtableList.mock.calls[0];
+    expect(options.filterByFormula).toContain('OR({Membership} = "Active", {Stripe subscription status} = "trialing")');
   });
 });
 

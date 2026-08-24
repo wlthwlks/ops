@@ -1,21 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/db";
 import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
 import { createAirtableClient } from "@/lib/integrations/airtable";
 import { createPineconeClient } from "@/lib/integrations/pinecone";
 import {
+  runIntroProfileSync,
   reconcileSemanticNamespace,
   DEFAULT_SEMANTIC_NAMESPACE,
 } from "@/lib/ops/sync-intro-profiles";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 /**
- * Daily cleanup for the semantic Pinecone namespace (intro_v2).
+ * Hourly self-healing sync for the semantic Pinecone namespace (intro_v2).
  *
- * Deletes vectors whose member is no longer Active / was cancelled / is
- * paused / was removed from Airtable. Deletion-only and bounded: one minimal
- * Airtable list (email field only), one Pinecone list walk and batched
- * deletes — no embeddings, no OpenAI calls.
+ * Runs the FULL profile sync (all cities): embeds missing/changed members
+ * (hash-guarded — normally zero OpenAI calls), re-embeds members whose
+ * vectors went missing while their ledger said "synced", retries failed
+ * ledger rows, and deletes vectors for members no longer in the active set
+ * (cancelled, paused, non-Active, deleted). When OPENAI_API_KEY is missing
+ * the route degrades to a delete-only reconcile.
  */
 export async function POST(request: NextRequest) {
   const denied = rejectUnauthorizedCron(request);
@@ -51,21 +56,54 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  try {
-    const result = await reconcileSemanticNamespace(
-      {
-        airtable: createAirtableClient({ apiKey: airtableToken, baseId: airtableBase }),
-        pinecone: createPineconeClient({ apiKey: pineconeKey, indexName: pineconeIndex }),
-        log: (message) => console.log(`[pinecone-semantic-cleanup] ${message}`),
-      },
-      { namespace }
-    );
+  const deps = {
+    airtable: createAirtableClient({ apiKey: airtableToken, baseId: airtableBase }),
+    pinecone: createPineconeClient({ apiKey: pineconeKey, indexName: pineconeIndex }),
+    db,
+    log: (message: string) => console.log(`[pinecone-semantic-cleanup] ${message}`),
+  };
 
+  if (!process.env.OPENAI_API_KEY) {
+    try {
+      const result = await reconcileSemanticNamespace(
+        { airtable: deps.airtable, pinecone: deps.pinecone, log: deps.log },
+        { namespace }
+      );
+      return NextResponse.json({
+        success: true,
+        degraded: true,
+        reason: "OPENAI_API_KEY missing — delete-only reconcile",
+        namespace,
+        deletedVectors: result.deletedVectors,
+        namespaceVectorCount: result.namespaceVectorCount,
+      });
+    } catch (err) {
+      console.error(
+        JSON.stringify({
+          event: "pinecone_semantic_cleanup_cron_failed",
+          message: err instanceof Error ? err.message : String(err),
+        })
+      );
+      return NextResponse.json(
+        { success: false, error: err instanceof Error ? err.message : "Cleanup failed" },
+        { status: 500 }
+      );
+    }
+  }
+
+  try {
+    const result = await runIntroProfileSync(deps, { cityLabel: "All Cities" });
     return NextResponse.json({
-      success: true,
+      success: result.success,
       namespace,
+      fetched: result.fetched,
+      embedded: result.embedded,
+      vectorsUpserted: result.vectorsUpserted,
+      unchanged: result.unchanged,
+      skipped: result.skipped,
       deletedVectors: result.deletedVectors,
-      namespaceVectorCount: result.namespaceVectorCount,
+      summary: result.summary,
+      ...(result.errors.length > 0 ? { errors: result.errors } : {}),
     });
   } catch (err) {
     console.error(
@@ -75,10 +113,7 @@ export async function POST(request: NextRequest) {
       })
     );
     return NextResponse.json(
-      {
-        success: false,
-        error: err instanceof Error ? err.message : "Cleanup failed",
-      },
+      { success: false, error: err instanceof Error ? err.message : "Sync failed" },
       { status: 500 }
     );
   }

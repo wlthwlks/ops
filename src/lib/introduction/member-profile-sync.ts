@@ -29,6 +29,7 @@ import {
   computeProfileHash,
   semanticFieldsFromRecord,
   vectorIdFor,
+  vectorIdsFor,
   type SemanticKind,
 } from "@/lib/introduction/semantic-profile";
 
@@ -109,10 +110,6 @@ export async function syncMemberSemanticProfile(
       .where(eq(introductionMemberProfiles.airtableRecordId, record.id));
     const stored = rows[0];
 
-    if (stored?.profileHash === hash && stored.status === "synced") {
-      return { status: "noop", vectorsUpserted: 0, vectorsDeleted: 0 };
-    }
-
     const kinds: Record<SemanticKind, string> = {
       profile: texts.profileText,
       help: texts.helpText,
@@ -121,6 +118,20 @@ export async function syncMemberSemanticProfile(
     };
     const nonEmptyKinds = SEMANTIC_KINDS.filter((kind) => kinds[kind]);
     const emptyKinds = SEMANTIC_KINDS.filter((kind) => !kinds[kind]);
+
+    // Ledger says synced + hash matches — but verify the vectors still EXIST
+    // before noop-ing. Pause deletions (and any past cleanup) can remove
+    // vectors while the ledger keeps its "synced" row; the hook must repair
+    // instead of trusting the ledger blindly.
+    if (stored?.profileHash === hash && stored.status === "synced") {
+      const expectedIds = nonEmptyKinds.map((kind) => vectorIdFor(record.id, kind));
+      const existing = await deps.pinecone.fetchByIds(expectedIds, namespace);
+      if (expectedIds.every((id) => existing.has(id))) {
+        return { status: "noop", vectorsUpserted: 0, vectorsDeleted: 0 };
+      }
+      const missing = expectedIds.filter((id) => !existing.has(id));
+      deps.log(`Ledger says synced but ${missing.length} vector(s) missing for ${record.id} — re-embedding`);
+    }
 
     const jobs = nonEmptyKinds.map((kind) => ({
       kind,
@@ -205,5 +216,40 @@ export async function syncMemberSemanticProfile(
       vectorsDeleted: 0,
       message: message.slice(0, 500),
     };
+  }
+}
+
+export type DeleteMemberVectorsResult = {
+  status: "deleted" | "config_missing" | "error";
+  deleted: number;
+  message?: string;
+};
+
+/**
+ * Delete ALL semantic vectors for a member (used when the member stops being
+ * serviced — intro pause, billing pause). Best-effort: never throws, and the
+ * ledger row is intentionally left untouched so the resume paths re-embed via
+ * the existence check instead of the hash guard.
+ */
+export async function deleteMemberSemanticVectors(
+  airtableRecordId: string,
+  deps: MemberProfileSyncDeps | null = defaultDeps()
+): Promise<DeleteMemberVectorsResult> {
+  if (!deps) {
+    return {
+      status: "config_missing",
+      deleted: 0,
+      message: "PINECONE_API_KEY / PINECONE_INDEX_NAME not configured",
+    };
+  }
+  const ids = Object.values(vectorIdsFor(airtableRecordId));
+  try {
+    await deps.pinecone.deleteByIds(ids, semanticNamespace());
+    deps.log(`Deleted ${ids.length} vector(s) for ${airtableRecordId}`);
+    return { status: "deleted", deleted: ids.length };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    deps.log(`Vector deletion failed for ${airtableRecordId}: ${message}`);
+    return { status: "error", deleted: 0, message: message.slice(0, 500) };
   }
 }

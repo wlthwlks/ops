@@ -32,6 +32,7 @@ import {
 } from "@/lib/billing/service-access-sync";
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 import { recordIntegrationError } from "@/lib/forms/webhooks/store";
+import { deleteMemberSemanticVectors } from "@/lib/introduction/member-profile-sync";
 
 export type PauseSyncStatus = "updated" | "already_up_to_date" | "no_airtable_member";
 
@@ -252,6 +253,11 @@ export async function syncSubscriptionPausedToAirtable(input: {
     logChanged("billing_pause_sync", stripeCustomerId, record, fields);
     const result = await applyPatch(airtable, [record], fields, dryRun);
     updated += result.updated;
+    if (result.updated > 0 && !dryRun) {
+      // Member stopped being serviced — leave the semantic namespace
+      // immediately (best-effort; the hourly self-healing sync is the net).
+      await deleteMemberSemanticVectors(record.id);
+    }
   }
 
   console.error(

@@ -28,6 +28,12 @@ vi.mock("@/lib/geo/geocode", () => ({
   extractOutcode: (value: string) => value,
 }));
 
+const syncPineconeBeforePlan = vi.fn(async () => ({ success: true, summary: "sync ok" }));
+
+vi.mock("@/lib/introduction/preplan-sync", () => ({
+  syncPineconeBeforePlan: () => syncPineconeBeforePlan(),
+}));
+
 let db: Awaited<ReturnType<typeof createTestDb>>["db"];
 let close: () => Promise<void>;
 
@@ -301,6 +307,48 @@ describe("runCityIntroductionScheduler", () => {
     expect(runs[0].status).toBe("blocked");
     const deliveries = await db.select().from(introductionDeliveries);
     expect(deliveries).toHaveLength(0);
+  });
+
+  it("runs the pre-plan Pinecone sync once per tick, not per city", async () => {
+    await upsertCitySettings(db, "rec_london", {
+      cityName: "London",
+      enabled: true,
+      schedulingMode: "scheduled",
+      scheduleJson: JSON.stringify(SCHEDULE),
+      nextRunAt: "2026-08-15T00:00:00Z",
+    });
+    await upsertCitySettings(db, "rec_paris", {
+      cityName: "Paris",
+      enabled: true,
+      schedulingMode: "scheduled",
+      scheduleJson: JSON.stringify(SCHEDULE),
+      nextRunAt: "2026-08-15T00:00:00Z",
+    });
+
+    syncPineconeBeforePlan.mockResolvedValue({ success: true, summary: "sync ok" });
+    const result = await runCityIntroductionScheduler(makeDeps(true));
+    expect(result.dueCities).toBe(2);
+    expect(syncPineconeBeforePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the whole tick when the pre-plan sync fails and leaves cities due", async () => {
+    await seedDueCity();
+    syncPineconeBeforePlan.mockResolvedValue({
+      success: false,
+      summary: "embedding failed — openai down",
+    });
+
+    const result = await runCityIntroductionScheduler(makeDeps(true));
+    expect(result.dueCities).toBe(1);
+    expect(result.results[0].outcome).toBe("failed");
+    expect(result.results[0].error).toContain("Pre-plan Pinecone sync failed");
+    expect(result.results[0].nextRunAt).toBeNull();
+
+    // No plan was built and the schedule was not advanced.
+    const runs = await db.select().from(introductionRuns);
+    expect(runs).toHaveLength(0);
+    const city = await db.select().from(cityIntroductionSettings);
+    expect(new Date(city[0].nextRunAt!).toISOString()).toBe("2026-08-15T00:00:00.000Z");
   });
 });
 

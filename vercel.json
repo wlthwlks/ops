@@ -30,7 +30,7 @@
     },
     {
       "path": "/api/cron/pinecone-semantic-cleanup",
-      "schedule": "0 4 * * *"
+      "schedule": "0 * * * *"
     }
   ]
 }

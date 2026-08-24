@@ -2,13 +2,14 @@ import { NextRequest } from "next/server";
 import { db } from "@/db";
 import { z } from "zod";
 import { requireOpsAdmin } from "@/lib/ops/auth";
-import { handleOpsApiError, jsonOk } from "@/lib/ops/api-response";
+import { handleOpsApiError, jsonError, jsonOk } from "@/lib/ops/api-response";
 import { createAirtableClient } from "@/lib/integrations/airtable";
 import { createPineconeClient } from "@/lib/integrations/pinecone";
 import {
   runIntroductionPreview,
   type IntroductionPlanDeps,
 } from "@/lib/introduction/plan";
+import { syncPineconeBeforePlan } from "@/lib/introduction/preplan-sync";
 import { introductionErrorResponse } from "@/lib/introduction/api-errors";
 
 export const dynamic = "force-dynamic";
@@ -54,6 +55,17 @@ export async function POST(request: NextRequest) {
       airtable: createAirtableClient({ apiKey: airtableToken, baseId: airtableBase }),
       pinecone: createPineconeClient({ apiKey: pineconeKey, indexName: pineconeIndex }),
     };
+
+    // Blocking pre-match sync — guarantee fresh vectors before generating
+    // matchings. A failed sync aborts the preview (ops retries).
+    const preSync = await syncPineconeBeforePlan(deps);
+    if (!preSync.success) {
+      return jsonError(
+        "PINECONE_SYNC_FAILED",
+        `Pinecone sync failed before match generation: ${preSync.summary}`,
+        500
+      );
+    }
 
     const result = await runIntroductionPreview(deps, {
       cityCode: input.cityCode,

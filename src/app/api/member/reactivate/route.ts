@@ -9,6 +9,8 @@ import {
   verifyMemberstackToken,
 } from "@/lib/forms/memberstack/auth";
 import { reactivateMembershipForMember } from "@/lib/forms/billing/reactivate-membership";
+import { findMemberByMemberstackId } from "@/lib/forms/airtable/members-sync";
+import { syncMemberSemanticProfile } from "@/lib/introduction/member-profile-sync";
 import { FormsError } from "@/lib/forms/errors";
 import { enforcePublicWriteRateLimit } from "@/lib/forms/http";
 
@@ -33,6 +35,21 @@ export async function POST(request: Request) {
       email: member.email,
       memberstackRaw: (member.raw || null) as Record<string, unknown> | null,
     });
+
+    // Restore the member's semantic Pinecone vectors immediately after a
+    // successful reactivation (their vectors were deleted while paused).
+    // Best-effort: never blocks or fails the reactivation response.
+    if (result.success) {
+      try {
+        const rows = await findMemberByMemberstackId(member.id);
+        if (rows[0]) {
+          await syncMemberSemanticProfile(rows[0]);
+        }
+      } catch {
+        // Fresh-record fetch failed — the hourly self-healing sync will
+        // restore the vectors.
+      }
+    }
 
     const httpStatus = result.success
       ? 200
