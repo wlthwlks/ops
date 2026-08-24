@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, connection } from "next/server";
 import { createAirtableClient } from "@/lib/integrations/airtable";
 import { createSlackClient } from "@/lib/integrations/slack";
 import { runRecurringCityIntros } from "@/lib/ops/recurring-city-intros";
@@ -10,6 +10,7 @@ import {
 import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
 
 export async function GET(request: NextRequest) {
+  await connection();
   const denied = rejectUnauthorizedCron(request);
   if (denied) return denied;
 

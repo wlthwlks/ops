@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, connection } from "next/server";
 import { scanIncompleteOnboarding } from "@/lib/forms/onboarding/incomplete-scan";
 import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
 
@@ -6,6 +6,7 @@ export const runtime = "nodejs";
 export const maxDuration = 120;
 
 export async function POST(request: NextRequest) {
+  await connection();
   const denied = rejectUnauthorizedCron(request);
   if (denied) return denied;
 
@@ -38,5 +39,6 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  await connection();
   return POST(request);
 }

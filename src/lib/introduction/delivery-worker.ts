@@ -34,16 +34,19 @@ export async function runDeliveryWorkerTick(
     live = getIntroductionsMode() === "live";
   } catch (err) {
     if (err instanceof IntroductionsConfigError) {
+      console.log(JSON.stringify({ event: "intro_delivery_tick", skipped: true, reason: "invalid_mode", error: err.message }));
       return { ok: false, reason: "invalid_mode", error: err.message };
     }
     throw err;
   }
   if (!live) {
+    console.log(JSON.stringify({ event: "intro_delivery_tick", skipped: true, reason: "read_only", live: false }));
     return { ok: false, reason: "read_only" };
   }
 
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
+    console.log(JSON.stringify({ event: "intro_delivery_tick", skipped: true, reason: "resend_not_configured" }));
     return { ok: false, reason: "resend_not_configured" };
   }
 
@@ -69,6 +72,24 @@ export async function runDeliveryWorkerTick(
       live,
     },
     { batchSize }
+  );
+
+  // Structured log so Vercel runtime logs show exactly what every tick did.
+  console.log(
+    JSON.stringify({
+      event: "intro_delivery_tick",
+      live,
+      batchSize,
+      processed: result.processed,
+      skipped: result.skipped,
+      reason: result.reason,
+      claimed: result.claimed,
+      sent: result.sent,
+      failed: result.failed,
+      deferred: result.deferred,
+      reclaimed: result.reclaimed,
+      logs,
+    })
   );
 
   return { ok: true, response: { live, batchSize, ...result, logs } };

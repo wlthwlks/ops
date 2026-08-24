@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, connection } from "next/server";
 import {
   listPendingStripeDependencies,
   summarizeBillingReconciliation,
@@ -13,6 +13,7 @@ export const runtime = "nodejs";
  * Full Stripe list is expensive — this surfaces pending dependencies for OPS.
  */
 export async function POST(request: NextRequest) {
+  await connection();
   const denied = rejectUnauthorizedCron(request);
   if (denied) return denied;
 
@@ -59,5 +60,6 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  await connection();
   return POST(request);
 }

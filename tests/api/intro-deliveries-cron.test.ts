@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { NextRequest, NextResponse } from "next/server";
 
+vi.mock("next/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/server")>();
+  return {
+    ...actual,
+    connection: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
 vi.mock("@/db", () => ({ db: {} }));
 
 vi.mock("@/lib/ops/cron-auth", async (importOriginal) => {

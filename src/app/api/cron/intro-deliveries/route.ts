@@ -1,9 +1,8 @@
-import { NextRequest } from "next/server";
+import { NextRequest, connection } from "next/server";
 import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
 import { jsonOk } from "@/lib/ops/api-response";
 import { runDeliveryWorkerTick } from "@/lib/introduction/delivery-worker";
 
-export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
@@ -12,6 +11,7 @@ export const maxDuration = 60;
  * is live, and never touches runs whose delivery mode is simulation.
  */
 export async function POST(request: NextRequest) {
+  await connection();
   const unauthorized = rejectUnauthorizedCron(request);
   if (unauthorized) return unauthorized;
 
@@ -29,5 +29,6 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  await connection();
   return POST(request);
 }

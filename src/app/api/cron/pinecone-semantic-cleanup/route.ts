@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest, NextResponse, connection } from "next/server";
 import { db } from "@/db";
 import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
 import { createAirtableClient } from "@/lib/integrations/airtable";
@@ -23,6 +23,7 @@ export const maxDuration = 300;
  * the route degrades to a delete-only reconcile.
  */
 export async function POST(request: NextRequest) {
+  await connection();
   const denied = rejectUnauthorizedCron(request);
   if (denied) return denied;
 
@@ -120,5 +121,6 @@ export async function POST(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  await connection();
   return POST(request);
 }
