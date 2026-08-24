@@ -4,7 +4,6 @@ import {
   buildSemanticTexts,
   computeProfileHash,
   fieldToText,
-  hasNoSemanticContent,
   recordIdFromVectorId,
   semanticFieldsFromRecord,
   vectorIdFor,
@@ -67,11 +66,16 @@ describe("buildSemanticTexts", () => {
 
   it("treats missing optional parts as empty", () => {
     const texts = buildSemanticTexts({});
-    expect(texts.profileText).toBe("");
     expect(texts.helpText).toBe("");
     expect(texts.expertiseText).toBe("");
     expect(texts.goalText).toBe("");
-    expect(hasNoSemanticContent(texts)).toBe(true);
+  });
+
+  it("falls back to a name-based profile text when no semantic fields exist", () => {
+    expect(buildSemanticTexts({}).profileText).toBe("Member profile");
+    expect(buildSemanticTexts({ name: "John Smith" }).profileText).toBe(
+      "Member profile: John Smith"
+    );
   });
 });
 
@@ -116,6 +120,16 @@ describe("semanticFieldsFromRecord", () => {
     expect(combined.toLowerCase()).not.toContain("$100k");
     expect(combined.toLowerCase()).not.toContain("mon_morning");
     expect(combined.toLowerCase()).not.toContain("crypto");
+  });
+
+  it("derives the name from Name or First/Last Name for the fallback text", () => {
+    expect(semanticFieldsFromRecord(record({ Name: "Ada Lovelace" })).name).toBe(
+      "Ada Lovelace"
+    );
+    expect(
+      semanticFieldsFromRecord(record({ "First Name": "Ada", "Last Name": "Lovelace" })).name
+    ).toBe("Ada Lovelace");
+    expect(semanticFieldsFromRecord(record({ City: "London" })).name).toBe("");
   });
 });
 

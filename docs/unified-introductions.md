@@ -28,6 +28,7 @@ Legacy systems run untouched until the cutover steps below.
 - `pair-history.ts` (repeat history: new ledger + legacy match_events union)
 - `geo-cache.ts` (cached Google geocoding, haversine)
 - `semantic-profile.ts` (semantic-only embedding texts + hashes)
+- `member-profile-sync.ts` (write-behind single-member sync for payment/profile-update hooks)
 - `scoring.ts` (7 normalized 0–1 components + weighted combination)
 - `grouping.ts` (deterministic seeded city grouping with locks)
 - `plan.ts` (preview orchestration + plan edits)
@@ -53,6 +54,7 @@ Legacy systems run untouched until the cutover steps below.
   `templates/[templateId]/publish`, `templates/[templateId]/restore`,
   `templates/preview`, `templates/[templateId]/test-send`
 - Cron: `src/app/api/cron/intro-deliveries` (worker), `src/app/api/cron/intro-city-scheduler`
+- Cron: `src/app/api/cron/pinecone-semantic-cleanup` (daily `intro_v2` reconcile, env-gated `INTRO_PINECONE_CLEANUP_CRON_ENABLED`)
 - Webhook: `src/app/api/webhooks/resend`
 
 ### Ops UI (`src/app/(dashboard)/introductions/`)

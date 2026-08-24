@@ -19,6 +19,7 @@ import {
 } from "@/lib/forms/reference-data";
 import { normalizePostCode } from "@/lib/forms/reference-data/country-phone";
 import { syncMemberstackCustomFields } from "@/lib/forms/memberstack/custom-fields";
+import { syncMemberSemanticProfile } from "@/lib/introduction/member-profile-sync";
 import {
   normalizeSocialUrl,
   findDuplicateSocialPlatforms,
@@ -65,6 +66,13 @@ export async function PATCH(request: Request) {
       stage,
       patch,
     });
+
+    // Keep the member's semantic Pinecone vectors in sync with the step's
+    // fields (business description, goal, help wanted, expertise,
+    // connection type). Best-effort: never blocks or fails the response.
+    if (result.record && !result.shadowed) {
+      await syncMemberSemanticProfile(result.record);
+    }
 
     let memberstackCustomFieldsSynced = true;
     let memberstackSyncWarning: string | undefined;
