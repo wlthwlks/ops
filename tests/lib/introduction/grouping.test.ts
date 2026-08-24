@@ -206,3 +206,55 @@ describe("rebuildGroupsWithLocks", () => {
     expect(freePlaced).toBe(3);
   });
 });
+
+describe("buildGroups — everyone matched (target 3 / min 2 / max 4)", () => {
+  const sizes34: EffectiveGroupSizes = { target: 3, min: 2, max: 4, strict: false };
+
+  function opts34(overrides: Partial<GroupingOptions> = {}): GroupingOptions {
+    return { sizes: sizes34, seed: "test-seed-34", ...overrides };
+  }
+
+  it("fills groups to the target and never overfills beyond it", () => {
+    const matrix = uniformMatrix(8, 0.5);
+    const result = buildGroups(members(8), matrix, opts34());
+    const sizes = result.groups.map((g) => g.length).sort((a, b) => a - b);
+    expect(sizes).toEqual([2, 3, 3]);
+    expect(result.unmatched).toEqual([]);
+  });
+
+  it("absorbs a single leftover into the last group (7 -> 3+4)", () => {
+    const result = buildGroups(members(7), uniformMatrix(7), opts34());
+    const sizes = result.groups.map((g) => g.length).sort((a, b) => a - b);
+    expect(sizes).toEqual([3, 4]);
+    expect(result.unmatched).toEqual([]);
+  });
+
+  it("forms a smaller min-size group for two leftovers (5 -> 3+2)", () => {
+    const result = buildGroups(members(5), uniformMatrix(5), opts34());
+    const sizes = result.groups.map((g) => g.length).sort((a, b) => a - b);
+    expect(sizes).toEqual([2, 3]);
+    expect(result.unmatched).toEqual([]);
+  });
+
+  it("matches pairs and singletons sensibly", () => {
+    expect(buildGroups(members(4), uniformMatrix(4), opts34()).groups).toHaveLength(1);
+    expect(buildGroups(members(2), uniformMatrix(2), opts34()).groups.map((g) => g.length)).toEqual([2]);
+    const one = buildGroups(members(1), uniformMatrix(1), opts34());
+    expect(one.groups).toEqual([]);
+    expect(one.unmatched).toHaveLength(1);
+    expect(one.unmatched[0].reason).toBe("no_allowed_pairs");
+  });
+
+  it("leaves hard-constraint-blocked members unmatched with a reason", () => {
+    const matrix = uniformMatrix(6);
+    // m5 has no allowed pair with anyone.
+    for (let i = 0; i < 5; i++) {
+      const entry = matrix.get(`m${i}`, "m5");
+      if (entry) entry.allowed = false;
+    }
+    const result = buildGroups(members(6), matrix, opts34());
+    expect(result.groups.flat().map((m) => m.key)).not.toContain("m5");
+    const blocked = result.unmatched.find((u) => u.key === "m5");
+    expect(blocked?.reason).toBe("no_allowed_pairs");
+  });
+});

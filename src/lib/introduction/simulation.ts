@@ -5,6 +5,7 @@ import {
   introductionDeliveryEvents,
   introductionGroups,
   introductionGroupMembers,
+  introductionPairScores,
   introductionRuns,
 } from "@/db/schema";
 import { isValidEmail } from "./member-eligibility";
@@ -90,6 +91,7 @@ export interface SimulationReport {
   eligibleMembers: number;
   matchedMembers: number;
   unmatchedMembers: number;
+  unmatchedMemberDetails: Array<{ email: string; reason: string }>;
   duplicateMembers: string[];
   repeatedPairsBlocked: number | null;
   invalidEmails: string[];
@@ -167,7 +169,26 @@ export async function buildSimulationReport(
   ).length;
 
   const matchedKeys = new Set(memberRows.map((m) => m.emailSnapshot.trim().toLowerCase()));
-  const unmatchedMembers = snapshotMembers.filter((m) => !matchedKeys.has(m.email.trim().toLowerCase())).length;
+  const unmatched = snapshotMembers.filter((m) => !matchedKeys.has(m.email.trim().toLowerCase()));
+
+  // Reason per unmatched member: no pair-score rows at all means every pair
+  // was blocked by a hard constraint; otherwise it's a size leftover.
+  const pairScoreRows = await db
+    .select({
+      memberAKey: introductionPairScores.memberAKey,
+      memberBKey: introductionPairScores.memberBKey,
+    })
+    .from(introductionPairScores)
+    .where(eq(introductionPairScores.runId, runId));
+  const keysWithPairs = new Set<string>();
+  for (const row of pairScoreRows) {
+    keysWithPairs.add(row.memberAKey);
+    keysWithPairs.add(row.memberBKey);
+  }
+  const unmatchedMemberDetails = unmatched.map((member) => ({
+    email: member.email,
+    reason: keysWithPairs.has(member.key) ? "size_impossible" : "no_allowed_pairs",
+  }));
 
   const validationFailures: string[] = [];
   if (invalidEmails.length > 0) {
@@ -186,7 +207,8 @@ export async function buildSimulationReport(
     deliveries: deliveries.length,
     eligibleMembers: snapshotMembers.length,
     matchedMembers: matchedKeys.size,
-    unmatchedMembers,
+    unmatchedMembers: unmatched.length,
+    unmatchedMemberDetails,
     duplicateMembers: duplicates,
     repeatedPairsBlocked: null,
     invalidEmails,

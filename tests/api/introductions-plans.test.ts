@@ -69,6 +69,7 @@ const basePreview = {
     matchedMembers: 4,
     groups: 2,
     unmatched: 0,
+    unmatchedMembers: [],
     excluded: [],
     repeatedPairsBlocked: 0,
     invalidEmails: 0,

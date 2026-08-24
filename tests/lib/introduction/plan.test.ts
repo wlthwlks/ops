@@ -650,3 +650,53 @@ describe("getAlternativesForMember", () => {
     }
   });
 });
+
+describe("city alias matching in previews", () => {
+  it("fetches with alias formula and canonicalizes member cities", async () => {
+    airtableGetRecord.mockResolvedValue({ id: "rec_city_la", fields: { City: "Los Angeles" } });
+    airtableList.mockImplementation(async (table: string) => {
+      if (table === "MATCHING OPTIONS") return [];
+      return [
+        memberRecord("rec_a", { City: "LA" }),
+        memberRecord("rec_b", { City: "Los Angeles" }),
+        memberRecord("rec_c", { City: "LA" }),
+      ];
+    });
+
+    const result = await runIntroductionPreview(makeDeps(), {
+      cityCode: "rec_city_la",
+      cycleDate: "2026-08-16",
+    });
+    expect(result.success).toBe(true);
+
+    const formula = airtableList.mock.calls.find(
+      (call) => call[0] === "MEMBERS"
+    )?.[1]?.filterByFormula as string | undefined;
+    expect(formula).toContain('FIND(LOWER("Los Angeles"), LOWER({City}))');
+    expect(formula).toContain('FIND(LOWER("LA"), LOWER({City}))');
+
+    expect(result.report.eligibleMembers).toBe(3);
+    expect(result.report.excluded).toEqual([]);
+    expect(result.report.groups).toBe(1);
+    expect(result.report.unmatched).toBe(0);
+
+    const memberRows = await db
+      .select()
+      .from(introductionGroupMembers)
+      .where(
+        eq(
+          introductionGroupMembers.groupId,
+          (
+            await db
+              .select({ id: introductionGroups.id })
+              .from(introductionGroups)
+              .where(eq(introductionGroups.runId, result.runId!))
+          )[0].id
+        )
+      );
+    for (const row of memberRows) {
+      const snapshot = JSON.parse(row.memberSnapshotJson ?? "{}") as { city?: string };
+      expect(snapshot.city).toBe("Los Angeles");
+    }
+  });
+});
