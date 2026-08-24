@@ -5,9 +5,7 @@ import { Layout, Menu, theme } from "antd";
 import {
   TeamOutlined,
   RiseOutlined,
-  UsergroupAddOutlined,
   BookOutlined,
-  SwapOutlined,
   DashboardOutlined,
   // Hidden pages (revisit later): AlertOutlined (Data Issues), DollarOutlined (Billing Integrity)
   SlackOutlined,
@@ -75,14 +73,6 @@ const NAV: NavItem[] = [
       { key: "/introductions/settings", icon: <SettingOutlined />, label: "Matching Settings" },
       { key: "/introductions/templates", icon: <MailOutlined />, label: "Email Templates" },
       { key: "/introductions/deliveries", icon: <SendOutlined />, label: "Delivery History" },
-    ],
-  },
-  {
-    key: "intros-legacy",
-    label: "Introductions (legacy)",
-    children: [
-      { key: "/get-matched", icon: <UsergroupAddOutlined />, label: "Custom Matching" },
-      { key: "/recurring-intros", icon: <SwapOutlined />, label: "Recurring Introductions" },
     ],
   },
   {

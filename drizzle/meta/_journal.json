@@ -78,6 +78,13 @@
       "when": 1786943597942,
       "tag": "0010_min_eligible_members",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1787533606614,
+      "tag": "0011_city_active_member_count",
+      "breakpoints": true
     }
   ]
 }

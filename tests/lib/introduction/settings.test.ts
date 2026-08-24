@@ -12,6 +12,7 @@ import {
   IntroductionSettingsError,
 } from "@/lib/introduction/settings";
 import { cityIntroductionSettings } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import {
   createMatchingProfile,
   createMatchingProfileVersion,
@@ -63,6 +64,23 @@ describe("upsertCitySettings", () => {
     await upsertCitySettings(db, "rec_b", { cityName: "Beta" });
     const cities = await listCitySettings(db);
     expect(cities.map((c) => c.cityCode).sort()).toEqual(["rec_a", "rec_b"]);
+  });
+
+  it("orders cities by active member count desc, then name asc", async () => {
+    await upsertCitySettings(db, "rec_big", { cityName: "Zulu" });
+    await upsertCitySettings(db, "rec_small", { cityName: "Alpha" });
+    await upsertCitySettings(db, "rec_none", { cityName: "Mid" });
+    await db
+      .update(cityIntroductionSettings)
+      .set({ activeMemberCount: 40 })
+      .where(eq(cityIntroductionSettings.cityCode, "rec_big"));
+    await db
+      .update(cityIntroductionSettings)
+      .set({ activeMemberCount: 5 })
+      .where(eq(cityIntroductionSettings.cityCode, "rec_small"));
+
+    const cities = await listCitySettings(db);
+    expect(cities.map((c) => c.cityCode)).toEqual(["rec_big", "rec_small", "rec_none"]);
   });
 
   it("rejects an invalid schedule payload", async () => {

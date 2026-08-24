@@ -1,4 +1,4 @@
-import { eq, inArray } from "drizzle-orm";
+import { asc, eq, inArray, sql } from "drizzle-orm";
 import type { AppDb } from "@/db";
 import {
   cityIntroductionSettings,
@@ -136,7 +136,10 @@ export async function listCitySettings(db: AppDb): Promise<CityIntroductionSetti
   return db
     .select()
     .from(cityIntroductionSettings)
-    .orderBy(cityIntroductionSettings.cityName);
+    .orderBy(
+      sql`${cityIntroductionSettings.activeMemberCount} desc nulls last`,
+      asc(cityIntroductionSettings.cityName)
+    );
 }
 
 export async function upsertCitySettings(
