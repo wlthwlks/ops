@@ -1,0 +1,1 @@
+ALTER TABLE "city_introduction_settings" ADD COLUMN "active_member_count" integer;

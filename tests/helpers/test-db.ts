@@ -288,6 +288,7 @@ export async function createTestDb(options?: { matchmake?: boolean; introduction
         repeat_pair_days INTEGER,
         member_cooldown_days INTEGER,
         min_eligible_members INTEGER,
+        active_member_count INTEGER,
         auto_approve BOOLEAN NOT NULL DEFAULT FALSE,
         auto_approve_delivery_mode TEXT NOT NULL DEFAULT 'simulation',
         meetup_time TEXT NOT NULL DEFAULT '10:00',

@@ -44,6 +44,7 @@ interface CityRow {
   repeatPairDays: number | null;
   memberCooldownDays: number | null;
   minEligibleMembers: number | null;
+  activeMemberCount: number | null;
   autoApprove: boolean;
   autoApproveDeliveryMode: string;
   meetupTime: string;
@@ -485,6 +486,10 @@ export default function IntroductionsSettingsPage() {
               render: (_, row) => <Tag color={row.enabled ? "green" : "default"}>{row.enabled ? "Yes" : "No"}</Tag>,
             },
             { title: "Schedule", render: (_, row) => row.schedulingMode },
+            {
+              title: "Active members",
+              render: (_, row) => (row.activeMemberCount != null ? row.activeMemberCount : "—"),
+            },
             { title: "Repeat window", render: (_, row) => `${row.repeatPairDays ?? "default"}d` },
             { title: "Group sizes", render: (_, row) => `${row.targetGroupSize ?? 3} (${row.minGroupSize ?? 2}–${row.maxGroupSize ?? 6})` },
           ]}
