@@ -9,7 +9,6 @@ import {
   toAirtableSchemaError,
 } from "@/lib/ops/airtable-fields";
 import { fieldStr, linkedRecordIds } from "@/lib/ops/city-relation-repair";
-import { normalizeCityKey } from "@/lib/ops/city-normalize";
 import { hasServiceAccess } from "./service-access";
 
 /**
@@ -26,10 +25,9 @@ import { hasServiceAccess } from "./service-access";
  *  - DB rows whose record id no longer exists in Airtable are reported as
  *    `stale` but never deleted (they may hold history and configuration).
  *
- * Active-member counts use the same rule as the "growing cities" view
- * (get-daily-new-customers-for-cities): a member counts iff
- * hasServiceAccess(membership, payment, serviceAccessUntil, now) passes,
- * attributed via the City relation link (falling back to legacy City text).
+ * Active-member counts: a member counts for a city iff hasServiceAccess
+ * passes AND their City relation links to that city's ALL CITIES record.
+ * City text is never used for membership.
  */
 
 export interface CitySyncResult {
@@ -56,10 +54,9 @@ const MEMBER_COUNT_FIELDS = [
   MEMBER_FIELDS.payment,
   MEMBER_FIELDS.serviceAccessUntil,
   MEMBER_FIELDS.cityRelation,
-  MEMBER_FIELDS.city,
 ];
 
-/** Load MEMBERS for counting; tolerates a base without "City relation". */
+/** Load MEMBERS for counting; requires a "City relation" field. */
 async function loadMemberRecords(
   airtable: AirtableClient,
   log: (message: string) => void
@@ -69,9 +66,10 @@ async function loadMemberRecords(
   } catch (e) {
     const schema = toAirtableSchemaError(MEMBERS_TABLE, e);
     if (schema?.field === MEMBER_FIELDS.cityRelation) {
-      return airtable.listRecords(MEMBERS_TABLE, {
-        fields: MEMBER_COUNT_FIELDS.filter((f) => f !== MEMBER_FIELDS.cityRelation),
-      });
+      log(
+        `Active-member counts skipped: MEMBERS has no "City relation" field`
+      );
+      return null;
     }
     log(
       `Active-member counts skipped: ${e instanceof Error ? e.message : String(e)}`
@@ -81,9 +79,9 @@ async function loadMemberRecords(
 }
 
 /**
- * Count members with service access per city record id, using the same
- * rule as the growing-cities view: City relation link first, then the
- * legacy City text matched (normalized) against city names.
+ * Count members with service access per city record id. Membership is
+ * determined ONLY by the City relation link to the city's ALL CITIES
+ * record — city text is never used, so members cannot leak across cities.
  */
 export function countActiveMembersByCity(
   cityRecords: AirtableRecord[],
@@ -92,14 +90,6 @@ export function countActiveMembersByCity(
 ): Map<string, number> {
   const cityCodes = new Set(cityRecords.map((r) => r.id));
   const counts = new Map<string, number>();
-
-  const nameToCityCode = new Map<string, string>();
-  for (const record of cityRecords) {
-    const name = cityNameFromRecord(record.fields);
-    if (!name) continue;
-    const key = normalizeCityKey(name);
-    if (key && !nameToCityCode.has(key)) nameToCityCode.set(key, record.id);
-  }
 
   for (const r of memberRecords) {
     const membership = fieldStr(r.fields, MEMBER_FIELDS.membership);
@@ -113,10 +103,6 @@ export function countActiveMembersByCity(
         cityCode = id;
         break;
       }
-    }
-    if (!cityCode) {
-      const cityText = fieldStr(r.fields, MEMBER_FIELDS.city);
-      cityCode = nameToCityCode.get(normalizeCityKey(cityText)) ?? null;
     }
     if (!cityCode) continue;
 

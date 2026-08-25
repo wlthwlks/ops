@@ -79,24 +79,42 @@ export const PLAN_MEMBER_FIELDS = [
 ];
 
 /**
- * Fetch a city's member records from Airtable. Members are matched by the
- * canonical city name / aliases in the City text, OR by a City relation
- * link to the city's ALL CITIES record (linked values resolve to the
- * linked record's name inside ARRAYJOIN). Bases without a "City relation"
- * field fall back to the text-only filter.
+ * Fetch a city's member records from Airtable using ONLY the "City
+ * relation" link column: a member belongs to a city run iff their City
+ * relation links to that city's ALL CITIES record. City text is ignored
+ * for membership (it is only canonicalized afterwards for eligibility and
+ * rendering). The Airtable filter matches the linked records' primary
+ * field (the city name) inside ARRAYJOIN, and the results are re-filtered
+ * client-side on the exact record id so name collisions can never leak
+ * members across cities. Bases without a "City relation" field fall back
+ * to the legacy text-based filter.
  */
 async function fetchCityMemberRecords(
   airtable: AirtableClient,
+  cityCode: string,
   cityNameOrCode: string,
   log: (message: string) => void
 ): Promise<AirtableRecord[]> {
-  const canonical = canonicalizeCityName(cityNameOrCode) || cityNameOrCode;
-  const escaped = canonical.replace(/"/g, '\\"');
-  const textFormula = cityAliasFilterFormula(cityNameOrCode);
-  const relationFormula = `FIND(LOWER("${escaped}"), LOWER(ARRAYJOIN({${MEMBER_FIELDS.cityRelation}}, ",")))`;
+  // The ALL CITIES record's own name is the value ARRAYJOIN exposes for the
+  // linked records — never trust the possibly-stale DB city name.
+  let cityName = cityNameOrCode;
   try {
-    return await airtable.listRecords(MEMBERS_TABLE, {
-      filterByFormula: `OR(${textFormula}, ${relationFormula})`,
+    const cityRecord = await airtable.getRecord(CITIES_TABLE, cityCode);
+    const name = String(
+      cityRecord.fields["City"] ?? cityRecord.fields["Name"] ?? cityRecord.fields["name"] ?? ""
+    ).trim();
+    if (name) cityName = name;
+  } catch {
+    // keep the fallback name
+  }
+
+  const escaped = cityName.replace(/"/g, '\\"');
+  const relationFormula = `FIND(LOWER("${escaped}"), LOWER(ARRAYJOIN({${MEMBER_FIELDS.cityRelation}}, ",")))`;
+
+  let records: AirtableRecord[];
+  try {
+    records = await airtable.listRecords(MEMBERS_TABLE, {
+      filterByFormula: relationFormula,
       fields: PLAN_MEMBER_FIELDS,
     });
   } catch (e) {
@@ -106,12 +124,24 @@ async function fetchCityMemberRecords(
         `City relation not available on MEMBERS — falling back to text-only filter`
       );
       return airtable.listRecords(MEMBERS_TABLE, {
-        filterByFormula: textFormula,
+        filterByFormula: cityAliasFilterFormula(cityName),
         fields: PLAN_MEMBER_FIELDS.filter((f) => f !== MEMBER_FIELDS.cityRelation),
       });
     }
     throw e;
   }
+
+  // Final gate: keep only members whose City relation links to THIS city
+  // record. Never take members that belong to a different city.
+  const linked = records.filter((record) =>
+    linkIdsFromField(record.fields[MEMBER_FIELDS.cityRelation]).includes(cityCode)
+  );
+  if (linked.length !== records.length) {
+    log(
+      `City relation filter: kept ${linked.length} of ${records.length} relation-matched member(s) for ${cityCode}`
+    );
+  }
+  return linked;
 }
 
 export interface PlanMember extends ScorableMember {
@@ -469,7 +499,12 @@ export async function runIntroductionPreview(
   const catalog = await loadMatchingOptionsCatalog(deps.airtable);
 
   deps.log(`Fetching members for ${cityName ?? cityCode}...`);
-  const records = await fetchCityMemberRecords(deps.airtable, cityName ?? cityCode, deps.log);
+  const records = await fetchCityMemberRecords(
+    deps.airtable,
+    cityCode,
+    cityName ?? cityCode,
+    deps.log
+  );
   deps.log(`Fetched ${records.length} member record(s)`);
 
   // Members linked to this city's ALL CITIES record belong to the run even

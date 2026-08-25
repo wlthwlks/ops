@@ -60,6 +60,7 @@ function memberRecord(id: string): AirtableRecord {
       "First Name": `First${id.replace(/^rec_/, "")}`,
       "Last Name": "Last",
       City: "London",
+      "City relation": ["rec_city_london"],
       "post code": "SW1A 1AA",
       Membership: "Active",
       Payment: "Paid",

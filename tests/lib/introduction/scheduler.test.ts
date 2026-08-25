@@ -64,6 +64,7 @@ function memberRecord(id: string): AirtableRecord {
       "First Name": "First",
       "Last Name": "Last",
       City: "London",
+      "City relation": ["rec_london"],
       "post code": "SW1A 1AA",
       Membership: "Active",
       Payment: "Paid",

@@ -65,6 +65,7 @@ function memberRecord(id: string, overrides: Record<string, unknown> = {}): Airt
       "First Name": "First",
       "Last Name": "Last",
       City: "London",
+      "City relation": ["rec_city_london"],
       "post code": "SW1A 1AA",
       Membership: "Active",
       Payment: "Paid",
@@ -651,15 +652,17 @@ describe("getAlternativesForMember", () => {
   });
 });
 
-describe("city alias matching in previews", () => {
-  it("fetches with alias formula and canonicalizes member cities", async () => {
+describe("city relation matching in previews", () => {
+  it("fetches by City relation only and canonicalizes member cities", async () => {
     airtableGetRecord.mockResolvedValue({ id: "rec_city_la", fields: { City: "Los Angeles" } });
     airtableList.mockImplementation(async (table: string) => {
       if (table === "MATCHING OPTIONS") return [];
       return [
-        memberRecord("rec_a", { City: "LA" }),
-        memberRecord("rec_b", { City: "Los Angeles" }),
-        memberRecord("rec_c", { City: "LA" }),
+        memberRecord("rec_a", { City: "LA", "City relation": ["rec_city_la"] }),
+        memberRecord("rec_b", { City: "Los Angeles", "City relation": ["rec_city_la"] }),
+        // Text says LA, but linked to a DIFFERENT city record — must not be
+        // taken into the Los Angeles run.
+        memberRecord("rec_c", { City: "LA", "City relation": ["rec_city_other"] }),
       ];
     });
 
@@ -672,11 +675,11 @@ describe("city alias matching in previews", () => {
     const formula = airtableList.mock.calls.find(
       (call) => call[0] === "MEMBERS"
     )?.[1]?.filterByFormula as string | undefined;
-    expect(formula).toContain('FIND(LOWER("Los Angeles"), LOWER({City}))');
-    expect(formula).toContain('LOWER(TRIM({City})) = LOWER("LA")');
     expect(formula).toContain("ARRAYJOIN({City relation}");
+    expect(formula).toContain('FIND(LOWER("Los Angeles")');
+    expect(formula).not.toContain("LOWER({City})");
 
-    expect(result.report.eligibleMembers).toBe(3);
+    expect(result.report.eligibleMembers).toBe(2);
     expect(result.report.excluded).toEqual([]);
     expect(result.report.groups).toBe(1);
     expect(result.report.unmatched).toBe(0);
@@ -744,6 +747,7 @@ describe("city alias matching in previews", () => {
     const calls = airtableList.mock.calls.filter((call) => call[0] === "MEMBERS");
     expect(calls).toHaveLength(2);
     const retryOptions = calls[1]?.[1] as { filterByFormula?: string; fields?: string[] };
+    expect(retryOptions.filterByFormula).toContain('FIND(LOWER("London"), LOWER({City}))');
     expect(retryOptions.filterByFormula).not.toContain("ARRAYJOIN");
     expect(retryOptions.fields).not.toContain("City relation");
   });

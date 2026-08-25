@@ -67,10 +67,10 @@ describe("countActiveMembersByCity", () => {
   const cities = [cityRecord("rec_c1", "London"), cityRecord("rec_c2", "Gold Coast")];
   const reference = new Date("2026-08-24T12:00:00Z");
 
-  it("counts service-access members via City relation and legacy City text", () => {
+  it("counts service-access members by City relation only", () => {
     const members = [
       memberRecord("m1", { Membership: "Active", Payment: "Paid", "City relation": ["rec_c1"] }),
-      memberRecord("m2", { Membership: "Active", Payment: "Paid", City: "Gold Coast" }),
+      memberRecord("m2", { Membership: "Active", Payment: "Paid", "City relation": ["rec_c2"] }),
       memberRecord("m3", { Membership: "Active", Payment: "Paid", "City relation": ["rec_c1"] }),
     ];
     const counts = countActiveMembersByCity(cities, members, reference);
@@ -78,28 +78,26 @@ describe("countActiveMembersByCity", () => {
     expect(counts.get("rec_c2")).toBe(1);
   });
 
+  it("never counts members by city text — only by relation", () => {
+    const members = [
+      memberRecord("m1", { Membership: "Active", Payment: "Paid", "City relation": ["rec_c1"] }),
+      // Text says London but linked to another city (or not linked at all):
+      memberRecord("m2", { Membership: "Active", Payment: "Paid", City: "London" }),
+      memberRecord("m3", { Membership: "Active", Payment: "Paid", City: "London", "City relation": ["rec_elsewhere"] }),
+    ];
+    const counts = countActiveMembersByCity(cities, members, reference);
+    expect(counts.get("rec_c1")).toBe(1);
+  });
+
   it("excludes members without service access", () => {
     const members = [
       memberRecord("m1", { Membership: "Active", Payment: "Paid", "City relation": ["rec_c1"] }),
       memberRecord("m2", { Membership: "Cancelled", Payment: "Paid", "City relation": ["rec_c1"] }),
-      memberRecord("m3", { Membership: "Active", Payment: "Unpaid", City: "London" }),
-      memberRecord("m4", { Membership: "", Payment: "", "Service access until": "2027-01-01", City: "London" }),
+      memberRecord("m3", { Membership: "Active", Payment: "Unpaid", "City relation": ["rec_c1"] }),
+      memberRecord("m4", { Membership: "", Payment: "", "Service access until": "2027-01-01", "City relation": ["rec_c1"] }),
     ];
     const counts = countActiveMembersByCity(cities, members, reference);
     expect(counts.get("rec_c1")).toBe(2);
-  });
-
-  it("attributes members with an unknown link to their legacy city text", () => {
-    const members = [
-      memberRecord("m1", {
-        Membership: "Active",
-        Payment: "Paid",
-        "City relation": ["rec_missing"],
-        City: "London",
-      }),
-    ];
-    const counts = countActiveMembersByCity(cities, members, reference);
-    expect(counts.get("rec_c1")).toBe(1);
   });
 });
 
@@ -129,8 +127,9 @@ describe("syncCitiesFromAirtable", () => {
       [
         memberRecord("m1", { Membership: "Active", Payment: "Paid", "City relation": ["rec_c1"] }),
         memberRecord("m2", { Membership: "Active", Payment: "Paid", "City relation": ["rec_c1"] }),
-        memberRecord("m3", { Membership: "Cancelled", Payment: "", City: "London" }),
-        memberRecord("m4", { Membership: "Active", Payment: "Paid", City: "Brisbane" }),
+        // Text says London but not linked — must NOT count for rec_c1.
+        memberRecord("m3", { Membership: "Active", Payment: "Paid", City: "London" }),
+        memberRecord("m4", { Membership: "Active", Payment: "Paid", "City relation": ["rec_c2"] }),
       ]
     );
 
@@ -171,7 +170,7 @@ describe("syncCitiesFromAirtable", () => {
   it("updates only the member count when it changes", async () => {
     mockTables(
       [cityRecord("rec_c1", "London")],
-      [memberRecord("m1", { Membership: "Active", Payment: "Paid", City: "London" })]
+      [memberRecord("m1", { Membership: "Active", Payment: "Paid", "City relation": ["rec_c1"] })]
     );
     await syncCitiesFromAirtable(db, makeAirtable());
 
@@ -183,8 +182,8 @@ describe("syncCitiesFromAirtable", () => {
     mockTables(
       [cityRecord("rec_c1", "London")],
       [
-        memberRecord("m1", { Membership: "Active", Payment: "Paid", City: "London" }),
-        memberRecord("m2", { Membership: "Active", Payment: "Paid", City: "London" }),
+        memberRecord("m1", { Membership: "Active", Payment: "Paid", "City relation": ["rec_c1"] }),
+        memberRecord("m2", { Membership: "Active", Payment: "Paid", "City relation": ["rec_c1"] }),
       ]
     );
     const result = await syncCitiesFromAirtable(db, makeAirtable());
