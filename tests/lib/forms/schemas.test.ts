@@ -146,4 +146,12 @@ describe("onboarding schemas", () => {
       }).success
     ).toBe(true);
   });
+
+  it("returns friendly goal length messages", () => {
+    const short = goalSchema.safeParse({ ninetyDayGoal: "short" });
+    expect(short.error?.issues[0]?.message).toBe("Please write at least 30 characters");
+
+    const long = goalSchema.safeParse({ ninetyDayGoal: "x".repeat(501) });
+    expect(long.error?.issues[0]?.message).toBe("Keep under 500 characters");
+  });
 });

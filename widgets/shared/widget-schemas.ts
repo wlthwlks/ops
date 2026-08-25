@@ -192,7 +192,7 @@ export const goalFormSchema = z.object({
     .string()
     .trim()
     .min(30, "Please write at least 30 characters")
-    .max(300),
+    .max(500, "Keep under 500 characters"),
 });
 
 export const helpFormSchema = z.object({
@@ -264,7 +264,7 @@ export const profileFormSchema = z
       .string()
       .trim()
       .min(30, "Please write at least 30 characters")
-      .max(300, "Keep under 300 characters")
+      .max(500, "Keep under 500 characters")
       .optional(),
     helpWanted: z.array(z.string()).max(3).optional(),
     helpWantedContext: z.string().trim().max(400).optional(),

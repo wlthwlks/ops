@@ -170,6 +170,7 @@ export function MatchingGoalField(props: {
     <div className="wlth-field">
       <label htmlFor="wlth-goal">What is your most important goal for the next 90 days?</label>
       <textarea id="wlth-goal" rows={4} {...props.register} />
+      <p className="wlth-muted">At least 30 characters, up to 500.</p>
       <FieldError message={props.error} />
     </div>
   );

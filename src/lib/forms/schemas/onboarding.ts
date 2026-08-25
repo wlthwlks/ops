@@ -161,7 +161,11 @@ export const businessSchema = z
   .superRefine(otherIndustryRefine);
 
 export const goalSchema = z.object({
-  ninetyDayGoal: z.string().trim().min(30).max(300),
+  ninetyDayGoal: z
+    .string()
+    .trim()
+    .min(30, "Please write at least 30 characters")
+    .max(500, "Keep under 500 characters"),
 });
 
 export const helpWantedSchema = z.object({
@@ -258,7 +262,12 @@ export const updateProfileSchema = withPhoneValidation(
       businessStage: z.enum(stageCodes).optional(),
       annualRevenue: z.enum(revenueCodes).optional(),
       businessDescription: z.string().trim().min(40).max(400).optional(),
-      ninetyDayGoal: z.string().trim().min(30).max(300).optional(),
+      ninetyDayGoal: z
+        .string()
+        .trim()
+        .min(30, "Please write at least 30 characters")
+        .max(500, "Keep under 500 characters")
+        .optional(),
       helpWanted: z.array(matchingOptionCode).max(3).optional(),
       helpWantedContext: z.string().trim().max(400).optional(),
       expertiseOffered: z.array(matchingOptionCode).max(5).optional(),

@@ -5,6 +5,7 @@ import {
   locationFormSchema,
   helpFormSchema,
   expertiseFormSchema,
+  goalFormSchema,
   AGE_RANGES,
 } from "../../../widgets/shared/widget-schemas";
 
@@ -163,5 +164,27 @@ describe("widget schemas", () => {
   it("requires at least one expertise area", () => {
     expect(expertiseFormSchema.safeParse({ expertiseOffered: [] }).success).toBe(false);
     expect(expertiseFormSchema.safeParse({ expertiseOffered: ["SALES"] }).success).toBe(true);
+  });
+
+  it("enforces goal length with friendly messages", () => {
+    const short = goalFormSchema.safeParse({ ninetyDayGoal: "too short" });
+    expect(short.success).toBe(false);
+    expect(short.error?.issues[0]?.message).toBe("Please write at least 30 characters");
+
+    const long = goalFormSchema.safeParse({ ninetyDayGoal: "x".repeat(501) });
+    expect(long.success).toBe(false);
+    expect(long.error?.issues[0]?.message).toBe("Keep under 500 characters");
+
+    const ok = goalFormSchema.safeParse({
+      ninetyDayGoal:
+        "Ship the new onboarding flow and validate conversion against the Tally baseline.",
+    });
+    expect(ok.success).toBe(true);
+
+    const supportCase = goalFormSchema.safeParse({
+      ninetyDayGoal:
+        "Building referral relationships in Charlotte. I am two markets deep and newer to this one, so I want to meet residential realtors working in Myers Park, SouthPark, and Lake Norman, plus custom builders and architects on high-end renovation and new construction. The introduction that helps me most is a realtor whose buyers keep settling for a house that needs vision.",
+    });
+    expect(supportCase.success).toBe(true);
   });
 });
