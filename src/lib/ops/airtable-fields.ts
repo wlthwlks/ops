@@ -115,6 +115,12 @@ export const MEMBER_FIELDS = {
   socialMedia: "social media",
   professionalHeadline: "Professional Headline",
   profileBio: "Profile Bio",
+  /** Checkbox — block newsletter sends in Klaviyo (campaign suppression segment). */
+  emailSuppressionNewsletter: "Email suppression newsletter",
+  /** Checkbox — block churned-member email sends in Klaviyo. */
+  emailSuppressionChurned: "Email suppression churned",
+  /** Checkbox — block active-member email sends in Klaviyo. */
+  emailSuppressionActive: "Email suppression active",
 } as const;
 
 export const MEMBER_LIST_FIELDS: string[] = [

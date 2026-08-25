@@ -12,7 +12,10 @@
  * Profiles are upserted with the columns the team relies on:
  *   Profile (first/last name), Email, Phone number, Location (city+country+zip)
  *   plus custom properties: membership_status, plan, service_access_until,
- *   cancellation_effective_at.
+ *   cancellation_effective_at, and email_suppression_{newsletter,churned,active}
+ *   ("true"/"false", always set — unchecking a MEMBERS checkbox self-heals on
+ *   the next run). Suppression properties drive Klaviyo suppression segments
+ *   attached to the newsletter / churned / active campaigns.
  *
  * List reconciliation is full: actives are subscribed to the active list and
  * unsubscribed from the churned list; churned get the inverse. "Date added" in
@@ -35,7 +38,7 @@ import {
   PRIMARY_EMAIL_FIELD,
   extractStripeCustomerEmail,
 } from "@/lib/billing/webhook-invoice-sync";
-import { CITIES_TABLE, COUNTRIES_TABLE } from "@/lib/ops/airtable-fields";
+import { CITIES_TABLE, COUNTRIES_TABLE, MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type KlaviyoStripeClient = any;
@@ -55,6 +58,9 @@ const MEMBER_ENRICHMENT_FIELDS = [
   PAID_PLANS_FIELD,
   SERVICE_ACCESS_FIELD,
   CANCELLATION_EFFECTIVE_AT_FIELD,
+  MEMBER_FIELDS.emailSuppressionNewsletter,
+  MEMBER_FIELDS.emailSuppressionChurned,
+  MEMBER_FIELDS.emailSuppressionActive,
 ] as const;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -66,6 +72,11 @@ function normalizeEmailForIndex(email: string): string {
 function fieldStr(fields: Record<string, unknown>, key: string): string {
   const v = fields[key];
   return v == null ? "" : String(v).trim();
+}
+
+/** Airtable omits unchecked checkboxes, so anything truthy counts as checked. */
+function fieldBool(fields: Record<string, unknown>, key: string): boolean {
+  return Boolean(fields[key]);
 }
 
 function firstLinkId(value: unknown): string | null {
@@ -137,6 +148,9 @@ export type MemberEnrichment = {
   planPriceIds: string;
   serviceAccessUntil: string;
   cancellationEffectiveAt: string;
+  suppressionNewsletter: boolean;
+  suppressionChurned: boolean;
+  suppressionActive: boolean;
 };
 
 function extractEnrichment(record: AirtableRecord): MemberEnrichment {
@@ -151,6 +165,9 @@ function extractEnrichment(record: AirtableRecord): MemberEnrichment {
     planPriceIds: fieldStr(f, PAID_PLANS_FIELD),
     serviceAccessUntil: fieldStr(f, SERVICE_ACCESS_FIELD),
     cancellationEffectiveAt: fieldStr(f, CANCELLATION_EFFECTIVE_AT_FIELD),
+    suppressionNewsletter: fieldBool(f, MEMBER_FIELDS.emailSuppressionNewsletter),
+    suppressionChurned: fieldBool(f, MEMBER_FIELDS.emailSuppressionChurned),
+    suppressionActive: fieldBool(f, MEMBER_FIELDS.emailSuppressionActive),
   };
 }
 
@@ -278,6 +295,9 @@ function buildProfilesFor(
     const properties: Record<string, string> = {
       membership_status: status,
       service_access_until: accessUntil,
+      email_suppression_newsletter: enrichment?.suppressionNewsletter ? "true" : "false",
+      email_suppression_churned: enrichment?.suppressionChurned ? "true" : "false",
+      email_suppression_active: enrichment?.suppressionActive ? "true" : "false",
     };
     const plan = enrichment?.planPriceIds || membership.priceIds.join(",");
     if (plan) properties["plan"] = plan;

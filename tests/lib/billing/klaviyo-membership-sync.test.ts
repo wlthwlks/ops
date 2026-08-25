@@ -217,6 +217,8 @@ describe("fetchMemberEnrichment", () => {
           "Paid Plans (price ids)": "price_mem",
           "Service access until": "2026-09-01T00:00:00.000Z",
           "Cancellation effective at": "",
+          "Email suppression newsletter": true,
+          "Email suppression active": true,
         },
       },
       {
@@ -230,6 +232,9 @@ describe("fetchMemberEnrichment", () => {
     const e = map.get("dina@x.com");
     expect(e?.phone).toBe("+13105551234");
     expect(e?.city).toBe("Santa Monica");
+    expect(e?.suppressionNewsletter).toBe(true);
+    expect(e?.suppressionChurned).toBe(false);
+    expect(e?.suppressionActive).toBe(true);
     expect(airtable.listRecords).toHaveBeenCalledTimes(1);
     const [table, opts] = airtable.listRecords.mock.calls[0];
     expect(table).toBe(MEMBERS_TABLE);
@@ -289,6 +294,9 @@ describe("buildKlaviyoProfiles", () => {
         planPriceIds: "price_mem",
         serviceAccessUntil: "2026-09-01T00:00:00.000Z",
         cancellationEffectiveAt: "",
+        suppressionNewsletter: false,
+        suppressionChurned: false,
+        suppressionActive: false,
       },
     ],
   ]);
@@ -316,7 +324,44 @@ describe("buildKlaviyoProfiles", () => {
       membership_status: "active",
       service_access_until: "2026-09-01T00:00:00.000Z",
       plan: "price_mem",
+      email_suppression_newsletter: "false",
+      email_suppression_churned: "false",
+      email_suppression_active: "false",
     });
+  });
+
+  it("maps MEMBERS suppression checkboxes to profile properties", () => {
+    const suppressionEnrichment = new Map([
+      [
+        "quiet@x.com",
+        {
+          firstName: "Quiet",
+          lastName: "User",
+          phone: "",
+          zip: "",
+          city: "",
+          cityLinkId: "",
+          planPriceIds: "",
+          serviceAccessUntil: "",
+          cancellationEffectiveAt: "",
+          suppressionNewsletter: true,
+          suppressionChurned: true,
+          suppressionActive: false,
+        },
+      ],
+    ]);
+    const result = buildKlaviyoProfiles({
+      active: [
+        membership({ customer: { id: "cus_1", email: "quiet@x.com" } as never }),
+      ],
+      churned: [],
+      enrichmentByEmail: suppressionEnrichment,
+      citiesById: new Map(),
+    });
+    const profile = result.profiles[0];
+    expect(profile.properties?.email_suppression_newsletter).toBe("true");
+    expect(profile.properties?.email_suppression_churned).toBe("true");
+    expect(profile.properties?.email_suppression_active).toBe("false");
   });
 
   it("builds churned profiles with membership_status churned and cancellation date", () => {
@@ -365,6 +410,9 @@ describe("buildKlaviyoProfiles", () => {
           planPriceIds: "price_mem",
           serviceAccessUntil: "",
           cancellationEffectiveAt: "",
+          suppressionNewsletter: false,
+          suppressionChurned: false,
+          suppressionActive: false,
         },
       ],
     ]);
@@ -398,6 +446,9 @@ describe("buildKlaviyoProfiles", () => {
           planPriceIds: "",
           serviceAccessUntil: "",
           cancellationEffectiveAt: "",
+          suppressionNewsletter: false,
+          suppressionChurned: false,
+          suppressionActive: false,
         },
       ],
     ]);
