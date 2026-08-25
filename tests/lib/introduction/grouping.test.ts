@@ -257,4 +257,57 @@ describe("buildGroups — everyone matched (target 3 / min 2 / max 4)", () => {
     const blocked = result.unmatched.find((u) => u.key === "m5");
     expect(blocked?.reason).toBe("no_allowed_pairs");
   });
+
+  it("an isolated seed never aborts the rest of the assignment", () => {
+    const matrix = uniformMatrix(6);
+    // m0 has no allowed pair with anyone — if it seeds first, the rest
+    // of the city must still be grouped.
+    for (let i = 1; i < 6; i++) {
+      const entry = matrix.get("m0", `m${i}`);
+      if (entry) entry.allowed = false;
+    }
+    const result = buildGroups(members(6), matrix, opts34());
+    const placed = result.groups.flat().map((m) => m.key);
+    expect(placed).not.toContain("m0");
+    expect(placed.sort()).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+    expect(result.unmatched.find((u) => u.key === "m0")?.reason).toBe("no_allowed_pairs");
+  });
+
+  it("strict mode: a seed that cannot reach the target does not abort others", () => {
+    const sizesStrict: EffectiveGroupSizes = { target: 3, min: 2, max: 6, strict: true };
+    const matrix = uniformMatrix(8);
+    // m0 can only pair with m1 — m0 can never anchor a triple. m2..m7 can.
+    for (let i = 2; i < 8; i++) {
+      const entry = matrix.get("m0", `m${i}`);
+      if (entry) entry.allowed = false;
+      const entry1 = matrix.get("m1", `m${i}`);
+      if (entry1) entry1.allowed = false;
+    }
+    const result = buildGroups(members(8), matrix, options({ sizes: sizesStrict }));
+    const flat = result.groups.flat().map((m) => m.key);
+    expect(flat).not.toContain("m0");
+    expect(flat).not.toContain("m1");
+    expect(flat.sort()).toEqual(["m2", "m3", "m4", "m5", "m6", "m7"]);
+    for (const group of result.groups) expect(group.length).toBe(3);
+    expect(result.unmatched.map((u) => u.key).sort()).toEqual(["m0", "m1"]);
+  });
+
+  it("documents the boundary: min 3 with only pairs available yields no groups", () => {
+    const sizesMin3: EffectiveGroupSizes = { target: 3, min: 3, max: 6, strict: false };
+    // Triangle-free allowed graph: every member has allowed pairs, but no
+    // three members are mutually allowed.
+    const matrix = new PairScoreMatrix();
+    for (let i = 0; i < 3; i++) {
+      for (let j = 3; j < 6; j++) {
+        matrix.set(`m${i}`, `m${j}`, {
+          score: { overall: 0.5, components: {} },
+          allowed: true,
+        });
+      }
+    }
+    const result = buildGroups(members(6), matrix, options({ sizes: sizesMin3 }));
+    expect(result.groups).toHaveLength(0);
+    expect(result.unmatched).toHaveLength(6);
+    for (const u of result.unmatched) expect(u.reason).toBe("size_impossible");
+  });
 });

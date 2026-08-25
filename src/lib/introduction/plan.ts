@@ -584,7 +584,11 @@ export async function runIntroductionPreview(
     pairHistory,
     maxDistanceKm: effective.constraints.maxDistanceKm,
   });
-  deps.log(`Pair matrix: ${matrixResult.allowedPairs} allowed pair(s), ${matrixResult.repeatedPairsBlocked} repeat-blocked`);
+  deps.log(
+    `Pair matrix: ${matrixResult.allowedPairs} allowed pair(s), ` +
+      `${matrixResult.repeatedPairsBlocked} repeat-blocked, ${matrixResult.cooldownBlocked} cooldown-blocked, ` +
+      `${matrixResult.notSameCityBlocked} not-same-city, ${matrixResult.distanceBlocked} distance-blocked`
+  );
 
   // ─── Grouping ───
   const groupingOptions: GroupingOptions = {
@@ -592,6 +596,10 @@ export async function runIntroductionPreview(
     seed,
     maxAttempts: 10,
   };
+  const gs = effective.groupSizes;
+  deps.log(
+    `Grouping sizes: target ${gs.target}, min ${gs.min}, max ${gs.max}, strict ${gs.strict}`
+  );
   const grouped = buildGroups(eligible, matrixResult.matrix, groupingOptions);
   deps.log(`Grouped: ${grouped.groups.length} group(s), ${grouped.unmatched.length} unmatched`);
 
@@ -625,7 +633,7 @@ export async function runIntroductionPreview(
     snapshotJson: JSON.stringify(snapshot),
     createdByClerkUserId: options.createdBy ?? null,
     totalGroups: grouped.groups.length,
-    summary: `${cityName ?? cityCode}: ${grouped.groups.length} groups, ${eligible.length} eligible`,
+    summary: `${cityName ?? cityCode}: ${grouped.groups.length} groups, ${eligible.length} eligible (sizes ${effective.groupSizes.target}/${effective.groupSizes.min}/${effective.groupSizes.max}${effective.groupSizes.strict ? " strict" : ""})`,
   });
 
   const pairRows = matrixResult.matrix

@@ -10,6 +10,7 @@ import {
 } from "@/db/schema";
 import { isValidEmail } from "./member-eligibility";
 import { DEFAULT_BATCH_SIZE } from "./delivery-queue";
+import { resolveEffectiveCitySettings } from "./settings";
 
 /**
  * Full-simulation reporting for introduction runs. Pure database reads —
@@ -102,6 +103,8 @@ export interface SimulationReport {
   validationFailures: string[];
   minEligibleMembers: number;
   blockedReason: string | null;
+  /** Effective group sizes for the run's city, resolved at report time. */
+  groupSizes: { target: number; min: number; max: number; strict: boolean } | null;
 }
 
 export async function buildSimulationReport(
@@ -198,6 +201,25 @@ export async function buildSimulationReport(
     validationFailures.push(`${duplicates.length} member(s) appear in more than one group`);
   }
 
+  // Effective group sizes for the run's city (best-effort; current config,
+  // which may differ from the config at plan time).
+  let groupSizes: SimulationReport["groupSizes"] = null;
+  try {
+    const cityCodes = JSON.parse(run.cityCodesJson ?? "[]") as unknown;
+    const first = Array.isArray(cityCodes) && typeof cityCodes[0] === "string" ? cityCodes[0] : null;
+    if (first) {
+      const effective = await resolveEffectiveCitySettings(db, first);
+      groupSizes = {
+        target: effective.groupSizes.target,
+        min: effective.groupSizes.min,
+        max: effective.groupSizes.max,
+        strict: effective.groupSizes.strict,
+      };
+    }
+  } catch {
+    groupSizes = null;
+  }
+
   return {
     runId,
     status: run.status,
@@ -219,6 +241,7 @@ export async function buildSimulationReport(
     validationFailures,
     minEligibleMembers: snapshotMinEligibleMembers,
     blockedReason: snapshotBlockedReason,
+    groupSizes,
   };
 }
 

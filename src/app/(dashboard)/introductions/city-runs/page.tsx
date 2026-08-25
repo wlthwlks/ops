@@ -79,6 +79,7 @@ interface Report {
   queue: { batchSize: number; batches: number; workerTicks: number };
   minEligibleMembers: number;
   blockedReason: string | null;
+  groupSizes: { target: number; min: number; max: number; strict: boolean } | null;
 }
 
 const COMPONENT_LABELS: Record<string, string> = {
@@ -347,6 +348,20 @@ export default function CityRunsPage() {
                   .join(" · ")}
               />
             )}
+            {report.unmatchedMembers > 0 &&
+              report.groupSizes &&
+              (report.groupSizes.strict || report.groupSizes.min > 2) && (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="Group size configuration may be impossible to satisfy"
+                  description={
+                    report.groupSizes.strict
+                      ? `Strict group size requires exactly ${report.groupSizes.target} members per group. Pairs exist but some members cannot complete a ${report.groupSizes.target}-member group — consider turning Strict off or lowering the target.`
+                      : `Minimum group size is ${report.groupSizes.min}, but some members only have valid pairs (no compatible group of ${report.groupSizes.min}). Consider setting the minimum group size to 2 in City settings.`
+                  }
+                />
+              )}
           </Flex>
         </Card>
       )}

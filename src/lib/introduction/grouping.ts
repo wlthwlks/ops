@@ -178,15 +178,18 @@ function attemptAssignment(
   const { target, min, max, strict } = sizes;
   const used = new Set<string>();
   const groups: Array<Array<{ key: string }>> = [];
+  /** Seeds that could not anchor a complete group — never retried as seeds. */
+  const blockedSeeds = new Set<string>();
 
   const pool = () => order.filter((m) => !used.has(m.key));
+  const pickSeed = () => pool().find((m) => !blockedSeeds.has(m.key));
 
   while (true) {
     const candidates = pool();
-    if (candidates.length === 0) break;
     if (candidates.length < min) break;
+    const seed = pickSeed();
+    if (!seed) break;
 
-    const seed = candidates[0];
     used.add(seed.key);
     const group = [seed];
 
@@ -197,19 +200,16 @@ function attemptAssignment(
       used.add(next.member.key);
     }
 
-    if (group.length < target && strict) {
-      // Strict mode requires exactly `target` members — dissolve and stop.
-      for (const member of group) used.delete(member.key);
-      break;
+    if (group.length >= min && (!strict || group.length === target)) {
+      groups.push(group);
+      continue;
     }
 
-    if (group.length >= min) {
-      groups.push(group);
-    } else {
-      // Too small to be a group — release and stop (unmatched).
-      for (const member of group) used.delete(member.key);
-      break;
-    }
+    // The seed could not anchor a min-sized group (or an exact-size group
+    // in strict mode): release everyone and keep going with the remaining
+    // candidates instead of abandoning the whole assignment.
+    for (const member of group) used.delete(member.key);
+    blockedSeeds.add(seed.key);
   }
 
   // Balancing pass (non-strict): place leftovers into groups below max.

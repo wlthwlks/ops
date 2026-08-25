@@ -165,6 +165,7 @@ describe("buildSimulationReport", () => {
     expect(report!.canaryRedirectCount).toBe(0);
     expect(report!.queue.batches).toBeGreaterThanOrEqual(1);
     expect(report!.validationFailures).toHaveLength(0);
+    expect(report!.groupSizes).toEqual({ target: 3, min: 2, max: 6, strict: false });
   });
 
   it("counts canary redirects and reports intended recipients", async () => {
