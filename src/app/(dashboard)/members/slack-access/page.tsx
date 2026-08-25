@@ -923,8 +923,9 @@ function SlackAccessPageInner() {
                     Update selected ({selectedLinks.size})
                   </Button>
                   <Typography.Text type="secondary">
-                    Members without a Slack Email on Airtable, with the best matching Slack
-                    profile. Use Compare to review before linking.
+                    Members whose email is not found in Slack — matched by name and other
+                    profile data. Only members currently being serviced are listed. Use
+                    Compare to review before linking.
                   </Typography.Text>
                 </Space>
                 <Table

@@ -55,7 +55,7 @@ describe("buildNewPaidMemberMessage", () => {
       })
     ).toBe(
       [
-        "New 2.0 FSC Member [Paid]",
+        "New 2.0 WW Member [Paid]",
         "An airtable record was automatically created for Jane Doe (jane@example.com) :blush:",
         ":earth_americas: London (United Kingdom).",
       ].join("\n")
@@ -72,7 +72,7 @@ describe("buildNewPaidMemberMessage", () => {
       })
     ).toBe(
       [
-        "New 2.0 FSC Member [Paid]",
+        "New 2.0 WW Member [Paid]",
         "An airtable record was automatically created for Jane Doe (jane@example.com) :blush:",
         ":earth_americas: Manchester.",
       ].join("\n")
@@ -88,7 +88,7 @@ describe("buildNewPaidMemberMessage", () => {
     });
     expect(msg).toBe(
       [
-        "New 2.0 FSC Member [Paid]",
+        "New 2.0 WW Member [Paid]",
         "An airtable record was automatically created for Jane Doe (jane@example.com) :blush:",
       ].join("\n")
     );
@@ -134,7 +134,7 @@ describe("notifySignupPaidMemberOnSlack", () => {
     expect(postMessageMock).toHaveBeenCalledWith(
       "ww-new-members",
       [
-        "New 2.0 FSC Member [Paid]",
+        "New 2.0 WW Member [Paid]",
         "An airtable record was automatically created for Jane Doe (jane@example.com) :blush:",
         ":earth_americas: Manchester.",
       ].join("\n")
@@ -173,7 +173,7 @@ describe("notifySignupPaidMemberOnSlack", () => {
     expect(res).toEqual({ sent: true });
     expect(postMessageMock.mock.calls[0][1]).toBe(
       [
-        "New 2.0 FSC Member [Paid]",
+        "New 2.0 WW Member [Paid]",
         "An airtable record was automatically created for Jane Doe (jane@example.com) :blush:",
         ":earth_americas: London (United Kingdom).",
       ].join("\n")

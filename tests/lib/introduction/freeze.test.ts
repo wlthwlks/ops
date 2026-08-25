@@ -232,6 +232,27 @@ describe("freezeIntroductionRun", () => {
     expect(groups[0].emailHtmlSnapshot).toContain("August 12th at 2:30 pm");
   });
 
+  it("resolves the city name from settings when the group cityName is null", async () => {
+    await seedMeetupTemplate();
+    await upsertCitySettings(db, "rec_city_london", { cityName: "London" });
+    const runId = await makePlan();
+    // Simulate the transient preview-time name-resolution failure.
+    await db
+      .update(introductionGroups)
+      .set({ cityName: null })
+      .where(eq(introductionGroups.runId, runId));
+
+    await freezeIntroductionRun(db, { runId, deliveryMode: "simulation" });
+
+    const groups = await db
+      .select()
+      .from(introductionGroups)
+      .where(eq(introductionGroups.runId, runId));
+    expect(groups[0].emailSubjectSnapshot).toContain("London");
+    expect(groups[0].emailSubjectSnapshot).not.toContain("your city");
+    expect(groups[0].emailHtmlSnapshot).not.toContain("your city");
+  });
+
   it("renders catalog option labels for help/expertise cards (not raw record ids)", async () => {
     setMatchingOptionsCatalogForTests({
       source: "airtable",

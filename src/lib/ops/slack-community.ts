@@ -18,6 +18,7 @@ import {
   memberEligibleForSlackOutreach,
   scanMemberHealth,
 } from "@/lib/ops/member-health";
+import { hasServiceAccess } from "@/lib/introduction/service-access";
 import type { MemberHealthRow } from "@/lib/ops/member-health-types";
 import {
   classifySlackScopes,
@@ -162,7 +163,7 @@ export type LinkSuggestion = {
   slackEmail: string;
   slackName: string;
   confidence: "high" | "low";
-  kind: "primary_email" | "exact_name" | "ambiguous_name";
+  kind: "exact_name" | "ambiguous_name";
 };
 
 export type LinkRow = {
@@ -222,6 +223,59 @@ function findCandidates(
 }
 
 /**
+ * The `email` column is the default identity source: when it maps to exactly
+ * one active Slack user, the member is already known — no manual linking
+ * needed, so such members are not listed in the linking queue.
+ */
+export function primaryEmailMatchesActiveSlackUser(
+  email: string,
+  maps: ReturnType<typeof buildSlackMaps>
+): boolean {
+  const norm = email.trim().toLowerCase();
+  if (!norm) return false;
+  const hits = (maps.emailToUser.get(norm) || []).filter(
+    (u) => !u.deleted && !u.isBot && !u.isAppUser
+  );
+  return hits.length === 1;
+}
+
+/**
+ * Name-based suggestion for members whose email column does not resolve to a
+ * Slack user: single exact name → high confidence, multiple same-name users →
+ * low confidence (pick the first, compare the rest in the modal).
+ */
+export function suggestLinkByName(
+  name: string,
+  maps: ReturnType<typeof buildSlackMaps>
+): LinkSuggestion | null {
+  const normName = normalizeName(name);
+  if (!normName) return null;
+  const byName = (maps.nameToUser.get(normName) || []).filter(
+    (u) => !u.deleted && !u.isBot && !u.isAppUser
+  );
+  if (byName.length === 1) {
+    const u = byName[0];
+    return {
+      slackUserId: u.id,
+      slackEmail: u.email,
+      slackName: u.realName || u.name,
+      confidence: "high",
+      kind: "exact_name",
+    };
+  }
+  if (byName.length > 1) {
+    return {
+      slackUserId: byName[0].id,
+      slackEmail: byName[0].email,
+      slackName: byName[0].realName || byName[0].name,
+      confidence: "low",
+      kind: "ambiguous_name",
+    };
+  }
+  return null;
+}
+
+/**
  * Build the Slack Email linking queue: members whose "Slack Email" field is
  * empty, each with a best-guess suggestion plus name-scored candidates.
  * Ordered by Date joined latest → oldest.
@@ -253,6 +307,8 @@ export async function buildLinkQueue(): Promise<LinkQueueResult> {
   const memberships = new Set<string>();
   const payments = new Set<string>();
 
+  const referenceDate = new Date();
+
   const rows: LinkRow[] = [];
   for (const r of memberRecords) {
     const name = fieldStr(r.fields, MEMBER_FIELDS.name);
@@ -263,59 +319,34 @@ export async function buildLinkQueue(): Promise<LinkQueueResult> {
     const payment = fieldStr(r.fields, MEMBER_FIELDS.payment);
     const dateJoined = fieldStr(r.fields, MEMBER_FIELDS.dateJoined);
 
+    // Only members without a Slack Email field are linkable
+    if (slackEmail) continue;
+
+    // Only members currently being serviced (Airtable rule: Active+Paid or a
+    // valid future "Service access until") are part of the community.
+    const beingServiced = hasServiceAccess(
+      membership,
+      payment,
+      fieldStr(r.fields, MEMBER_FIELDS.serviceAccessUntil) || null,
+      referenceDate
+    );
+    if (!beingServiced) continue;
+
     if (city) cities.add(city);
     if (membership) memberships.add(membership);
     if (payment) payments.add(payment);
 
-    // Only members without a Slack Email field are linkable
-    if (slackEmail) continue;
+    // Email column is the default identity source — if it already matches a
+    // Slack user, the member is known and needs no manual linking.
+    if (primaryEmailMatchesActiveSlackUser(primaryEmail, maps)) continue;
 
-    let suggestion: LinkSuggestion | null = null;
+    const suggestion = suggestLinkByName(name, maps);
     const exclude = new Set<string>();
-
-    const primaryNorm = primaryEmail.trim().toLowerCase();
-    if (primaryNorm) {
-      const hits = (maps.emailToUser.get(primaryNorm) || []).filter(
-        (u) => !u.deleted && !u.isBot && !u.isAppUser
-      );
-      if (hits.length === 1) {
-        const u = hits[0];
-        suggestion = {
-          slackUserId: u.id,
-          slackEmail: primaryNorm,
-          slackName: u.realName || u.name,
-          confidence: "high",
-          kind: "primary_email",
-        };
-        exclude.add(u.id);
-      }
-    }
-
-    if (!suggestion) {
-      const normName = normalizeName(name);
-      if (normName) {
-        const byName = (maps.nameToUser.get(normName) || []).filter(
-          (u) => !u.deleted && !u.isBot && !u.isAppUser
-        );
-        if (byName.length === 1) {
-          const u = byName[0];
-          suggestion = {
-            slackUserId: u.id,
-            slackEmail: u.email,
-            slackName: u.realName || u.name,
-            confidence: "high",
-            kind: "exact_name",
-          };
+    if (suggestion) {
+      exclude.add(suggestion.slackUserId);
+      if (suggestion.kind === "ambiguous_name") {
+        for (const u of maps.nameToUser.get(normalizeName(name)) || []) {
           exclude.add(u.id);
-        } else if (byName.length > 1) {
-          suggestion = {
-            slackUserId: byName[0].id,
-            slackEmail: byName[0].email,
-            slackName: byName[0].realName || byName[0].name,
-            confidence: "low",
-            kind: "ambiguous_name",
-          };
-          for (const u of byName) exclude.add(u.id);
         }
       }
     }

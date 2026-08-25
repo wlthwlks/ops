@@ -34,7 +34,7 @@ export function buildNewPaidMemberMessage(input: NewPaidMemberSlackInput): strin
   const name = input.fullName.trim() || "—";
   const email = input.email.trim() || "—";
   const lines = [
-    "New 2.0 FSC Member [Paid]",
+    "New 2.0 WW Member [Paid]",
     `An airtable record was automatically created for ${name} (${email}) :blush:`,
   ];
 
@@ -58,7 +58,7 @@ function getSlackWwConfig(): { token: string; channel: string } {
 }
 
 /**
- * Send the "New 2.0 FSC Member [Paid]" message for a first-time signup payment.
+ * Send the "New 2.0 WW Member [Paid]" message for a first-time signup payment.
  * No-op (never throws) when the flag / config is missing or Slack fails.
  */
 export async function notifySignupPaidMemberOnSlack(

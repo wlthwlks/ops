@@ -67,6 +67,7 @@ interface Report {
   eligibleMembers: number;
   matchedMembers: number;
   unmatchedMembers: number;
+  unmatchedMemberDetails: Array<{ email: string; reason: string }>;
   groups: number;
   deliveries: number;
   duplicateMembers: string[];
@@ -334,6 +335,16 @@ export default function CityRunsPage() {
                 type="error"
                 showIcon
                 message={report.validationFailures.join(" · ")}
+              />
+            )}
+            {(report.unmatchedMemberDetails ?? []).length > 0 && (
+              <Alert
+                type="warning"
+                showIcon
+                message="Unmatched members"
+                description={report.unmatchedMemberDetails
+                  .map((u) => `${u.email} (${u.reason})`)
+                  .join(" · ")}
               />
             )}
           </Flex>

@@ -213,9 +213,9 @@ export async function freezeIntroductionRun(
   const planHash = computePlanHash(planHashInput);
 
   // ─── Render group emails + create deliveries ───
-  const cityName = grouped[0]?.group.cityName ?? "your city";
-
-  // Meetup time comes from the city settings (default 10:00).
+  // Meetup time and the city display name come from the city settings
+  // (default 10:00). The group's stored cityName can be null when the
+  // preview resolved it transiently — never render the literal "your city".
   let cityCode: string | null = null;
   try {
     cityCode = (JSON.parse(run.cityCodesJson ?? "[]") as string[])[0] ?? null;
@@ -223,6 +223,7 @@ export async function freezeIntroductionRun(
     cityCode = null;
   }
   let meetupTime = "10:00";
+  let settingsCityName: string | null = null;
   if (cityCode) {
     const cityRows = await db
       .select()
@@ -230,7 +231,9 @@ export async function freezeIntroductionRun(
       .where(eq(cityIntroductionSettings.cityCode, cityCode))
       .limit(1);
     if (cityRows[0]?.meetupTime) meetupTime = cityRows[0].meetupTime;
+    if (cityRows[0]?.cityName) settingsCityName = cityRows[0].cityName;
   }
+  const cityName = grouped[0]?.group.cityName ?? settingsCityName ?? "your city";
 
   let deliveryCount = 0;
   let groupIndex = 0;
@@ -263,7 +266,7 @@ export async function freezeIntroductionRun(
     const rendered = renderIntroductionEmail({
       subject: template.subject,
       bodyHtml: template.bodyHtml,
-      cityName: cityName ?? "your city",
+      cityName,
       introductionDate: cycleDate ?? "",
       meetupTime,
       members: members.map((m) => ({

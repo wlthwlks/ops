@@ -87,9 +87,15 @@ export interface GroupingOptions {
   maxAttempts?: number;
 }
 
+export interface UnmatchedMember {
+  key: string;
+  /** "no_allowed_pairs" (hard constraints) or "size_impossible" (leftover below min). */
+  reason: "no_allowed_pairs" | "size_impossible";
+}
+
 export interface GroupingResult {
   groups: Array<Array<{ key: string }>>;
-  unmatched: Array<{ key: string }>;
+  unmatched: UnmatchedMember[];
   /** Mean of the group pair-average scores across groups. */
   quality: number;
   groupScores: PairScoreBreakdown[];
@@ -97,7 +103,7 @@ export interface GroupingResult {
 
 interface Assignment {
   groups: Array<Array<{ key: string }>>;
-  unmatched: Array<{ key: string }>;
+  unmatched: UnmatchedMember[];
   quality: number;
   groupScores: PairScoreBreakdown[];
 }
@@ -197,15 +203,6 @@ function attemptAssignment(
       break;
     }
 
-    if (!strict && group.length >= 2 && group.length < max) {
-      const currentAvg = groupScoreFromMatrix(group, matrix).overall;
-      const next = bestCandidate(group, pool(), matrix);
-      if (next && next.avg >= currentAvg) {
-        group.push(next.member);
-        used.add(next.member.key);
-      }
-    }
-
     if (group.length >= min) {
       groups.push(group);
     } else {
@@ -244,7 +241,38 @@ function attemptAssignment(
       ? groupScores.reduce((acc, s) => acc + s.overall, 0) / groupScores.length
       : 0;
 
-  return { groups: groupsFinal, unmatched: pool(), quality, groupScores };
+  return {
+    groups: groupsFinal,
+    unmatched: unmatchedMembers(order, used, matrix),
+    quality,
+    groupScores,
+  };
+}
+
+/** Classify every unassigned member: hard-constraint blocked vs size leftover. */
+function unmatchedMembers(
+  all: Array<{ key: string }>,
+  used: Set<string>,
+  matrix: PairMatrixReader
+): UnmatchedMember[] {
+  const leftovers = all.filter((m) => !used.has(m.key));
+  const result: UnmatchedMember[] = [];
+  for (const member of leftovers) {
+    let hasAllowedPair = false;
+    for (const other of all) {
+      if (other.key === member.key) continue;
+      const entry = matrix.get(member.key, other.key);
+      if (entry && entry.allowed) {
+        hasAllowedPair = true;
+        break;
+      }
+    }
+    result.push({
+      key: member.key,
+      reason: hasAllowedPair ? "size_impossible" : "no_allowed_pairs",
+    });
+  }
+  return result;
 }
 
 function betterAssignment(a: Assignment, b: Assignment): Assignment {

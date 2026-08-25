@@ -32,6 +32,7 @@ import {
   type MemberEligibilityReason,
 } from "./member-eligibility";
 import { loadPairHistory, type PairHistory } from "./pair-history";
+import { cityAliasFilterFormula, canonicalizeCityName } from "./city-matching";
 import { resolveMemberGeo, type ResolvedGeo } from "./geo-cache";
 import { vectorIdsFor } from "./semantic-profile";
 import { DEFAULT_SEMANTIC_NAMESPACE } from "@/lib/ops/sync-intro-profiles";
@@ -194,7 +195,7 @@ export function buildPlanMember(
     phone: String(f[MEMBER_FIELDS.phone] ?? "").trim() || null,
     socialMedia: String(f[MEMBER_FIELDS.socialMedia] ?? "").trim() || null,
     website: String(f[MEMBER_FIELDS.businessWebsite] ?? "").trim() || null,
-    city: String(f["City"] ?? "").trim() || null,
+    city: canonicalizeCityName(String(f["City"] ?? "").trim()) || null,
     lat: opts.geo.lat,
     lon: opts.geo.lon,
     postcode: String(f["post code"] ?? "").trim() || null,
@@ -317,6 +318,7 @@ export interface IntroductionPreviewResult {
     matchedMembers: number;
     groups: number;
     unmatched: number;
+    unmatchedMembers: Array<{ key: string; email: string; reason: string }>;
     excluded: Array<{ key: string; email: string; reason: string }>;
     repeatedPairsBlocked: number;
     invalidEmails: number;
@@ -330,10 +332,6 @@ export interface IntroductionPreviewResult {
     minEligibleMembers: number;
     blockedReason: string | null;
   };
-}
-
-function escapeFormula(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 function toRegistryEntry(member: PlanMember): PlanMemberRegistryEntry {
@@ -435,7 +433,7 @@ export async function runIntroductionPreview(
 
   deps.log(`Fetching members for ${cityName ?? cityCode}...`);
   const records = await deps.airtable.listRecords(MEMBERS_TABLE, {
-    filterByFormula: `FIND(LOWER("${escapeFormula(cityName ?? cityCode)}"), LOWER({City}))`,
+    filterByFormula: cityAliasFilterFormula(cityName ?? cityCode),
     fields: PLAN_MEMBER_FIELDS,
   });
   deps.log(`Fetched ${records.length} member record(s)`);
@@ -561,6 +559,7 @@ export async function runIntroductionPreview(
         matchedMembers: 0,
         groups: 0,
         unmatched: 0,
+        unmatchedMembers: [],
         excluded,
         repeatedPairsBlocked: 0,
         invalidEmails,
@@ -709,6 +708,11 @@ export async function runIntroductionPreview(
       matchedMembers: matchedMembers.length,
       groups: grouped.groups.length,
       unmatched: grouped.unmatched.length,
+      unmatchedMembers: grouped.unmatched.map((u) => ({
+        key: u.key,
+        email: eligible.find((m) => m.key === u.key)?.email ?? "",
+        reason: u.reason,
+      })),
       excluded,
       repeatedPairsBlocked: matrixResult.repeatedPairsBlocked,
       invalidEmails,
