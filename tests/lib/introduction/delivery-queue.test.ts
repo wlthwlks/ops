@@ -116,7 +116,7 @@ beforeEach(async () => {
 });
 
 describe("processDeliveryBatch — happy path", () => {
-  it("sends one email per group with all recipients and idempotency keys", async () => {
+  it("sends one email per member in production with self-excluded cc/replyTo", async () => {
     const { runId } = await seedPlan({ groupCount: 2, membersPerGroup: 2 });
 
     const result = await processDeliveryBatch(deps(), { batchSize: 10 });
@@ -124,18 +124,30 @@ describe("processDeliveryBatch — happy path", () => {
     expect(result.sent).toBe(2);
 
     expect(sender.sendBatch).toHaveBeenCalledTimes(1);
-    const messages = sender.sendBatch.mock.calls[0][0];
-    expect(messages).toHaveLength(2);
+    const messages = sender.sendBatch.mock.calls[0][0] as Array<{
+      to: string[];
+      cc: string[];
+      replyTo: string[];
+      subject: string;
+      html: string;
+      idempotencyKey: string;
+    }>;
+    expect(messages).toHaveLength(4);
     for (const message of messages) {
-      expect(message.to).toHaveLength(2);
+      expect(message.to).toHaveLength(1);
+      expect(message.cc).toHaveLength(1);
+      expect(message.replyTo).toEqual(message.cc);
+      expect(message.cc).not.toContain(message.to[0]);
       expect(message.subject).toBe("Subject here");
       expect(message.html).toBe("<p>Body here</p>");
-      expect(message.idempotencyKey).toBe(`intro-${runId}-${message.groupId}`);
-      expect(message.replyTo).toEqual(message.to);
+      expect(message.idempotencyKey).toMatch(/^intro-/);
     }
 
     const deliveries = await db.select().from(introductionDeliveries);
     expect(deliveries).toHaveLength(4);
+    expect(messages.flatMap((m) => m.to).sort()).toEqual(
+      deliveries.map((d) => d.deliverToEmail).sort()
+    );
     for (const delivery of deliveries) {
       expect(delivery.status).toBe("sent");
       expect(delivery.resendMessageId).toMatch(/^resend-grp-/);
@@ -145,6 +157,26 @@ describe("processDeliveryBatch — happy path", () => {
 
     const runs = await db.select().from(introductionRuns).where(eq(introductionRuns.id, runId));
     expect(runs[0].status).toBe("completed");
+  });
+
+  it("ccs every other group member but never the recipient themselves", async () => {
+    await seedPlan({ membersPerGroup: 3 });
+
+    await processDeliveryBatch(deps());
+    const messages = sender.sendBatch.mock.calls[0][0] as Array<{
+      to: string[];
+      cc: string[];
+      replyTo: string[];
+    }>;
+    expect(messages).toHaveLength(3);
+    const all = messages.map((m) => m.to[0]).sort();
+    for (const message of messages) {
+      const self = message.to[0];
+      expect(message.cc).toHaveLength(2);
+      expect(message.cc).not.toContain(self);
+      expect(message.replyTo).toEqual(message.cc);
+      expect([...message.cc, self].sort()).toEqual(all);
+    }
   });
 
   it("never sends when not live", async () => {
@@ -166,19 +198,21 @@ describe("processDeliveryBatch — happy path", () => {
     await seedPlan({ groupCount: 5 });
     const result = await processDeliveryBatch(deps(), { batchSize: 3 });
     expect(result.claimed).toBe(3);
-    expect(sender.sendBatch.mock.calls[0][0]).toHaveLength(3);
+    expect(sender.sendBatch.mock.calls[0][0]).toHaveLength(6); // 3 groups × 2 members
 
     // Remaining groups are still claimable.
     const second = await processDeliveryBatch(deps(), { batchSize: 3 });
     expect(second.claimed).toBe(2);
   });
 
-  it("sends canary-delivered addresses while keeping recipients intact", async () => {
-    await seedPlan({ canary: true });
+  it("sends canary-delivered addresses as one group email while keeping recipients intact", async () => {
+    await seedPlan({ canary: true, deliveryMode: "canary" });
     const result = await processDeliveryBatch(deps());
     expect(result.sent).toBe(1);
     const messages = sender.sendBatch.mock.calls[0][0];
+    expect(messages).toHaveLength(1);
     expect(messages[0].to).toEqual(["canary@wlthwlks.com"]);
+    expect(messages[0].replyTo).toEqual(["canary@wlthwlks.com"]);
     const deliveries = await db.select().from(introductionDeliveries);
     expect(deliveries[0].recipientEmail).toContain("@example.com");
     expect(deliveries[0].deliverToEmail).toBe("canary@wlthwlks.com");
@@ -189,6 +223,7 @@ describe("processDeliveryBatch — retries and failures", () => {
   it("defers transient failures with backoff and retries later", async () => {
     await seedPlan();
     sender.sendBatch.mockResolvedValueOnce([
+      { ok: false, permanent: false, error: "rate_limit_exceeded" },
       { ok: false, permanent: false, error: "rate_limit_exceeded" },
     ]);
 
@@ -221,6 +256,7 @@ describe("processDeliveryBatch — retries and failures", () => {
     await seedPlan();
     sender.sendBatch.mockResolvedValueOnce([
       { ok: false, permanent: true, error: "invalid_from_address" },
+      { ok: false, permanent: true, error: "invalid_from_address" },
     ]);
 
     const result = await processDeliveryBatch(deps());
@@ -236,10 +272,27 @@ describe("processDeliveryBatch — retries and failures", () => {
     expect(sender.sendBatch).toHaveBeenCalledTimes(1);
   });
 
+  it("applies per-delivery results: a permanent failure keeps already-sent deliveries", async () => {
+    await seedPlan({ membersPerGroup: 2 });
+    sender.sendBatch.mockResolvedValueOnce([
+      { ok: true, permanent: false, id: "resend-ok" },
+      { ok: false, permanent: true, error: "invalid_recipient" },
+    ]);
+
+    const result = await processDeliveryBatch(deps());
+    expect(result.failed).toBe(1);
+
+    const deliveries = await db.select().from(introductionDeliveries);
+    expect(deliveries.filter((d) => d.status === "sent")).toHaveLength(1);
+    expect(deliveries.filter((d) => d.status === "failed")).toHaveLength(1);
+    const groups = await db.select().from(introductionGroups);
+    expect(groups[0].status).toBe("failed");
+  });
+
   it("stops retrying after the attempt limit", async () => {
-    await seedPlan();
     const { runId } = await seedPlan();
     sender.sendBatch.mockResolvedValue([
+      { ok: false, permanent: false, error: "provider_timeout" },
       { ok: false, permanent: false, error: "provider_timeout" },
     ]);
 

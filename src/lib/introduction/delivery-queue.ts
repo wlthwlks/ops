@@ -164,94 +164,131 @@ export interface ProcessGroupOutcome {
   outcome: "sent" | "failed" | "deferred" | "skipped";
 }
 
-async function applyGroupResult(
+interface DeliveryOutcomeEntry {
+  deliveryId: string;
+  result: { ok: boolean; permanent: boolean; id?: string; error?: string };
+}
+
+async function deferDelivery(
+  db: AppDb,
+  delivery: IntroductionDelivery,
+  error: string,
+  now: Date
+): Promise<void> {
+  const nextRetryAt = new Date(now.getTime() + retryBackoffMs(delivery.attemptCount));
+  await db
+    .update(introductionDeliveries)
+    .set({
+      status: "pending",
+      nextRetryAt,
+      error,
+      claimedAt: null,
+    })
+    .where(eq(introductionDeliveries.id, delivery.id));
+}
+
+/**
+ * Persist per-delivery provider results. A group is `sent` when all of its
+ * deliveries sent, `failed` when any delivery failed permanently (or hit
+ * the retry limit), and `deferred` while some deliveries still retry.
+ */
+async function applyDeliveryResults(
   db: AppDb,
   claimed: ClaimedGroup,
-  result: { ok: boolean; permanent: boolean; id?: string; error?: string },
+  entries: DeliveryOutcomeEntry[],
   now: Date,
   log: (message: string) => void
 ): Promise<ProcessGroupOutcome> {
   const { group, run, deliveries } = claimed;
+  const byId = new Map(entries.map((e) => [e.deliveryId, e.result]));
 
-  if (result.ok && result.id) {
-    await db
-      .update(introductionDeliveries)
-      .set({
-        status: "sent",
-        resendMessageId: result.id,
-        sentAt: now,
-        nextRetryAt: null,
-        error: null,
-        claimedAt: null,
-      })
-      .where(and(eq(introductionDeliveries.groupId, group.id), eq(introductionDeliveries.status, "processing")));
-    await db
-      .update(introductionGroups)
-      .set({ status: "sent", sentAt: now, claimedAt: null, sendError: null })
-      .where(eq(introductionGroups.id, group.id));
-    log(`Group ${group.id} sent (${deliveries.length} recipient(s), resend ${result.id})`);
-    await syncRunStatus(db, run.id);
-    return { groupId: group.id, runId: run.id, outcome: "sent" };
-  }
-
-  if (result.permanent) {
-    await db
-      .update(introductionDeliveries)
-      .set({
-        status: "failed",
-        error: result.error ?? "Permanent send failure",
-        claimedAt: null,
-        completedAt: now,
-      })
-      .where(and(eq(introductionDeliveries.groupId, group.id), eq(introductionDeliveries.status, "processing")));
-    await db
-      .update(introductionGroups)
-      .set({ status: "failed", sendError: result.error ?? "Permanent send failure", claimedAt: null })
-      .where(eq(introductionGroups.id, group.id));
-    log(`Group ${group.id} permanently failed: ${result.error}`);
-    await syncRunStatus(db, run.id);
-    return { groupId: group.id, runId: run.id, outcome: "failed" };
-  }
-
-  // Transient: defer with backoff unless the max attempts are exhausted.
-  const overAttempts = deliveries.some((d) => d.attemptCount >= MAX_ATTEMPTS);
-  if (overAttempts) {
-    await db
-      .update(introductionDeliveries)
-      .set({
-        status: "failed",
-        error: `Retry limit reached: ${result.error ?? "transient failure"}`,
-        claimedAt: null,
-        completedAt: now,
-      })
-      .where(and(eq(introductionDeliveries.groupId, group.id), eq(introductionDeliveries.status, "processing")));
-    await db
-      .update(introductionGroups)
-      .set({ status: "failed", sendError: "Retry limit reached", claimedAt: null })
-      .where(eq(introductionGroups.id, group.id));
-    log(`Group ${group.id} failed after ${MAX_ATTEMPTS} attempts`);
-    await syncRunStatus(db, run.id);
-    return { groupId: group.id, runId: run.id, outcome: "failed" };
-  }
+  let sent = 0;
+  let failed = 0;
+  let deferred = 0;
 
   for (const delivery of deliveries) {
-    const nextRetryAt = new Date(now.getTime() + retryBackoffMs(delivery.attemptCount));
-    await db
-      .update(introductionDeliveries)
-      .set({
-        status: "pending",
-        nextRetryAt,
-        error: result.error ?? "Transient send failure",
-        claimedAt: null,
-      })
-      .where(eq(introductionDeliveries.id, delivery.id));
+    const result = byId.get(delivery.id);
+    if (!result) {
+      // No provider result for this delivery — treat as transient.
+      deferred += 1;
+      await deferDelivery(db, delivery, "Missing provider result", now);
+      continue;
+    }
+
+    if (result.ok && result.id) {
+      await db
+        .update(introductionDeliveries)
+        .set({
+          status: "sent",
+          resendMessageId: result.id,
+          sentAt: now,
+          nextRetryAt: null,
+          error: null,
+          claimedAt: null,
+        })
+        .where(eq(introductionDeliveries.id, delivery.id));
+      sent += 1;
+      continue;
+    }
+
+    if (result.permanent) {
+      await db
+        .update(introductionDeliveries)
+        .set({
+          status: "failed",
+          error: result.error ?? "Permanent send failure",
+          claimedAt: null,
+          completedAt: now,
+        })
+        .where(eq(introductionDeliveries.id, delivery.id));
+      failed += 1;
+      continue;
+    }
+
+    if (delivery.attemptCount >= MAX_ATTEMPTS) {
+      await db
+        .update(introductionDeliveries)
+        .set({
+          status: "failed",
+          error: `Retry limit reached: ${result.error ?? "transient failure"}`,
+          claimedAt: null,
+          completedAt: now,
+        })
+        .where(eq(introductionDeliveries.id, delivery.id));
+      failed += 1;
+      continue;
+    }
+
+    deferred += 1;
+    await deferDelivery(db, delivery, result.error ?? "Transient send failure", now);
   }
+
+  if (failed > 0) {
+    await db
+      .update(introductionGroups)
+      .set({ status: "failed", sendError: "Delivery failure", claimedAt: null })
+      .where(eq(introductionGroups.id, group.id));
+    log(`Group ${group.id} failed (${failed} failed, ${sent} sent, ${deferred} deferred)`);
+    await syncRunStatus(db, run.id);
+    return { groupId: group.id, runId: run.id, outcome: "failed" };
+  }
+
+  if (deferred > 0) {
+    await db
+      .update(introductionGroups)
+      .set({ status: "approved", claimedAt: null, sendError: null })
+      .where(eq(introductionGroups.id, group.id));
+    log(`Group ${group.id} deferred for retry (${deferred} pending of ${deliveries.length})`);
+    return { groupId: group.id, runId: run.id, outcome: "deferred" };
+  }
+
   await db
     .update(introductionGroups)
-    .set({ status: "approved", claimedAt: null, sendError: result.error ?? null })
+    .set({ status: "sent", sentAt: now, claimedAt: null, sendError: null })
     .where(eq(introductionGroups.id, group.id));
-  log(`Group ${group.id} deferred for retry: ${result.error}`);
-  return { groupId: group.id, runId: run.id, outcome: "deferred" };
+  log(`Group ${group.id} sent (${sent} recipient(s))`);
+  await syncRunStatus(db, run.id);
+  return { groupId: group.id, runId: run.id, outcome: "sent" };
 }
 
 /**
@@ -327,18 +364,61 @@ export async function processDeliveryBatch(
 
   deps.log(`Claimed ${claimed.length} group(s); sending via provider batch...`);
 
-  const messages: GroupEmailMessage[] = claimed.map(({ group, run, deliveries }) => ({
-    runId: run.id,
-    groupId: group.id,
-    to: [...new Set(deliveries.map((d) => d.deliverToEmail))],
-    from: senderFrom,
-    subject: group.emailSubjectSnapshot ?? `Introductions for ${group.cityName ?? "your city"}`,
-    html: group.emailHtmlSnapshot ?? "",
-    replyTo: [...new Set(deliveries.map((d) => d.deliverToEmail))],
-    idempotencyKey: `intro-${run.id}-${group.id}`,
-  }));
+  /**
+   * Production runs send one email PER MEMBER: `to` is that member only,
+   * `cc`/`replyTo` are the other group members (self excluded) so
+   * "Reply all" reaches the group without replying to yourself. Redirected
+   * modes (canary/provider_test/simulation) keep the single group message
+   * because every delivery targets the same redirect address.
+   */
+  const messages: GroupEmailMessage[] = [];
+  const messageMeta: Array<{ groupId: string; deliveryId: string; messageIndex: number }> = [];
+  for (const { group, run, deliveries } of claimed) {
+    const subject =
+      group.emailSubjectSnapshot ?? `Introductions for ${group.cityName ?? "your city"}`;
+    const html = group.emailHtmlSnapshot ?? "";
+    const addresses = [...new Set(deliveries.map((d) => d.deliverToEmail))];
 
-  let results;
+    if (run.deliveryMode === "production") {
+      for (const delivery of deliveries) {
+        const self = delivery.deliverToEmail.trim().toLowerCase();
+        const others = addresses.filter((addr) => addr.trim().toLowerCase() !== self);
+        messages.push({
+          runId: run.id,
+          groupId: group.id,
+          to: [delivery.deliverToEmail],
+          cc: others,
+          from: senderFrom,
+          subject,
+          html,
+          replyTo: others,
+          idempotencyKey: `intro-${run.id}-${group.id}-${delivery.id}`,
+        });
+        messageMeta.push({
+          groupId: group.id,
+          deliveryId: delivery.id,
+          messageIndex: messages.length - 1,
+        });
+      }
+    } else {
+      const messageIndex = messages.length;
+      messages.push({
+        runId: run.id,
+        groupId: group.id,
+        to: addresses,
+        from: senderFrom,
+        subject,
+        html,
+        replyTo: addresses,
+        idempotencyKey: `intro-${run.id}-${group.id}`,
+      });
+      for (const delivery of deliveries) {
+        messageMeta.push({ groupId: group.id, deliveryId: delivery.id, messageIndex });
+      }
+    }
+  }
+
+  let results: Array<{ ok: boolean; permanent: boolean; id?: string; error?: string }>;
   try {
     results = await deps.sender.sendBatch(messages);
   } catch (err) {
@@ -350,9 +430,20 @@ export async function processDeliveryBatch(
   let sent = 0;
   let failed = 0;
   let deferred = 0;
-  for (let i = 0; i < claimed.length; i++) {
-    const result = results[i] ?? { ok: false, permanent: false, error: "No batch result" };
-    const outcome = await applyGroupResult(db, claimed[i], result, now, deps.log);
+  for (const c of claimed) {
+    const entries: DeliveryOutcomeEntry[] = [];
+    for (const meta of messageMeta) {
+      if (meta.groupId !== c.group.id) continue;
+      entries.push({
+        deliveryId: meta.deliveryId,
+        result: results[meta.messageIndex] ?? {
+          ok: false,
+          permanent: false,
+          error: "No batch result",
+        },
+      });
+    }
+    const outcome = await applyDeliveryResults(db, c, entries, now, deps.log);
     if (outcome.outcome === "sent") sent += 1;
     if (outcome.outcome === "failed") failed += 1;
     if (outcome.outcome === "deferred") deferred += 1;

@@ -12,6 +12,7 @@ export interface ResendBatchMessage {
   from: string;
   subject: string;
   html: string;
+  cc?: string[];
   replyTo?: string[];
   idempotencyKey?: string;
 }
@@ -94,12 +95,24 @@ export function createResendClient(config: ResendConfig) {
     }
   }
 
+  const RESEND_BATCH_MAX = 100;
+
   /**
    * Send many group emails through the Resend batch API (permissive
    * validation so valid emails still go out), with a deterministic
    * batch-level idempotency key derived from the per-message keys.
+   * Chunks at the provider's 100-email batch limit.
    */
   async function sendBatch(messages: ResendBatchMessage[]): Promise<ResendBatchResultItem[]> {
+    if (messages.length === 0) return [];
+    const results: ResendBatchResultItem[] = [];
+    for (let i = 0; i < messages.length; i += RESEND_BATCH_MAX) {
+      results.push(...(await sendBatchChunk(messages.slice(i, i + RESEND_BATCH_MAX))));
+    }
+    return results;
+  }
+
+  async function sendBatchChunk(messages: ResendBatchMessage[]): Promise<ResendBatchResultItem[]> {
     if (messages.length === 0) return [];
     const batchKey = `intro-batch-${createHash("sha256")
       .update(messages.map((m) => m.idempotencyKey ?? "").join("|"))
@@ -109,9 +122,10 @@ export function createResendClient(config: ResendConfig) {
         messages.map((m) => ({
           from: m.from,
           to: m.to,
+          ...(m.cc && m.cc.length > 0 ? { cc: m.cc } : {}),
           subject: m.subject,
           html: m.html,
-          replyTo: m.replyTo,
+          ...(m.replyTo && m.replyTo.length > 0 ? { replyTo: m.replyTo } : {}),
         })),
         { batchValidation: "permissive", idempotencyKey: batchKey }
       );
