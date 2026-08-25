@@ -208,6 +208,15 @@ export async function saveEmailTemplateVersion(
   if (!input.subject.trim() || !input.bodyHtml.trim()) {
     throw new EmailTemplateError("INVALID_TEMPLATE", "Subject and body are required");
   }
+  if (template.status === "published") {
+    // A new draft supersedes the published content: it must be re-published
+    // (and re-validated) before it can go out, so "published" always means
+    // "the latest version passed publish validation".
+    await db
+      .update(introductionEmailTemplates)
+      .set({ status: "draft", updatedAt: new Date() })
+      .where(eq(introductionEmailTemplates.id, templateId));
+  }
   return insertTemplateVersion(db, { templateId, ...input });
 }
 
@@ -269,7 +278,27 @@ export interface EffectiveEmailTemplate {
 }
 
 /**
- * Resolve the template a run uses: explicit version id, else the globally
+ * Latest version of the most recently updated template whose status is
+ * "published" — the template admin published in the Email Templates page.
+ * Returns null when nothing has been published yet.
+ */
+export async function resolvePublishedTemplateVersion(
+  db: AppDb
+): Promise<IntroductionEmailTemplateVersion | null> {
+  const templates = await db
+    .select()
+    .from(introductionEmailTemplates)
+    .where(eq(introductionEmailTemplates.status, "published"))
+    .orderBy(desc(introductionEmailTemplates.updatedAt))
+    .limit(1);
+  const template = templates[0];
+  if (!template) return null;
+  return getLatestTemplateVersion(db, template.id);
+}
+
+/**
+ * Resolve the template a run uses: explicit version id, else the most
+ * recently updated published template's latest version, else the globally
  * configured default template's latest version, else the built-in defaults.
  * The visible sender comes from global config (template-level overrides
  * are not supported yet).
@@ -293,6 +322,16 @@ export async function resolveEffectiveTemplate(
       subject: version.subject,
       bodyHtml: version.bodyHtml,
       senderFrom: version.senderFrom || global.senderFrom,
+    };
+  }
+
+  const published = await resolvePublishedTemplateVersion(db);
+  if (published) {
+    return {
+      versionId: published.id,
+      subject: published.subject,
+      bodyHtml: published.bodyHtml,
+      senderFrom: published.senderFrom || global.senderFrom,
     };
   }
 

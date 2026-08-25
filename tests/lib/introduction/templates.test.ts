@@ -16,7 +16,7 @@ import {
   saveEmailTemplateVersion,
   validateTemplateContent,
 } from "@/lib/introduction/templates";
-import { getGlobalIntroductionConfig } from "@/lib/introduction/settings";
+import { getGlobalIntroductionConfig, setGlobalIntroductionConfig } from "@/lib/introduction/settings";
 import { eq } from "drizzle-orm";
 import { introductionEmailTemplates } from "@/db/schema";
 
@@ -143,6 +143,29 @@ describe("template lifecycle", () => {
     expect(templateRow[0].status).toBe("draft");
   });
 
+  it("saving a new version returns a published template to draft", async () => {
+    const { template } = await createEmailTemplate(db, {
+      name: "Intro",
+      subject: VALID_SUBJECT,
+      bodyHtml: VALID_BODY,
+    });
+    await publishEmailTemplate(db, template.id);
+    await saveEmailTemplateVersion(db, template.id, {
+      subject: VALID_SUBJECT,
+      bodyHtml: `${VALID_BODY}<p>v2 content</p>`,
+    });
+
+    const templateRow = await db
+      .select()
+      .from(introductionEmailTemplates)
+      .where(eq(introductionEmailTemplates.id, template.id));
+    expect(templateRow[0].status).toBe("draft");
+
+    // It must be re-published before it resolves as the effective template.
+    const effective = await resolveEffectiveTemplate(db, null);
+    expect(effective.versionId).toBeNull();
+  });
+
   it("rejects saves and publishes for unknown templates", async () => {
     await expect(
       saveEmailTemplateVersion(db, "missing", { subject: "s", bodyHtml: "b" })
@@ -198,5 +221,66 @@ describe("default template and resolution", () => {
     const seeded = await ensureDefaultTemplate(db);
     const effective = await resolveEffectiveTemplate(db, null);
     expect(effective.versionId).toBe(seeded?.id);
+  });
+
+  it("resolves the published template over drafts and the global default", async () => {
+    const { template: draft, version: draftVersion } = await createEmailTemplate(db, {
+      name: "Draft",
+      subject: VALID_SUBJECT,
+      bodyHtml: `${VALID_BODY}<p>draft</p>`,
+    });
+    const { template: chosen } = await createEmailTemplate(db, {
+      name: "Published",
+      subject: VALID_SUBJECT,
+      bodyHtml: `${VALID_BODY}<p>published</p>`,
+    });
+    await setGlobalIntroductionConfig(db, { defaultTemplateId: draft.id });
+    const published = await publishEmailTemplate(db, chosen.id);
+
+    const effective = await resolveEffectiveTemplate(db, null);
+    expect(effective.versionId).toBe(published.id);
+    expect(effective.bodyHtml).toBe(`${VALID_BODY}<p>published</p>`);
+    void draftVersion;
+  });
+
+  it("prefers the most recently updated published template", async () => {
+    const a = await createEmailTemplate(db, {
+      name: "A",
+      subject: VALID_SUBJECT,
+      bodyHtml: `${VALID_BODY}<p>a</p>`,
+    });
+    const b = await createEmailTemplate(db, {
+      name: "B",
+      subject: VALID_SUBJECT,
+      bodyHtml: `${VALID_BODY}<p>b</p>`,
+    });
+    await publishEmailTemplate(db, a.template.id);
+    await db
+      .update(introductionEmailTemplates)
+      .set({ updatedAt: new Date(Date.now() + 1000) })
+      .where(eq(introductionEmailTemplates.id, a.template.id));
+    await publishEmailTemplate(db, b.template.id);
+    await db
+      .update(introductionEmailTemplates)
+      .set({ updatedAt: new Date(Date.now() + 2000) })
+      .where(eq(introductionEmailTemplates.id, b.template.id));
+
+    const effective = await resolveEffectiveTemplate(db, null);
+    expect(effective.versionId).toBe(b.version.id);
+    expect(effective.bodyHtml).toBe(`${VALID_BODY}<p>b</p>`);
+  });
+
+  it("falls back to the global default template when nothing is published", async () => {
+    const { template } = await createEmailTemplate(db, {
+      name: "Unpublished default",
+      subject: VALID_SUBJECT,
+      bodyHtml: VALID_BODY,
+    });
+    await setGlobalIntroductionConfig(db, { defaultTemplateId: template.id });
+
+    const effective = await resolveEffectiveTemplate(db, null);
+    const latest = await getLatestTemplateVersion(db, template.id);
+    expect(effective.versionId).toBe(latest?.id);
+    expect(effective.subject).toBe(VALID_SUBJECT);
   });
 });
