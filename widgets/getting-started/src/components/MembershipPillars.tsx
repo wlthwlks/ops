@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { BrandButton } from './BrandButton'
+import { CalendarSubscribeMenu } from './CalendarSubscribeMenu'
 
 type Pillar = {
   number: string
@@ -99,9 +99,7 @@ const pillars: Pillar[] = [
           wherever you happen to be.
         </p>
         <div className="pt-2">
-          <BrandButton href="https://calendar.google.com/calendar/u/0?cid=Y183ZWYzNDIzNTUxZDllMDMyNTEzYTgwMGZlZjliY2YyMWZlOGU0ZDJkNTlhNTEwODExOTJjOWM1M2YxYmIxOTAxQGdyb3VwLmNhbGVuZGFyLmdvb2dsZS5jb20">
-            Add WLTH WLKS Community Calendar
-          </BrandButton>
+          <CalendarSubscribeMenu />
         </div>
       </>
     ),

@@ -18,6 +18,8 @@ export function BrandButton({
   return (
     <a
       href={href}
+      target="_blank"
+      rel="noopener noreferrer"
       className={cn(
         'group inline-flex w-fit items-center gap-2 rounded-full px-6 py-3 text-[13px] font-semibold uppercase tracking-brand transition-colors',
         variant === 'solid'
