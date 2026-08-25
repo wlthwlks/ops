@@ -673,7 +673,8 @@ describe("city alias matching in previews", () => {
       (call) => call[0] === "MEMBERS"
     )?.[1]?.filterByFormula as string | undefined;
     expect(formula).toContain('FIND(LOWER("Los Angeles"), LOWER({City}))');
-    expect(formula).toContain('FIND(LOWER("LA"), LOWER({City}))');
+    expect(formula).toContain('LOWER(TRIM({City})) = LOWER("LA")');
+    expect(formula).toContain("ARRAYJOIN({City relation}");
 
     expect(result.report.eligibleMembers).toBe(3);
     expect(result.report.excluded).toEqual([]);
@@ -698,5 +699,52 @@ describe("city alias matching in previews", () => {
       const snapshot = JSON.parse(row.memberSnapshotJson ?? "{}") as { city?: string };
       expect(snapshot.city).toBe("Los Angeles");
     }
+  });
+
+  it("includes members linked to the city record even with a non-matching city text", async () => {
+    airtableGetRecord.mockResolvedValue({ id: "rec_city_london", fields: { City: "London" } });
+    airtableList.mockImplementation(async (table: string) => {
+      if (table === "MATCHING OPTIONS") return [];
+      return [
+        memberRecord("rec_a", {}),
+        memberRecord("rec_b", {}),
+        memberRecord("rec_c", {}),
+        // Linked to the London record but with a stale City text — must be
+        // treated as a London member, not excluded as a city mismatch.
+        memberRecord("rec_link", {
+          City: "London, UK",
+          "City relation": ["rec_city_london"],
+        }),
+      ];
+    });
+
+    const result = await runIntroductionPreview(makeDeps(), {
+      cityCode: "rec_city_london",
+      cycleDate: "2026-08-16",
+    });
+    expect(result.success).toBe(true);
+    expect(result.report.eligibleMembers).toBe(4);
+    expect(result.report.excluded).toEqual([]);
+  });
+
+  it("falls back to the text-only filter when City relation is unavailable", async () => {
+    airtableList.mockImplementation(async (table: string) => {
+      if (table === "MATCHING OPTIONS") return [];
+      throw new Error('Unknown field name: "City relation"');
+    });
+
+    await expect(
+      runIntroductionPreview(makeDeps(), {
+        cityCode: "rec_city_london",
+        cycleDate: "2026-08-16",
+      })
+    ).rejects.toThrow('Unknown field name: "City relation"');
+
+    // The retry must use the text-only formula and no City relation field.
+    const calls = airtableList.mock.calls.filter((call) => call[0] === "MEMBERS");
+    expect(calls).toHaveLength(2);
+    const retryOptions = calls[1]?.[1] as { filterByFormula?: string; fields?: string[] };
+    expect(retryOptions.filterByFormula).not.toContain("ARRAYJOIN");
+    expect(retryOptions.fields).not.toContain("City relation");
   });
 });

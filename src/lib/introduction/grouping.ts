@@ -173,7 +173,8 @@ function bestCandidate(
 function attemptAssignment(
   order: Array<{ key: string }>,
   matrix: PairMatrixReader,
-  sizes: EffectiveGroupSizes
+  sizes: EffectiveGroupSizes,
+  degrees: Map<string, number>
 ): Assignment {
   const { target, min, max, strict } = sizes;
   const used = new Set<string>();
@@ -182,7 +183,25 @@ function attemptAssignment(
   const blockedSeeds = new Set<string>();
 
   const pool = () => order.filter((m) => !used.has(m.key));
-  const pickSeed = () => pool().find((m) => !blockedSeeds.has(m.key));
+
+  /**
+   * Scarcity-first seeding: anchor groups on the member with the fewest
+   * allowed pairs so low-degree members are matched before their scarce
+   * partners are consumed by other groups. Ties keep the current order.
+   */
+  const pickSeed = () => {
+    let best: { key: string } | null = null;
+    let bestDegree = Number.POSITIVE_INFINITY;
+    for (const member of pool()) {
+      if (blockedSeeds.has(member.key)) continue;
+      const degree = degrees.get(member.key) ?? 0;
+      if (degree < bestDegree) {
+        best = member;
+        bestDegree = degree;
+      }
+    }
+    return best;
+  };
 
   while (true) {
     const candidates = pool();
@@ -287,7 +306,7 @@ function betterAssignment(a: Assignment, b: Assignment): Assignment {
 
 export function buildGroups(
   members: Array<{ key: string }>,
-  matrix: PairMatrixReader,
+  matrix: PairScoreMatrix,
   options: GroupingOptions
 ): GroupingResult {
   const sizes = options.sizes;
@@ -297,17 +316,26 @@ export function buildGroups(
     return { groups: [], unmatched: [], quality: 0, groupScores: [] };
   }
 
+  // Allowed-pair degree per member key — drives scarcity-first seeding.
+  const degrees = new Map<string, number>();
+  for (const member of members) degrees.set(member.key, 0);
+  for (const { keyA, keyB, entry } of matrix.entries()) {
+    if (!entry.allowed) continue;
+    if (degrees.has(keyA)) degrees.set(keyA, (degrees.get(keyA) ?? 0) + 1);
+    if (degrees.has(keyB)) degrees.set(keyB, (degrees.get(keyB) ?? 0) + 1);
+  }
+
   const baseOrder = [...members].sort((a, b) => a.key.localeCompare(b.key));
   let best: Assignment | null = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const rng = mulberry32(hashSeed(`${options.seed}:${attempt}`));
     const order = seededShuffle(baseOrder, rng);
-    const assignment = attemptAssignment(order, matrix, sizes);
+    const assignment = attemptAssignment(order, matrix, sizes, degrees);
     best = best ? betterAssignment(best, assignment) : assignment;
   }
 
-  const result = best ?? attemptAssignment(baseOrder, matrix, sizes);
+  const result = best ?? attemptAssignment(baseOrder, matrix, sizes, degrees);
   return {
     groups: result.groups,
     unmatched: result.unmatched,
@@ -323,7 +351,7 @@ export function buildGroups(
  */
 export function rebuildGroupsWithLocks(
   poolMembers: Array<{ key: string }>,
-  matrix: PairMatrixReader,
+  matrix: PairScoreMatrix,
   options: GroupingOptions,
   lockedGroups: Array<Array<{ key: string }>>
 ): GroupingResult {

@@ -19,7 +19,7 @@ import {
   CONNECTION_TYPES,
   INDUSTRIES,
 } from "@/lib/forms/reference-data/static-options";
-import { MEMBER_FIELDS, MEMBERS_TABLE, CITIES_TABLE } from "@/lib/ops/airtable-fields";
+import { MEMBER_FIELDS, MEMBERS_TABLE, CITIES_TABLE, toAirtableSchemaError } from "@/lib/ops/airtable-fields";
 import {
   resolveEffectiveCitySettings,
   type EffectiveCitySettings,
@@ -54,6 +54,7 @@ export const PLAN_MEMBER_FIELDS = [
   "First Name",
   "Last Name",
   "City",
+  MEMBER_FIELDS.cityRelation,
   "post code",
   "Membership",
   "Payment",
@@ -76,6 +77,42 @@ export const PLAN_MEMBER_FIELDS = [
   MEMBER_FIELDS.socialMedia,
   MEMBER_FIELDS.businessWebsite,
 ];
+
+/**
+ * Fetch a city's member records from Airtable. Members are matched by the
+ * canonical city name / aliases in the City text, OR by a City relation
+ * link to the city's ALL CITIES record (linked values resolve to the
+ * linked record's name inside ARRAYJOIN). Bases without a "City relation"
+ * field fall back to the text-only filter.
+ */
+async function fetchCityMemberRecords(
+  airtable: AirtableClient,
+  cityNameOrCode: string,
+  log: (message: string) => void
+): Promise<AirtableRecord[]> {
+  const canonical = canonicalizeCityName(cityNameOrCode) || cityNameOrCode;
+  const escaped = canonical.replace(/"/g, '\\"');
+  const textFormula = cityAliasFilterFormula(cityNameOrCode);
+  const relationFormula = `FIND(LOWER("${escaped}"), LOWER(ARRAYJOIN({${MEMBER_FIELDS.cityRelation}}, ",")))`;
+  try {
+    return await airtable.listRecords(MEMBERS_TABLE, {
+      filterByFormula: `OR(${textFormula}, ${relationFormula})`,
+      fields: PLAN_MEMBER_FIELDS,
+    });
+  } catch (e) {
+    const schema = toAirtableSchemaError(MEMBERS_TABLE, e);
+    if (schema?.field === MEMBER_FIELDS.cityRelation) {
+      log(
+        `City relation not available on MEMBERS — falling back to text-only filter`
+      );
+      return airtable.listRecords(MEMBERS_TABLE, {
+        filterByFormula: textFormula,
+        fields: PLAN_MEMBER_FIELDS.filter((f) => f !== MEMBER_FIELDS.cityRelation),
+      });
+    }
+    throw e;
+  }
+}
 
 export interface PlanMember extends ScorableMember {
   airtableRecordId: string;
@@ -432,11 +469,18 @@ export async function runIntroductionPreview(
   const catalog = await loadMatchingOptionsCatalog(deps.airtable);
 
   deps.log(`Fetching members for ${cityName ?? cityCode}...`);
-  const records = await deps.airtable.listRecords(MEMBERS_TABLE, {
-    filterByFormula: cityAliasFilterFormula(cityName ?? cityCode),
-    fields: PLAN_MEMBER_FIELDS,
-  });
+  const records = await fetchCityMemberRecords(deps.airtable, cityName ?? cityCode, deps.log);
   deps.log(`Fetched ${records.length} member record(s)`);
+
+  // Members linked to this city's ALL CITIES record belong to the run even
+  // when their City text is stale or non-canonical ("LA", "Los Angeles, CA").
+  const canonicalCity = canonicalizeCityName(cityName ?? "") || cityName || null;
+  for (const record of records) {
+    const relationIds = linkIdsFromField(record.fields[MEMBER_FIELDS.cityRelation]);
+    if (canonicalCity && relationIds.includes(cityCode)) {
+      record.fields["City"] = canonicalCity;
+    }
+  }
 
   const namespace = process.env.INTRO_SEMANTIC_NAMESPACE ?? DEFAULT_SEMANTIC_NAMESPACE;
 

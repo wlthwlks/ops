@@ -41,6 +41,8 @@ export function canonicalizeCityName(raw: string | null | undefined): string {
 /**
  * Airtable filter formula matching members whose City cell equals the
  * canonical city name or any of its aliases (case-insensitive).
+ * Aliases shorter than 3 characters (e.g. "LA") use exact equality so they
+ * never substring-match unrelated cities like "Atlanta" or "Dallas".
  */
 export function cityAliasFilterFormula(cityName: string): string {
   const canonical = canonicalizeCityName(cityName);
@@ -49,6 +51,9 @@ export function cityAliasFilterFormula(cityName: string): string {
   if (aliases.length === 0) return `FIND(LOWER(""), LOWER({City}))`;
   const conditions = aliases.map((alias) => {
     const escaped = alias.replace(/"/g, '\\"');
+    if (alias.trim().length < 3) {
+      return `LOWER(TRIM({City})) = LOWER("${escaped}")`;
+    }
     return `FIND(LOWER("${escaped}"), LOWER({City}))`;
   });
   return `OR(${conditions.join(", ")})`;

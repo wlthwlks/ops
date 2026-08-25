@@ -25,7 +25,7 @@ describe("cityAliasFilterFormula", () => {
   it("matches the canonical name and every alias", () => {
     const formula = cityAliasFilterFormula("Los Angeles");
     expect(formula).toContain('FIND(LOWER("Los Angeles"), LOWER({City}))');
-    expect(formula).toContain('FIND(LOWER("LA"), LOWER({City}))');
+    expect(formula).toContain('LOWER(TRIM({City})) = LOWER("LA")');
     expect(formula).toContain('FIND(LOWER("Pasadena"), LOWER({City}))');
     expect(formula.startsWith("OR(")).toBe(true);
   });
@@ -33,7 +33,13 @@ describe("cityAliasFilterFormula", () => {
   it("accepts an alias as input and still uses the canonical set", () => {
     const formula = cityAliasFilterFormula("LA");
     expect(formula).toContain('FIND(LOWER("Los Angeles"), LOWER({City}))');
-    expect(formula).toContain('FIND(LOWER("LA"), LOWER({City}))');
+    expect(formula).toContain('LOWER(TRIM({City})) = LOWER("LA")');
+  });
+
+  it("uses exact equality for short aliases so they never substring-match", () => {
+    const formula = cityAliasFilterFormula("Los Angeles");
+    // "LA" must not appear as a FIND, or cities like "Atlanta" would match.
+    expect(formula).not.toContain('FIND(LOWER("LA")');
   });
 
   it("falls back to a single FIND for unknown cities", () => {

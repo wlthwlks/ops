@@ -310,4 +310,27 @@ describe("buildGroups — everyone matched (target 3 / min 2 / max 4)", () => {
     expect(result.unmatched).toHaveLength(6);
     for (const u of result.unmatched) expect(u.reason).toBe("size_impossible");
   });
+
+  it("scarcity-first seeding matches a low-degree member before its partners are consumed", () => {
+    // m0 only pairs with m1 and m2. m1..m5 form a high-scoring clique, so a
+    // quality-first greedy consumes m1/m2 into high-score triples and
+    // strands m0. Scarcity-first seeding anchors on m0 (degree 2) first,
+    // which yields a perfect two-triple assignment.
+    const sizesMin3: EffectiveGroupSizes = { target: 3, min: 3, max: 4, strict: false };
+    const matrix = new PairScoreMatrix();
+    matrix.set("m0", "m1", { score: { overall: 0.4, components: {} }, allowed: true });
+    matrix.set("m0", "m2", { score: { overall: 0.4, components: {} }, allowed: true });
+    matrix.set("m1", "m2", { score: { overall: 0.5, components: {} }, allowed: true });
+    for (let i = 1; i < 6; i++) {
+      for (let j = i + 1; j < 6; j++) {
+        matrix.set(`m${i}`, `m${j}`, { score: { overall: 0.9, components: {} }, allowed: true });
+      }
+    }
+    const result = buildGroups(members(6), matrix, options({ sizes: sizesMin3 }));
+    expect(result.unmatched).toHaveLength(0);
+    const placed = result.groups.flat().map((m) => m.key);
+    expect(placed).toContain("m0");
+    const m0Group = result.groups.find((g) => g.some((m) => m.key === "m0"));
+    expect(m0Group?.map((m) => m.key).sort()).toEqual(["m0", "m1", "m2"]);
+  });
 });
