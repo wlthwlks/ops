@@ -365,11 +365,13 @@ export async function processDeliveryBatch(
   deps.log(`Claimed ${claimed.length} group(s); sending via provider batch...`);
 
   /**
-   * Production runs send one email PER MEMBER: `to` is that member only,
-   * `cc`/`replyTo` are the other group members (self excluded) so
-   * "Reply all" reaches the group without replying to yourself. Redirected
-   * modes (canary/provider_test/simulation) keep the single group message
-   * because every delivery targets the same redirect address.
+   * Production runs send one email PER MEMBER: `to` is that member only and
+   * `replyTo` is the other group members (self excluded). No `cc` — each
+   * member receives exactly one email where their own address appears only
+   * in To, so "Reply all" (and Reply) reach the group without anyone ever
+   * replying to themselves. Redirected modes (canary/provider_test/
+   * simulation) keep the single group message because every delivery
+   * targets the same redirect address.
    */
   const messages: GroupEmailMessage[] = [];
   const messageMeta: Array<{ groupId: string; deliveryId: string; messageIndex: number }> = [];
@@ -387,7 +389,6 @@ export async function processDeliveryBatch(
           runId: run.id,
           groupId: group.id,
           to: [delivery.deliverToEmail],
-          cc: others,
           from: senderFrom,
           subject,
           html,

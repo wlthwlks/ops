@@ -116,7 +116,7 @@ beforeEach(async () => {
 });
 
 describe("processDeliveryBatch — happy path", () => {
-  it("sends one email per member in production with self-excluded cc/replyTo", async () => {
+  it("sends one email per member in production with To-only and self-excluded replyTo", async () => {
     const { runId } = await seedPlan({ groupCount: 2, membersPerGroup: 2 });
 
     const result = await processDeliveryBatch(deps(), { batchSize: 10 });
@@ -135,9 +135,9 @@ describe("processDeliveryBatch — happy path", () => {
     expect(messages).toHaveLength(4);
     for (const message of messages) {
       expect(message.to).toHaveLength(1);
-      expect(message.cc).toHaveLength(1);
-      expect(message.replyTo).toEqual(message.cc);
-      expect(message.cc).not.toContain(message.to[0]);
+      expect(message.cc).toBeUndefined();
+      expect(message.replyTo).toHaveLength(1);
+      expect(message.replyTo).not.toContain(message.to[0]);
       expect(message.subject).toBe("Subject here");
       expect(message.html).toBe("<p>Body here</p>");
       expect(message.idempotencyKey).toMatch(/^intro-/);
@@ -159,7 +159,7 @@ describe("processDeliveryBatch — happy path", () => {
     expect(runs[0].status).toBe("completed");
   });
 
-  it("ccs every other group member but never the recipient themselves", async () => {
+  it("replies to every other group member but never the recipient themselves", async () => {
     await seedPlan({ membersPerGroup: 3 });
 
     await processDeliveryBatch(deps());
@@ -172,10 +172,10 @@ describe("processDeliveryBatch — happy path", () => {
     const all = messages.map((m) => m.to[0]).sort();
     for (const message of messages) {
       const self = message.to[0];
-      expect(message.cc).toHaveLength(2);
-      expect(message.cc).not.toContain(self);
-      expect(message.replyTo).toEqual(message.cc);
-      expect([...message.cc, self].sort()).toEqual(all);
+      expect(message.cc).toBeUndefined();
+      expect(message.replyTo).toHaveLength(2);
+      expect(message.replyTo).not.toContain(self);
+      expect([...message.replyTo, self].sort()).toEqual(all);
     }
   });
 
