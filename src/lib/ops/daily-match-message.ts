@@ -698,11 +698,9 @@ export async function runDailyMatchMessage(
           .map((e) => e.toLowerCase())
           .filter((e) => e !== toEmail && !ccEmails.includes(e));
 
-        // Reply-To covers the VISIBLE recipients only (new joiner + matches).
-        // Oversight is invisible — leaving them out of Reply-To keeps them
-        // unexposed in message headers.
-        const replyToList = [toEmail, ...ccEmails];
-
+        // No Reply-To header: Reply All works off To/Cc where every mail
+        // client strips the recipient's own address, so nobody replies to
+        // themselves. Oversight stays invisible in Bcc either way.
         const result = await timed("resend.sendEmail", timings, () =>
           resend.sendEmail(
             toEmail,
@@ -711,7 +709,6 @@ export async function runDailyMatchMessage(
             {
               ...(ccEmails.length > 0 ? { cc: ccEmails } : {}),
               ...(bccEmails.length > 0 ? { bcc: bccEmails } : {}),
-              replyTo: replyToList,
             }
           )
         );

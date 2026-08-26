@@ -244,12 +244,11 @@ describe("runDailyMatchMessage — DB tracking wiring", () => {
       "req-4"
     );
 
-    // Exactly one Resend invocation — new member as To, matches as Cc.
+    // Exactly one Resend invocation — new member as To, matches as Cc, no Reply-To.
     expect(sendEmail).toHaveBeenCalledTimes(1);
     expect(sendEmail.mock.calls[0]![0]).toBe("new@test.com");
     expect(sendEmail.mock.calls[0]![3]).toEqual({
       cc: ["alice@test.com", "bob@test.com"],
-      replyTo: ["new@test.com", "alice@test.com", "bob@test.com"],
     });
 
     // Three audit rows (new + alice + bob), all sharing the same message id.

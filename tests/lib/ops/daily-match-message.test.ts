@@ -177,14 +177,13 @@ describe("runDailyMatchMessage", () => {
     expect(d.slackChannelId).toBe("C123");
     expect(slack.conversationsOpen).toHaveBeenCalledOnce();
     expect(slack.postMessage).toHaveBeenCalledWith("C123", "generated-message");
-    // One Resend call total — new member as To, matches as Cc, reply-to set to
-    // all humans so Reply/Reply-All never lands at the donotreply From: address.
+    // One Resend call total — new member as To, matches as Cc. No Reply-To so
+    // Reply All uses To/Cc and nobody ends up replying to themselves.
     expect(resend.sendEmail).toHaveBeenCalledTimes(1);
     const [toArg, , , optsArg] = resend.sendEmail.mock.calls[0]!;
     expect(toArg).toBe("new@test.com");
     expect(optsArg).toEqual({
       cc: ["alice@test.com", "bob@test.com"],
-      replyTo: ["new@test.com", "alice@test.com", "bob@test.com"],
     });
     // emailsSent still tracks 3 recipients (audit-friendly).
     expect(d.emailsSent).toHaveLength(3);
@@ -318,8 +317,9 @@ describe("runDailyMatchMessage", () => {
     expect(opts.cc).toEqual(["alice@test.com", "bob@test.com"]);
     // Bcc — hidden, oversight only
     expect(opts.bcc).toEqual(["oversight1@test.com", "oversight2@test.com"]);
-    // Reply-To excludes oversight so they're not exposed in message headers
-    expect(opts.replyTo).toEqual(["new@test.com", "alice@test.com", "bob@test.com"]);
+    // No Reply-To header at all, so oversight stays invisible and recipients
+    // never get their own address merged in by Reply All.
+    expect(opts.replyTo).toBeUndefined();
   });
 
   it("SLACK_OVERSIGHT_EMAILS: oversight users added to DM and looked up via lookupByEmail", async () => {
