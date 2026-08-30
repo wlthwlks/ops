@@ -573,7 +573,7 @@ export async function runIntroductionPreview(
         lat: member.lat,
         lon: member.lon,
       },
-      { cycleDate, runCity: cityName, constraints: effective.constraints }
+      { cycleDate, accessReference: now, runCity: cityName, constraints: effective.constraints }
     );
     if (!isValidEmail(member.email)) invalidEmails += 1;
     if (!result.eligible) {

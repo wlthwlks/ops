@@ -105,6 +105,33 @@ describe("checkMemberEligibility — service access", () => {
     expect(result.reason).toBe("no_service_access");
   });
 
+  it("evaluates access against accessReference when provided (late-evening renewal)", () => {
+    // Access expires 4m before the cycle day starts, but is still valid at
+    // plan-build time — the member renews at period end and must not be dropped.
+    const cycleDate = new Date("2026-08-31T00:00:00Z");
+    const accessReference = new Date("2026-08-30T20:24:00Z");
+    const input = member({
+      membership: "Inactive",
+      payment: "Unpaid",
+      serviceAccessUntil: "2026-08-30T23:55:35Z",
+    });
+
+    const withReference = checkMemberEligibility(input, {
+      cycleDate,
+      accessReference,
+      runCity: null,
+      constraints,
+    });
+    expect(withReference.eligible).toBe(true);
+
+    const withoutReference = checkMemberEligibility(input, {
+      cycleDate,
+      runCity: null,
+      constraints,
+    });
+    expect(withoutReference).toEqual({ eligible: false, reason: "no_service_access" });
+  });
+
   it("rejects members with an invalid email", () => {
     const result = checkMemberEligibility(member({ email: "bad" }), {
       cycleDate: CYCLE,

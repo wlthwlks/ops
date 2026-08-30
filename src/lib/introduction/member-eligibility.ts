@@ -65,6 +65,13 @@ export function memberKey(
 
 export interface MemberEligibilityOptions {
   cycleDate: Date;
+  /**
+   * Reference instant for the service-access evaluation. Defaults to
+   * `cycleDate`; pass the plan-build time so members whose access is still
+   * valid at build time (e.g. renewing at the end of the day before the
+   * cycle) are not dropped.
+   */
+  accessReference?: Date;
   /** Normalized city the run is scoped to; null skips the city check. */
   runCity: string | null;
   constraints: ResolvedConstraints;
@@ -82,7 +89,7 @@ export function checkMemberEligibility(
     member.membership ?? "",
     member.payment ?? "",
     member.serviceAccessUntil,
-    options.cycleDate,
+    options.accessReference ?? options.cycleDate,
     undefined,
     { stripeSubscriptionStatus: member.stripeSubscriptionStatus }
   );
