@@ -26,6 +26,7 @@ export const BILLING_LAST_SYNCED_AT_FIELD = "Billing last synced at";
 export const LAST_STRIPE_EVENT_ID_FIELD = "Last Stripe event ID";
 export const CANCEL_AT_PERIOD_END_FIELD = "Cancel at period end";
 export const CANCELLATION_EFFECTIVE_AT_FIELD = "Cancellation effective at";
+export const CANCELLATION_DATE_FIELD = "Cancellation date";
 export const FIRST_NAME_FIELD = "First Name";
 export const LAST_NAME_FIELD = "Last Name";
 export const MEMBERS_TABLE = AIRTABLE_MEMBERS_TABLE;

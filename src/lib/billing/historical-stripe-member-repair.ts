@@ -19,6 +19,7 @@ import {
   BILLING_LAST_SYNCED_AT_FIELD,
   CANCEL_AT_PERIOD_END_FIELD,
   CANCELLATION_EFFECTIVE_AT_FIELD,
+  CANCELLATION_DATE_FIELD,
   FIRST_NAME_FIELD,
   LAST_NAME_FIELD,
   computeLatestMembershipPeriodEndForCustomer,
@@ -170,6 +171,89 @@ export function rowsToCsv(rows: HistoricalRepairRow[]): string {
 /** Minimal Stripe surface used by repair (tests may pass partial mocks). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type StripeListClient = any;
+
+/**
+ * Derive Airtable Membership/Payment-related fields from a customer's Stripe
+ * subscriptions (membership prices only). Used when the repair CLI creates a
+ * missing member so the row reflects what Stripe says instead of defaulting
+ * blank (= Active) in Airtable.
+ */
+export function deriveMemberStatusFromSubscriptions(
+  subs: Stripe.Subscription[],
+  membershipPriceIds: Set<string>
+): {
+  membership: "Active" | "Cancelled";
+  stripeSubscriptionId: string;
+  stripeSubscriptionStatus: string;
+  cancelAtPeriodEnd: boolean;
+  stripePriceId: string;
+  /** YYYY-MM-DD of the latest membership sub cancellation, "" when active. */
+  cancellationDate: string;
+} {
+  const membershipSubs = subs.filter((s) =>
+    subscriptionItemPriceIds(s).some((id) => membershipPriceIds.has(id))
+  );
+  const latest = membershipSubs
+    .slice()
+    .sort((a, b) => {
+      const ae = subscriptionCurrentPeriodEndUnix(a) ?? 0;
+      const be = subscriptionCurrentPeriodEndUnix(b) ?? 0;
+      return be - ae;
+    })[0];
+  const hasActive = membershipSubs.some((s) => s.status === "active" || s.status === "trialing");
+  let cancellationDate = "";
+  if (!hasActive) {
+    const cancelledUnix = membershipSubs
+      .map((s) =>
+        typeof s.canceled_at === "number"
+          ? s.canceled_at
+          : typeof s.ended_at === "number"
+            ? s.ended_at
+            : null
+      )
+      .filter((u): u is number => u != null);
+    if (cancelledUnix.length > 0) {
+      cancellationDate = new Date(Math.max(...cancelledUnix) * 1000).toISOString().slice(0, 10);
+    }
+  }
+  return {
+    membership: hasActive ? "Active" : "Cancelled",
+    stripeSubscriptionId: latest?.id ?? "",
+    stripeSubscriptionStatus: latest?.status ?? "",
+    cancelAtPeriodEnd: Boolean(latest?.cancel_at_period_end),
+    stripePriceId: latest ? (subscriptionItemPriceIds(latest)[0] ?? "") : "",
+    cancellationDate,
+  };
+}
+
+/**
+ * Load a customer's subscriptions (any status) and derive status fields for
+ * a to-be-created Airtable member. `inspected` is false when the Stripe
+ * subscription surface was unavailable — in that case callers must not write
+ * status fields (we know nothing about the member's current state).
+ */
+async function fetchDerivedCreateStatus(
+  stripe: StripeListClient,
+  stripeCustomerId: string,
+  membershipPriceIds: Set<string>
+): Promise<{ inspected: boolean } & ReturnType<typeof deriveMemberStatusFromSubscriptions>> {
+  let subs: Stripe.Subscription[] = [];
+  let inspected = false;
+  try {
+    if (typeof stripe?.subscriptions?.list === "function") {
+      const page = await stripe.subscriptions.list({
+        customer: stripeCustomerId,
+        status: "all",
+        limit: 10,
+      });
+      if (Array.isArray(page?.data)) subs = page.data;
+      inspected = true;
+    }
+  } catch {
+    inspected = false;
+  }
+  return { inspected, ...deriveMemberStatusFromSubscriptions(subs, membershipPriceIds) };
+}
 
 /**
  * Repair one paying Stripe customer against Airtable.
@@ -432,12 +516,38 @@ export async function repairPayingStripeCustomer(input: {
   }
 
   const names = namesFromStripeCustomer(customer, rawEmail);
+  const derived = await fetchDerivedCreateStatus(stripe, stripeCustomerId, membershipPriceIds);
   const fields: Record<string, unknown> = {
     [PRIMARY_EMAIL_FIELD]: normalizeEmailStrict(rawEmail),
     [FIRST_NAME_FIELD]: names.firstName,
     [LAST_NAME_FIELD]: names.lastName,
     [STRIPE_CUSTOMER_ID_FIELD]: stripeCustomerId,
     [SERVICE_ACCESS_FIELD]: paidThroughIso,
+    // Reflect what Stripe says instead of leaving blank (blank Membership
+    // reads as Active in Airtable filters).
+    ...(derived.inspected
+      ? {
+          [MEMBERSHIP_FIELD]: derived.membership,
+          [PAYMENT_FIELD]: "Paid",
+          [CANCEL_AT_PERIOD_END_FIELD]: derived.cancelAtPeriodEnd,
+          ...(derived.stripeSubscriptionId
+            ? { [STRIPE_SUBSCRIPTION_ID_FIELD]: derived.stripeSubscriptionId }
+            : {}),
+          ...(derived.stripeSubscriptionStatus
+            ? { [STRIPE_SUBSCRIPTION_STATUS_FIELD]: derived.stripeSubscriptionStatus }
+            : {}),
+          ...(derived.stripePriceId ? { [STRIPE_PRICE_ID_FIELD]: derived.stripePriceId } : {}),
+          ...(derived.cancellationDate
+            ? { [CANCELLATION_DATE_FIELD]: derived.cancellationDate }
+            : {}),
+          ...(derived.membership === "Cancelled"
+            ? { [CANCELLATION_EFFECTIVE_AT_FIELD]: paidThroughIso }
+            : {}),
+          [LAST_INVOICE_ID_FIELD]: "historical-repair",
+          [LAST_INVOICE_STATUS_FIELD]: "paid",
+          [BILLING_LAST_SYNCED_AT_FIELD]: new Date().toISOString(),
+        }
+      : {}),
   };
 
   if (dryRun) {
@@ -447,7 +557,9 @@ export async function repairPayingStripeCustomer(input: {
       airtableRecordId: "",
       action: "would_create_member",
       paidThrough: paidThroughIso,
-      reason: "Would create Airtable Member",
+      reason: derived.inspected
+        ? `Would create Airtable Member (membership=${derived.membership})`
+        : "Would create Airtable Member",
       updated: false,
       created: false,
       linked: false,

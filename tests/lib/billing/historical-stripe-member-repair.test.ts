@@ -14,6 +14,10 @@ import {
   PAYMENT_FIELD,
   MEMBERSHIP_FIELD,
   STRIPE_SUBSCRIPTION_ID_FIELD,
+  STRIPE_SUBSCRIPTION_STATUS_FIELD,
+  CANCEL_AT_PERIOD_END_FIELD,
+  CANCELLATION_EFFECTIVE_AT_FIELD,
+  CANCELLATION_DATE_FIELD,
 } from "@/lib/billing/service-access-sync";
 
 describe("parseHistoricalRepairArgs", () => {
@@ -80,11 +84,17 @@ describe("repairPayingStripeCustomer", () => {
   const membershipPriceIds = new Set(["price_mem"]);
   const periodEnd = Math.floor(new Date("2026-09-01T00:00:00.000Z").getTime() / 1000);
 
-  function mockStripe() {
+  function mockStripe(subscriptionsData: unknown[] | null = []) {
     return {
       customers: {
         list: vi.fn(),
         retrieve: vi.fn(),
+      },
+      subscriptions: {
+        list: vi.fn(async () => ({
+          data: subscriptionsData ?? [],
+          has_more: false,
+        })),
       },
       invoices: {
         list: vi.fn(async () => ({
@@ -210,7 +220,16 @@ describe("repairPayingStripeCustomer", () => {
 
   it("creates only when canCreate", async () => {
     const airtable = mockAirtable({ byId: [], byEmail: [] });
-    const stripe = mockStripe();
+    const stripe = mockStripe([
+      {
+        id: "sub_c1",
+        status: "canceled",
+        cancel_at_period_end: false,
+        current_period_end: periodEnd - 1000,
+        canceled_at: periodEnd,
+        items: { data: [{ price: { id: "price_mem" } }] },
+      },
+    ]);
     const r = await repairPayingStripeCustomer({
       airtable,
       stripe,
@@ -232,6 +251,8 @@ describe("repairPayingStripeCustomer", () => {
             [SERVICE_ACCESS_FIELD]: "2026-09-01T00:00:00.000Z",
             "First Name": "Pay",
             "Last Name": "User",
+            [MEMBERSHIP_FIELD]: "Cancelled",
+            [PAYMENT_FIELD]: "Paid",
           }),
         }),
       ])
@@ -240,6 +261,92 @@ describe("repairPayingStripeCustomer", () => {
       airtable.createRecords.mock.calls[0][1] as Array<{ fields: Record<string, unknown> }>
     )[0].fields;
     expect(createdFields).not.toHaveProperty("Name");
+  });
+
+  it("create sets Cancellation date + effective-at from a cancelled subscription", async () => {
+    const airtable = mockAirtable({ byId: [], byEmail: [] });
+    const stripe = mockStripe([
+      {
+        id: "sub_c1",
+        status: "canceled",
+        cancel_at_period_end: true,
+        current_period_end: periodEnd - 1000,
+        canceled_at: periodEnd,
+        items: { data: [{ price: { id: "price_mem" } }] },
+      },
+    ]);
+    await repairPayingStripeCustomer({
+      airtable,
+      stripe,
+      customer: customer as never,
+      membershipPriceIds,
+      canLink: true,
+      canCreate: true,
+      dryRun: false,
+    });
+    const createdFields = (
+      airtable.createRecords.mock.calls[0][1] as Array<{ fields: Record<string, unknown> }>
+    )[0].fields;
+    expect(createdFields[MEMBERSHIP_FIELD]).toBe("Cancelled");
+    expect(createdFields[PAYMENT_FIELD]).toBe("Paid");
+    expect(createdFields[CANCELLATION_DATE_FIELD]).toBe("2026-09-01");
+    expect(createdFields[CANCELLATION_EFFECTIVE_AT_FIELD]).toBe("2026-09-01T00:00:00.000Z");
+    expect(createdFields[CANCEL_AT_PERIOD_END_FIELD]).toBe(true);
+    expect(createdFields[STRIPE_SUBSCRIPTION_ID_FIELD]).toBe("sub_c1");
+    expect(createdFields[STRIPE_SUBSCRIPTION_STATUS_FIELD]).toBe("canceled");
+  });
+
+  it("create sets Active/Paid with no cancellation fields for an active subscription", async () => {
+    const airtable = mockAirtable({ byId: [], byEmail: [] });
+    const stripe = mockStripe([
+      {
+        id: "sub_a1",
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: periodEnd,
+        items: { data: [{ price: { id: "price_mem" } }] },
+      },
+    ]);
+    await repairPayingStripeCustomer({
+      airtable,
+      stripe,
+      customer: customer as never,
+      membershipPriceIds,
+      canLink: true,
+      canCreate: true,
+      dryRun: false,
+    });
+    const createdFields = (
+      airtable.createRecords.mock.calls[0][1] as Array<{ fields: Record<string, unknown> }>
+    )[0].fields;
+    expect(createdFields[MEMBERSHIP_FIELD]).toBe("Active");
+    expect(createdFields[PAYMENT_FIELD]).toBe("Paid");
+    expect(createdFields[CANCELLATION_DATE_FIELD]).toBeUndefined();
+    expect(createdFields[CANCELLATION_EFFECTIVE_AT_FIELD]).toBeUndefined();
+    expect(createdFields[STRIPE_SUBSCRIPTION_ID_FIELD]).toBe("sub_a1");
+    expect(createdFields[STRIPE_SUBSCRIPTION_STATUS_FIELD]).toBe("active");
+  });
+
+  it("create skips status fields when subscriptions cannot be inspected", async () => {
+    const airtable = mockAirtable({ byId: [], byEmail: [] });
+    const stripe = mockStripe();
+    stripe.subscriptions.list.mockRejectedValueOnce(new Error("boom"));
+    const r = await repairPayingStripeCustomer({
+      airtable,
+      stripe,
+      customer: customer as never,
+      membershipPriceIds,
+      canLink: true,
+      canCreate: true,
+      dryRun: false,
+    });
+    expect(r.action).toBe("created_member");
+    const createdFields = (
+      airtable.createRecords.mock.calls[0][1] as Array<{ fields: Record<string, unknown> }>
+    )[0].fields;
+    expect(createdFields[MEMBERSHIP_FIELD]).toBeUndefined();
+    expect(createdFields[PAYMENT_FIELD]).toBeUndefined();
+    expect(createdFields[CANCELLATION_DATE_FIELD]).toBeUndefined();
   });
 
   it("dry-run never writes", async () => {

@@ -58,13 +58,23 @@ export function handleOpsApiError(err: unknown) {
     });
   }
   const msg = err instanceof Error ? err.message : "Unexpected error";
+  // DrizzleQueryError messages only contain the SQL; the real database error
+  // lives on `.cause`. Surface it so failures are diagnosable.
+  const causeMsg =
+    err instanceof Error && err.cause instanceof Error ? err.cause.message : undefined;
   // Strip anything that looks like a secret token fragment
-  const safe = msg
-    .replace(/sk_live_[A-Za-z0-9]+/g, "[redacted]")
-    .replace(/sk_test_[A-Za-z0-9]+/g, "[redacted]")
-    .replace(/whsec_[A-Za-z0-9]+/g, "[redacted]")
-    .replace(/pat[A-Za-z0-9._-]{10,}/g, "[redacted]")
-    .replace(/xox[baprs]-[A-Za-z0-9-]+/g, "[redacted]");
-  console.error(JSON.stringify({ event: "ops_api_error", error: safe }));
-  return jsonError("INTERNAL_ERROR", safe, 500, { retryable: true });
+  const strip = (s: string) =>
+    s
+      .replace(/sk_live_[A-Za-z0-9]+/g, "[redacted]")
+      .replace(/sk_test_[A-Za-z0-9]+/g, "[redacted]")
+      .replace(/whsec_[A-Za-z0-9]+/g, "[redacted]")
+      .replace(/pat[A-Za-z0-9._-]{10,}/g, "[redacted]")
+      .replace(/xox[baprs]-[A-Za-z0-9-]+/g, "[redacted]");
+  const safe = strip(msg);
+  const safeCause = causeMsg ? strip(causeMsg) : undefined;
+  console.error(JSON.stringify({ event: "ops_api_error", error: safe, cause: safeCause }));
+  return jsonError("INTERNAL_ERROR", safe, 500, {
+    retryable: true,
+    details: safeCause ? { cause: safeCause } : undefined,
+  });
 }
