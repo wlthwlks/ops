@@ -27,6 +27,7 @@ const { Title, Text } = Typography;
 interface CityRow {
   cityCode: string;
   cityName: string | null;
+  activeMemberCount: number | null;
   enabled: boolean;
   schedulingMode: string;
   repeatPairDays: number | null;
@@ -252,7 +253,7 @@ export default function CityRunsPage() {
     () =>
       cities.map((c) => ({
         value: c.cityCode,
-        label: c.cityName ?? c.cityCode,
+        label: `${c.cityName ?? c.cityCode} (${c.activeMemberCount ?? 0})`,
       })),
     [cities]
   );

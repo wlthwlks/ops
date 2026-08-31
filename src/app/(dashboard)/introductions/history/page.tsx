@@ -23,6 +23,7 @@ const { Title, Text } = Typography;
 interface CityOption {
   cityCode: string;
   cityName: string | null;
+  activeMemberCount: number | null;
 }
 
 interface HistoryMember {
@@ -212,7 +213,7 @@ export default function IntroductionsHistoryPage() {
           onChange={(value?: string) => setCityCode(value)}
           options={cities.map((city) => ({
             value: city.cityCode,
-            label: city.cityName ?? city.cityCode,
+            label: `${city.cityName ?? city.cityCode} (${city.activeMemberCount ?? 0})`,
           }))}
         />
         <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={() => void search()}>
