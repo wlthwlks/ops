@@ -11,6 +11,8 @@ import { syncCitiesFromAirtable } from "./city-sync";
 import { runIntroductionPreview, type IntroductionPlanDeps } from "./plan";
 import { freezeIntroductionRun, type DeliveryMode } from "./freeze";
 import { syncPineconeBeforePlan } from "./preplan-sync";
+import { createAirtableClient } from "@/lib/integrations/airtable";
+import { createPineconeClient } from "@/lib/integrations/pinecone";
 
 /**
  * City-level monthly scheduler for the unified introduction engine.
@@ -103,6 +105,41 @@ export interface SchedulerRunResult {
 export interface CitySchedulerDeps extends IntroductionPlanDeps {
   now?: Date;
   live?: boolean;
+}
+
+export type BuildCitySchedulerDepsResult =
+  | { deps: CitySchedulerDeps; error: null }
+  | { deps: null; error: "integrations_not_configured" };
+
+/**
+ * Builds scheduler deps from environment integration config. Shared by the
+ * hourly cron route and the admin "Run city scheduler now" endpoint so both
+ * exercise the exact same code path.
+ */
+export function buildCitySchedulerDeps(input: {
+  db: AppDb;
+  live: boolean;
+  log?: (message: string) => void;
+}): BuildCitySchedulerDepsResult {
+  const airtableToken = process.env.AIRTABLE_GET_DATA_TOKEN;
+  const airtableBase = process.env.AIRTABLE_BASE_ID;
+  const pineconeKey = process.env.PINECONE_API_KEY;
+  const pineconeIndex = process.env.PINECONE_INDEX_NAME;
+
+  if (!airtableToken || !airtableBase || !pineconeKey || !pineconeIndex) {
+    return { deps: null, error: "integrations_not_configured" };
+  }
+
+  return {
+    deps: {
+      db: input.db,
+      log: input.log ?? (() => {}),
+      airtable: createAirtableClient({ apiKey: airtableToken, baseId: airtableBase }),
+      pinecone: createPineconeClient({ apiKey: pineconeKey, indexName: pineconeIndex }),
+      live: input.live,
+    },
+    error: null,
+  };
 }
 
 export async function runCityIntroductionScheduler(

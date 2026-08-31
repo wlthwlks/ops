@@ -1,26 +1,30 @@
-import { NextRequest, connection } from "next/server";
+import { connection } from "next/server";
 import { db } from "@/db";
-import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
+import { requireOpsAdmin } from "@/lib/ops/auth";
+import { handleOpsApiError, jsonOk } from "@/lib/ops/api-response";
 import { getIntroductionsMode, IntroductionsConfigError } from "@/lib/introduction/runtime-mode";
-import { jsonOk } from "@/lib/ops/api-response";
 import {
   buildCitySchedulerDeps,
   runCityIntroductionScheduler,
 } from "@/lib/introduction/scheduler";
 
+export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
 /**
- * City scheduler tick: builds preview plans for due scheduled cities and,
- * when auto-approve is enabled, freezes them with the configured delivery
- * mode. Production auto-approval only happens when INTRODUCTIONS_MODE is
- * live. Never sends email itself — frozen jobs are processed by the
- * delivery worker.
+ * Admin-triggered city scheduler tick (same code path as the hourly cron).
+ * Processes due scheduled cities: builds previews and auto-freezes them
+ * per city settings. Never sends email itself — frozen jobs are handled by
+ * the delivery worker. Useful for testing scheduling without waiting for
+ * the cron.
  */
-export async function POST(request: NextRequest) {
+export async function POST() {
   await connection();
-  const unauthorized = rejectUnauthorizedCron(request);
-  if (unauthorized) return unauthorized;
+  try {
+    await requireOpsAdmin();
+  } catch (err) {
+    return handleOpsApiError(err);
+  }
 
   let live: boolean;
   try {
@@ -50,7 +54,7 @@ export async function POST(request: NextRequest) {
     const result = await runCityIntroductionScheduler(deps);
     console.log(
       JSON.stringify({
-        event: "intro_city_scheduler_tick",
+        event: "intro_city_scheduler_manual_tick",
         live,
         dueCities: result.dueCities,
         results: result.results.map((r) => ({
@@ -64,12 +68,7 @@ export async function POST(request: NextRequest) {
     return jsonOk({ ...result, logs });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.log(JSON.stringify({ event: "intro_city_scheduler_tick", skipped: true, reason: "scheduler_failed", error: message }));
+    console.log(JSON.stringify({ event: "intro_city_scheduler_manual_tick", skipped: true, reason: "scheduler_failed", error: message }));
     return jsonOk({ processed: false, skipped: true, reason: "scheduler_failed", error: message }, 500);
   }
-}
-
-export async function GET(request: NextRequest) {
-  await connection();
-  return POST(request);
 }

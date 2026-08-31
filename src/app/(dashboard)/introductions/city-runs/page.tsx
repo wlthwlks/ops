@@ -19,7 +19,7 @@ import {
   Tag,
   Typography,
 } from "antd";
-import { EyeOutlined, LockOutlined, ReloadOutlined, SendOutlined, UnlockOutlined } from "@ant-design/icons";
+import { EyeOutlined, LockOutlined, ReloadOutlined, SendOutlined, ThunderboltOutlined, UnlockOutlined } from "@ant-design/icons";
 import dayjs, { type Dayjs } from "dayjs";
 
 const { Title, Text } = Typography;
@@ -114,6 +114,7 @@ export default function CityRunsPage() {
   const [approveMode, setApproveMode] = useState<string>("simulation");
   const [approveConfirmation, setApproveConfirmation] = useState("");
   const [approveLoading, setApproveLoading] = useState(false);
+  const [schedulerLoading, setSchedulerLoading] = useState(false);
 
   const loadCities = useCallback(async () => {
     setLoadingCities(true);
@@ -248,6 +249,36 @@ export default function CityRunsPage() {
     }
   };
 
+  const runSchedulerNow = useCallback(async () => {
+    setSchedulerLoading(true);
+    try {
+      const res = await fetch("/api/introductions/city-scheduler/run", {
+        method: "POST",
+      });
+      const body = await res.json();
+      if (!res.ok || body.processed === false) {
+        message.error(body.message ?? body.reason ?? body.error ?? "Scheduler tick did not run");
+        return;
+      }
+      const outcomeCounts: Record<string, number> = {};
+      for (const result of body.results ?? []) {
+        outcomeCounts[result.outcome] = (outcomeCounts[result.outcome] ?? 0) + 1;
+      }
+      const summary = Object.entries(outcomeCounts)
+        .map(([outcome, count]) => `${outcome}: ${count}`)
+        .join(", ");
+      message.success(
+        `Scheduler tick done: ${body.dueCities ?? 0} due — ${summary || "no outcomes"}`
+      );
+      void loadCities();
+      void loadRuns();
+    } catch {
+      message.error("Could not run the city scheduler");
+    } finally {
+      setSchedulerLoading(false);
+    }
+  }, [message, loadCities, loadRuns]);
+
   const frozen = runMeta?.status !== "planned";
   const cityOptions = useMemo(
     () =>
@@ -271,6 +302,15 @@ export default function CityRunsPage() {
           <Button type="primary" icon={<EyeOutlined />} onClick={() => setPreviewOpen(true)}>
             Preview a city
           </Button>
+          <Popconfirm
+            title="Run the city scheduler now?"
+            description="Processes every due scheduled city: builds previews and auto-freezes them per city settings. Never sends email itself."
+            onConfirm={() => void runSchedulerNow()}
+          >
+            <Button icon={<ThunderboltOutlined />} loading={schedulerLoading}>
+              Run city scheduler now
+            </Button>
+          </Popconfirm>
         </Space>
       </Flex>
 
