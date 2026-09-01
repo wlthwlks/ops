@@ -10,6 +10,7 @@ import {
   Descriptions,
   Flex,
   Input,
+  Popconfirm,
   Select,
   Space,
   Table,
@@ -312,6 +313,7 @@ export default function IntroductionsHistoryPage() {
   const [loading, setLoading] = useState(false);
   const [notSent, setNotSent] = useState<NotSentResponse | null>(null);
   const [notSentLoading, setNotSentLoading] = useState(false);
+  const [resendingGroupId, setResendingGroupId] = useState<string | null>(null);
 
   const loadNotSent = useCallback(async () => {
     setNotSentLoading(true);
@@ -333,6 +335,36 @@ export default function IntroductionsHistoryPage() {
   useEffect(() => {
     void loadNotSent();
   }, [loadNotSent]);
+
+  const resendGroup = useCallback(
+    async (groupId: string) => {
+      setResendingGroupId(groupId);
+      try {
+        const res = await fetch(`/api/introductions/groups/${groupId}/resend`, {
+          method: "POST",
+        });
+        const body = await res.json();
+        if (!res.ok || body.success === false) {
+          message.error(body.message ?? "Resend failed");
+          return;
+        }
+        const worker = body.worker ?? {};
+        const skipped = body.skippedDeliveries?.length ?? 0;
+        const parts = [
+          `Re-queued ${body.reQueuedDeliveries ?? 0} delivery(ies)`,
+          `worker: ${worker.sent ?? 0} sent, ${worker.failed ?? 0} failed, ${worker.deferred ?? 0} deferred`,
+        ];
+        if (skipped > 0) parts.push(`${skipped} skipped`);
+        message.success(parts.join(" · "));
+        void loadNotSent();
+      } catch {
+        message.error("Resend failed");
+      } finally {
+        setResendingGroupId(null);
+      }
+    },
+    [message, loadNotSent]
+  );
 
   useEffect(() => {
     fetch("/api/introductions/cities", { cache: "no-store" })
@@ -615,6 +647,20 @@ export default function IntroductionsHistoryPage() {
                       {group.subject && (
                         <Text type="secondary">{group.subject}</Text>
                       )}
+                      <Popconfirm
+                        title="Resend this group email?"
+                        description="Refreshes the failed members' emails from Airtable by record id and sends now."
+                        onConfirm={() => void resendGroup(group.id)}
+                      >
+                        <Button
+                          size="small"
+                          type="primary"
+                          loading={resendingGroupId === group.id}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          Resend
+                        </Button>
+                      </Popconfirm>
                     </Space>
                   ),
                   children: (
