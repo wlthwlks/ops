@@ -13,6 +13,12 @@ interface RunRow {
   deliveryMode: string;
   totalGroups: number | null;
   createdAt: string;
+  cityCodesJson: string | null;
+}
+
+interface CityOption {
+  cityCode: string;
+  cityName: string | null;
 }
 
 interface DeliveryRow {
@@ -54,6 +60,7 @@ const STATUS_COLORS: Record<string, string> = {
 export default function IntroductionsDeliveriesPage() {
   const { message } = App.useApp();
   const [runs, setRuns] = useState<RunRow[]>([]);
+  const [cities, setCities] = useState<CityOption[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [deliveries, setDeliveries] = useState<DeliveryRow[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
@@ -116,6 +123,10 @@ export default function IntroductionsDeliveriesPage() {
 
   useEffect(() => {
     void loadRuns();
+    fetch("/api/introductions/cities", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((body) => setCities(body.cities ?? []))
+      .catch(() => {});
     const params = new URLSearchParams(window.location.search);
     const runId = params.get("runId");
     if (runId) {
@@ -132,6 +143,22 @@ export default function IntroductionsDeliveriesPage() {
   }
 
   const redirected = deliveries.filter((d) => d.originalTo !== null).length;
+
+  const cityNameByCode = new Map(cities.map((c) => [c.cityCode, c.cityName ?? c.cityCode]));
+  const runCityName = (run: RunRow): string | null => {
+    let codes: string[] = [];
+    try {
+      const parsed = JSON.parse(run.cityCodesJson ?? "[]") as unknown;
+      if (Array.isArray(parsed)) codes = parsed.map(String);
+    } catch {
+      codes = [];
+    }
+    for (const code of codes) {
+      const name = cityNameByCode.get(code);
+      if (name) return name;
+    }
+    return codes[0] ?? null;
+  };
 
   return (
     <Flex vertical gap={16}>
@@ -170,7 +197,7 @@ export default function IntroductionsDeliveriesPage() {
           }}
           options={runs.map((run) => ({
             value: run.id,
-            label: `${run.cycleDate ?? "?"} · ${run.status} · ${run.deliveryMode} · ${run.id.slice(0, 8)}`,
+            label: `${run.cycleDate ?? "?"} · ${runCityName(run) ?? "?"} · ${run.status} · ${run.deliveryMode} · ${run.id.slice(0, 8)}`,
           }))}
         />
       </Flex>

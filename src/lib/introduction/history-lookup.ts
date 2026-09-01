@@ -11,7 +11,10 @@ import {
   matchEventMatches,
   cityIntroductionSettings,
 } from "@/db/schema";
-import { loadMatchingOptionsCatalog } from "@/lib/forms/reference-data/matching-options-catalog";
+import {
+  loadMatchingOptionsCatalog,
+  type MatchingOptionsCatalog,
+} from "@/lib/forms/reference-data/matching-options-catalog";
 import { prettifyCode } from "./render-email";
 import type { PlanMemberRegistryEntry } from "./plan";
 
@@ -155,6 +158,95 @@ function parseScoresJson(raw: string): Record<string, number> {
   return {};
 }
 
+export type HistoryOptionLabelResolver = (
+  codes: string[] | undefined | null
+) => string[];
+
+export function buildOptionLabelResolver(
+  catalog: MatchingOptionsCatalog
+): HistoryOptionLabelResolver {
+  const labelByCode = new Map<string, string>();
+  for (const option of [...catalog.helpWantedOptions, ...catalog.expertiseOptions]) {
+    if (option.code && option.label) labelByCode.set(option.code, option.label);
+  }
+  return (codes) =>
+    (codes ?? []).map((code) => labelByCode.get(code) ?? prettifyCode(code));
+}
+
+export function mapHistoryMembers(
+  members: (typeof introductionGroupMembers.$inferSelect)[],
+  optionLabels: HistoryOptionLabelResolver
+): HistoryMember[] {
+  return members.map((member) => {
+    const snapshot = parseSnapshot(member.memberSnapshotJson);
+    return {
+      key: snapshot?.key ?? member.emailSnapshot,
+      email: snapshot?.email ?? member.emailSnapshot,
+      airtableRecordId: snapshot?.airtableRecordId ?? member.airtableRecordId ?? "",
+      name: snapshot?.name ?? null,
+      firstName: snapshot?.firstName ?? null,
+      city: snapshot?.city ?? null,
+      postcode: snapshot?.postcode ?? null,
+      industry: snapshot?.industry ?? null,
+      businessStage: snapshot?.businessStage ?? null,
+      professionalHeadline: snapshot?.professionalHeadline ?? null,
+      phone: snapshot?.phone ?? null,
+      socialMedia: snapshot?.socialMedia ?? null,
+      website: snapshot?.website ?? null,
+      helpWanted: optionLabels(snapshot?.helpWanted),
+      expertise: optionLabels(snapshot?.expertise),
+      connectionTypes: snapshot?.connectionTypes ?? [],
+    } satisfies HistoryMember;
+  });
+}
+
+export function parseOriginalTo(raw: string | null): string[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) return parsed.map(String);
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
+export function mapHistoryDeliveries(
+  deliveries: (typeof introductionDeliveries.$inferSelect)[],
+  eventsByDelivery: Map<string, HistoryDeliveryEvent[]>
+): Map<string, HistoryDelivery[]> {
+  const byGroup = new Map<string, HistoryDelivery[]>();
+  for (const delivery of deliveries) {
+    const list = byGroup.get(delivery.groupId) ?? [];
+    list.push({
+      id: delivery.id,
+      recipientEmail: delivery.recipientEmail,
+      recipientName: delivery.recipientName,
+      deliverToEmail: delivery.deliverToEmail,
+      originalTo: parseOriginalTo(delivery.originalToJson),
+      status: delivery.status,
+      resendMessageId: delivery.resendMessageId,
+      attemptCount: delivery.attemptCount,
+      error: delivery.error,
+      sentAt: delivery.sentAt ? delivery.sentAt.toISOString() : null,
+      events: eventsByDelivery.get(delivery.id) ?? [],
+    });
+    byGroup.set(delivery.groupId, list);
+  }
+  return byGroup;
+}
+
+export async function loadCityNameByCode(db: AppDb): Promise<Map<string, string>> {
+  const cityNameByCode = new Map<string, string>();
+  const cityRows = await db
+    .select({ code: cityIntroductionSettings.cityCode, name: cityIntroductionSettings.cityName })
+    .from(cityIntroductionSettings);
+  for (const row of cityRows) {
+    if (row.name) cityNameByCode.set(row.code, row.name);
+  }
+  return cityNameByCode;
+}
+
 export async function searchIntroductionHistory(
   db: AppDb,
   params: HistorySearchParams
@@ -163,12 +255,7 @@ export async function searchIntroductionHistory(
   const city = (params.city ?? "").trim().toLowerCase();
 
   const catalog = await loadMatchingOptionsCatalog();
-  const labelByCode = new Map<string, string>();
-  for (const option of [...catalog.helpWantedOptions, ...catalog.expertiseOptions]) {
-    if (option.code && option.label) labelByCode.set(option.code, option.label);
-  }
-  const optionLabels = (codes: string[] | undefined | null) =>
-    (codes ?? []).map((code) => labelByCode.get(code) ?? prettifyCode(code));
+  const optionLabels = buildOptionLabelResolver(catalog);
 
   // ─── Unified ledger ─────────────────────────────────────────────────
   const runs = await db
@@ -282,33 +369,7 @@ export async function searchIntroductionHistory(
     });
     eventsByDelivery.set(event.deliveryId, list);
   }
-  const deliveriesByGroup = new Map<string, HistoryDelivery[]>();
-  for (const delivery of deliveries) {
-    let originalTo: string[] | null = null;
-    if (delivery.originalToJson) {
-      try {
-        const parsed = JSON.parse(delivery.originalToJson) as unknown;
-        if (Array.isArray(parsed)) originalTo = parsed.map(String);
-      } catch {
-        originalTo = null;
-      }
-    }
-    const list = deliveriesByGroup.get(delivery.groupId) ?? [];
-    list.push({
-      id: delivery.id,
-      recipientEmail: delivery.recipientEmail,
-      recipientName: delivery.recipientName,
-      deliverToEmail: delivery.deliverToEmail,
-      originalTo,
-      status: delivery.status,
-      resendMessageId: delivery.resendMessageId,
-      attemptCount: delivery.attemptCount,
-      error: delivery.error,
-      sentAt: delivery.sentAt ? delivery.sentAt.toISOString() : null,
-      events: eventsByDelivery.get(delivery.id) ?? [],
-    });
-    deliveriesByGroup.set(delivery.groupId, list);
-  }
+  const deliveriesByGroup = mapHistoryDeliveries(deliveries, eventsByDelivery);
   const pairScoresByRun = new Map<string, HistoryPairScore[]>();
   for (const score of pairScores) {
     const list = pairScoresByRun.get(score.runId) ?? [];
@@ -325,13 +386,7 @@ export async function searchIntroductionHistory(
   const runById = new Map(runs.map((run) => [run.id, run]));
 
   // City display names for groups whose cityName is null (transient cases).
-  const cityNameByCode = new Map<string, string>();
-  const cityRows = await db
-    .select({ code: cityIntroductionSettings.cityCode, name: cityIntroductionSettings.cityName })
-    .from(cityIntroductionSettings);
-  for (const row of cityRows) {
-    if (row.name) cityNameByCode.set(row.code, row.name);
-  }
+  const cityNameByCode = await loadCityNameByCode(db);
 
   for (const runId of keptRunIds) {
     const run = runById.get(runId);
@@ -339,27 +394,10 @@ export async function searchIntroductionHistory(
     const runGroups = groups
       .filter((g) => g.runId === runId && keptGroupSet.has(g.id))
       .map((group) => {
-        const groupMembers = (memberByGroup.get(group.id) ?? []).map((member) => {
-          const snapshot = parseSnapshot(member.memberSnapshotJson);
-          return {
-            key: snapshot?.key ?? member.emailSnapshot,
-            email: snapshot?.email ?? member.emailSnapshot,
-            airtableRecordId: snapshot?.airtableRecordId ?? member.airtableRecordId ?? "",
-            name: snapshot?.name ?? null,
-            firstName: snapshot?.firstName ?? null,
-            city: snapshot?.city ?? null,
-            postcode: snapshot?.postcode ?? null,
-            industry: snapshot?.industry ?? null,
-            businessStage: snapshot?.businessStage ?? null,
-            professionalHeadline: snapshot?.professionalHeadline ?? null,
-            phone: snapshot?.phone ?? null,
-            socialMedia: snapshot?.socialMedia ?? null,
-            website: snapshot?.website ?? null,
-            helpWanted: optionLabels(snapshot?.helpWanted),
-            expertise: optionLabels(snapshot?.expertise),
-            connectionTypes: snapshot?.connectionTypes ?? [],
-          } satisfies HistoryMember;
-        });
+        const groupMembers = mapHistoryMembers(
+          memberByGroup.get(group.id) ?? [],
+          optionLabels
+        );
         let scoreBreakdown: Record<string, number> | null = null;
         if (group.scoreBreakdownJson) {
           scoreBreakdown = parseScoresJson(group.scoreBreakdownJson);

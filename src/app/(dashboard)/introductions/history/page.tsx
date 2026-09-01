@@ -13,10 +13,11 @@ import {
   Select,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from "antd";
-import { SearchOutlined } from "@ant-design/icons";
+import { SearchOutlined, ReloadOutlined } from "@ant-design/icons";
 
 const { Title, Text } = Typography;
 
@@ -73,13 +74,6 @@ interface HistoryGroup {
   deliveries: HistoryDelivery[];
 }
 
-interface HistoryPairScore {
-  memberAKey: string;
-  memberBKey: string;
-  overall: number;
-  scores: Record<string, number>;
-}
-
 interface UnifiedResult {
   source: "unified";
   run: {
@@ -91,7 +85,6 @@ interface UnifiedResult {
     cityCodes: string[];
   };
   groups: HistoryGroup[];
-  pairScores: HistoryPairScore[];
 }
 
 interface LegacyResult {
@@ -121,6 +114,37 @@ interface LegacyResult {
 
 type ResultItem = UnifiedResult | LegacyResult;
 
+interface NotSentBlockedRun {
+  id: string;
+  cycleDate: string | null;
+  source: string;
+  status: string;
+  deliveryMode: string;
+  cityNames: string[];
+  summary: string | null;
+  error: string | null;
+  createdAt: string;
+}
+
+interface NotSentGroup {
+  id: string;
+  runId: string;
+  cycleDate: string | null;
+  source: string;
+  deliveryMode: string;
+  cityName: string | null;
+  status: string;
+  subject: string | null;
+  sentAt: string | null;
+  members: HistoryMember[];
+  failedDeliveries: HistoryDelivery[];
+}
+
+interface NotSentResponse {
+  blockedRuns: NotSentBlockedRun[];
+  groups: NotSentGroup[];
+}
+
 const STATUS_COLORS: Record<string, string> = {
   planned: "default",
   approved: "blue",
@@ -145,6 +169,139 @@ const MODE_TAG: Record<string, { color: string; label: string }> = {
   production: { color: "red", label: "Production" },
 };
 
+function GroupMembersTable({ members }: { members: HistoryMember[] }) {
+  return (
+    <Table<HistoryMember>
+      size="small"
+      rowKey="key"
+      pagination={false}
+      dataSource={members}
+      columns={[
+        {
+          title: "Member",
+          dataIndex: "name",
+          render: (_: string | null, member) => (
+            <Space direction="vertical" size={0}>
+              <Text strong>{member.name ?? "—"}</Text>
+              <Text type="secondary">{member.email}</Text>
+              {member.professionalHeadline && (
+                <Text type="secondary">{member.professionalHeadline}</Text>
+              )}
+            </Space>
+          ),
+        },
+        {
+          title: "Profile",
+          render: (_, member) => (
+            <Space direction="vertical" size={0}>
+              <Text>
+                {member.city ?? "—"} · {member.industry ?? "—"} · {member.businessStage ?? "—"}
+              </Text>
+              <Text type="secondary">Postcode: {member.postcode ?? "—"}</Text>
+            </Space>
+          ),
+        },
+        {
+          title: "Contact",
+          render: (_, member) => (
+            <Space direction="vertical" size={0}>
+              {member.phone && <Text>Phone: {member.phone}</Text>}
+              {member.socialMedia && <Text>Social: {member.socialMedia}</Text>}
+              {member.website && <Text>Website: {member.website}</Text>}
+            </Space>
+          ),
+        },
+        {
+          title: "Help / Expertise",
+          render: (_, member) => (
+            <Space direction="vertical" size={0}>
+              {member.helpWanted.length > 0 && (
+                <Text>Needs: {member.helpWanted.join(", ")}</Text>
+              )}
+              {member.expertise.length > 0 && (
+                <Text>Offers: {member.expertise.join(", ")}</Text>
+              )}
+            </Space>
+          ),
+        },
+      ]}
+    />
+  );
+}
+
+function GroupDeliveriesTable({ deliveries }: { deliveries: HistoryDelivery[] }) {
+  return (
+    <Table<HistoryDelivery>
+      size="small"
+      rowKey="id"
+      pagination={false}
+      dataSource={deliveries}
+      expandable={{
+        expandedRowRender: (delivery) =>
+          delivery.events.length === 0 ? (
+            <Text type="secondary">No provider events yet</Text>
+          ) : (
+            <Space direction="vertical" size={4}>
+              {delivery.events.map((event, index) => (
+                <Text key={index} type="secondary">
+                  {event.eventType} ·{" "}
+                  {event.providerTs ? new Date(event.providerTs).toLocaleString() : "—"}
+                </Text>
+              ))}
+            </Space>
+          ),
+      }}
+      columns={[
+        {
+          title: "Recipient",
+          dataIndex: "recipientEmail",
+          render: (email: string, delivery) => (
+            <Space direction="vertical" size={0}>
+              <Text strong>{email}</Text>
+              {delivery.recipientName && (
+                <Text type="secondary">{delivery.recipientName}</Text>
+              )}
+            </Space>
+          ),
+        },
+        {
+          title: "Deliver to",
+          dataIndex: "deliverToEmail",
+          render: (email: string, delivery) =>
+            delivery.originalTo ? (
+              <Space>
+                <Tag color="gold">{email}</Tag>
+                <Text type="secondary">
+                  original: {(delivery.originalTo ?? []).join(", ")}
+                </Text>
+              </Space>
+            ) : (
+              email
+            ),
+        },
+        {
+          title: "Status",
+          dataIndex: "status",
+          render: (status: string) => (
+            <Tag color={STATUS_COLORS[status] ?? "default"}>{status}</Tag>
+          ),
+        },
+        {
+          title: "Sent at",
+          dataIndex: "sentAt",
+          render: (v: string | null) => (v ? new Date(v).toLocaleString() : "—"),
+        },
+        {
+          title: "Error",
+          dataIndex: "error",
+          ellipsis: true,
+          render: (v: string | null) => (v ? <Text type="danger">{v}</Text> : "—"),
+        },
+      ]}
+    />
+  );
+}
+
 export default function IntroductionsHistoryPage() {
   const { message } = App.useApp();
   const [person, setPerson] = useState("");
@@ -153,6 +310,29 @@ export default function IntroductionsHistoryPage() {
   const [results, setResults] = useState<ResultItem[]>([]);
   const [searched, setSearched] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [notSent, setNotSent] = useState<NotSentResponse | null>(null);
+  const [notSentLoading, setNotSentLoading] = useState(false);
+
+  const loadNotSent = useCallback(async () => {
+    setNotSentLoading(true);
+    try {
+      const res = await fetch("/api/introductions/not-sent", { cache: "no-store" });
+      const body = await res.json();
+      if (!res.ok || body.success === false) {
+        message.error(body.message ?? "Could not load unsent emails");
+        return;
+      }
+      setNotSent({ blockedRuns: body.blockedRuns ?? [], groups: body.groups ?? [] });
+    } catch {
+      message.error("Could not load unsent emails");
+    } finally {
+      setNotSentLoading(false);
+    }
+  }, [message]);
+
+  useEffect(() => {
+    void loadNotSent();
+  }, [loadNotSent]);
 
   useEffect(() => {
     fetch("/api/introductions/cities", { cache: "no-store" })
@@ -188,12 +368,8 @@ export default function IntroductionsHistoryPage() {
     }
   }, [person, cityCode, message]);
 
-  return (
+  const matchesTab = (
     <Flex vertical gap={16}>
-      <Title level={4} style={{ margin: 0 }}>
-        Match History
-      </Title>
-
       <Flex gap={12} wrap align="center">
         <Input
           style={{ maxWidth: 340 }}
@@ -296,18 +472,6 @@ export default function IntroductionsHistoryPage() {
               </Space>
             }
           >
-            {item.pairScores.length > 0 && (
-              <Flex gap={8} wrap style={{ marginBottom: 8 }}>
-                <Text type="secondary">Pair scores:</Text>
-                {item.pairScores.map((score, index) => (
-                  <Tag key={index} color="blue">
-                    {score.memberAKey.replace(/^at:/, "").slice(0, 8)} ↔{" "}
-                    {score.memberBKey.replace(/^at:/, "").slice(0, 8)} · {(score.overall * 100).toFixed(0)}%
-                  </Tag>
-                ))}
-              </Flex>
-            )}
-
             <Collapse
               size="small"
               items={item.groups.map((group) => ({
@@ -336,129 +500,8 @@ export default function IntroductionsHistoryPage() {
                         ))}
                       </Space>
                     )}
-                    <Table<HistoryMember>
-                      size="small"
-                      rowKey="key"
-                      pagination={false}
-                      dataSource={group.members}
-                      columns={[
-                        {
-                          title: "Member",
-                          dataIndex: "name",
-                          render: (_: string | null, member) => (
-                            <Space direction="vertical" size={0}>
-                              <Text strong>{member.name ?? "—"}</Text>
-                              <Text type="secondary">{member.email}</Text>
-                              {member.professionalHeadline && (
-                                <Text type="secondary">{member.professionalHeadline}</Text>
-                              )}
-                            </Space>
-                          ),
-                        },
-                        {
-                          title: "Profile",
-                          render: (_, member) => (
-                            <Space direction="vertical" size={0}>
-                              <Text>
-                                {member.city ?? "—"} · {member.industry ?? "—"} · {member.businessStage ?? "—"}
-                              </Text>
-                              <Text type="secondary">Postcode: {member.postcode ?? "—"}</Text>
-                            </Space>
-                          ),
-                        },
-                        {
-                          title: "Contact",
-                          render: (_, member) => (
-                            <Space direction="vertical" size={0}>
-                              {member.phone && <Text>Phone: {member.phone}</Text>}
-                              {member.socialMedia && <Text>Social: {member.socialMedia}</Text>}
-                              {member.website && <Text>Website: {member.website}</Text>}
-                            </Space>
-                          ),
-                        },
-                        {
-                          title: "Help / Expertise",
-                          render: (_, member) => (
-                            <Space direction="vertical" size={0}>
-                              {member.helpWanted.length > 0 && (
-                                <Text>Needs: {member.helpWanted.join(", ")}</Text>
-                              )}
-                              {member.expertise.length > 0 && (
-                                <Text>Offers: {member.expertise.join(", ")}</Text>
-                              )}
-                            </Space>
-                          ),
-                        },
-                      ]}
-                    />
-                    <Table<HistoryDelivery>
-                      size="small"
-                      rowKey="id"
-                      pagination={false}
-                      dataSource={group.deliveries}
-                      expandable={{
-                        expandedRowRender: (delivery) =>
-                          delivery.events.length === 0 ? (
-                            <Text type="secondary">No provider events yet</Text>
-                          ) : (
-                            <Space direction="vertical" size={4}>
-                              {delivery.events.map((event, index) => (
-                                <Text key={index} type="secondary">
-                                  {event.eventType} ·{" "}
-                                  {event.providerTs ? new Date(event.providerTs).toLocaleString() : "—"}
-                                </Text>
-                              ))}
-                            </Space>
-                          ),
-                      }}
-                      columns={[
-                        {
-                          title: "Recipient",
-                          dataIndex: "recipientEmail",
-                          render: (email: string, delivery) => (
-                            <Space direction="vertical" size={0}>
-                              <Text strong>{email}</Text>
-                              {delivery.recipientName && (
-                                <Text type="secondary">{delivery.recipientName}</Text>
-                              )}
-                            </Space>
-                          ),
-                        },
-                        {
-                          title: "Deliver to",
-                          dataIndex: "deliverToEmail",
-                          render: (email: string, delivery) =>
-                            delivery.originalTo ? (
-                              <Space>
-                                <Tag color="gold">{email}</Tag>
-                                <Text type="secondary">
-                                  original: {(delivery.originalTo ?? []).join(", ")}
-                                </Text>
-                              </Space>
-                            ) : (
-                              email
-                            ),
-                        },
-                        {
-                          title: "Status",
-                          dataIndex: "status",
-                          render: (status: string) => (
-                            <Tag color={STATUS_COLORS[status] ?? "default"}>{status}</Tag>
-                          ),
-                        },
-                        {
-                          title: "Sent at",
-                          dataIndex: "sentAt",
-                          render: (v: string | null) => (v ? new Date(v).toLocaleString() : "—"),
-                        },
-                        {
-                          title: "Error",
-                          dataIndex: "error",
-                          ellipsis: true,
-                          render: (v: string | null) => (v ? <Text type="danger">{v}</Text> : "—"),
-                        },
-                      ]}
-                    />
+                    <GroupMembersTable members={group.members} />
+                    <GroupDeliveriesTable deliveries={group.deliveries} />
                   </Flex>
                 ),
               }))}
@@ -466,6 +509,149 @@ export default function IntroductionsHistoryPage() {
           </Card>
         )
       )}
+    </Flex>
+  );
+
+  const notSentTab = (
+    <Flex vertical gap={16}>
+      <Flex justify="space-between" align="center">
+        <Text type="secondary">
+          Emails that never went out: blocked runs, failed groups and failed deliveries.
+        </Text>
+        <Button
+          size="small"
+          icon={<ReloadOutlined />}
+          loading={notSentLoading}
+          onClick={() => void loadNotSent()}
+        >
+          Refresh
+        </Button>
+      </Flex>
+
+      {notSent === null ? (
+        <Alert type="info" showIcon message={notSentLoading ? "Loading…" : "No data loaded."} />
+      ) : notSent.blockedRuns.length === 0 && notSent.groups.length === 0 ? (
+        <Alert type="success" showIcon message="No unsent emails found." />
+      ) : (
+        <>
+          {notSent.blockedRuns.length > 0 && (
+            <Card size="small" title={`Blocked runs (${notSent.blockedRuns.length})`}>
+              <Table<NotSentBlockedRun>
+                size="small"
+                rowKey="id"
+                pagination={{ pageSize: 20 }}
+                dataSource={notSent.blockedRuns}
+                columns={[
+                  {
+                    title: "City",
+                    dataIndex: "cityNames",
+                    render: (names: string[]) => (
+                      <Text strong>{names.join(", ") || "—"}</Text>
+                    ),
+                  },
+                  {
+                    title: "Cycle date",
+                    dataIndex: "cycleDate",
+                    render: (v: string | null) => v ?? "—",
+                  },
+                  {
+                    title: "Kind",
+                    render: (_, run) => (
+                      <Space size={4} wrap>
+                        <Text code>{run.source}</Text>
+                        {MODE_TAG[run.deliveryMode] && (
+                          <Tag color={MODE_TAG[run.deliveryMode].color}>
+                            {MODE_TAG[run.deliveryMode].label}
+                          </Tag>
+                        )}
+                      </Space>
+                    ),
+                  },
+                  {
+                    title: "Status",
+                    dataIndex: "status",
+                    render: (status: string) => (
+                      <Tag color={STATUS_COLORS[status] ?? "default"}>{status}</Tag>
+                    ),
+                  },
+                  {
+                    title: "Summary / Error",
+                    render: (_, run) => (
+                      <Space direction="vertical" size={0}>
+                        {run.summary && <Text>{run.summary}</Text>}
+                        {run.error && <Text type="danger">{run.error}</Text>}
+                      </Space>
+                    ),
+                  },
+                ]}
+              />
+            </Card>
+          )}
+
+          {notSent.groups.length > 0 && (
+            <Card size="small" title={`Failed groups (${notSent.groups.length})`}>
+              <Collapse
+                size="small"
+                items={notSent.groups.map((group) => ({
+                  key: group.id,
+                  label: (
+                    <Space wrap>
+                      <Text strong>{group.cityName ?? "?"}</Text>
+                      <Text code>{group.source}</Text>
+                      {MODE_TAG[group.deliveryMode] && (
+                        <Tag color={MODE_TAG[group.deliveryMode].color}>
+                          {MODE_TAG[group.deliveryMode].label}
+                        </Tag>
+                      )}
+                      <Tag color={STATUS_COLORS[group.status] ?? "default"}>
+                        {group.status}
+                      </Tag>
+                      {group.failedDeliveries.length > 0 && (
+                        <Tag color="red">
+                          {group.failedDeliveries.length} failed{" "}
+                          {group.failedDeliveries.length === 1 ? "delivery" : "deliveries"}
+                        </Tag>
+                      )}
+                      {group.subject && (
+                        <Text type="secondary">{group.subject}</Text>
+                      )}
+                    </Space>
+                  ),
+                  children: (
+                    <Flex vertical gap={12}>
+                      <GroupMembersTable members={group.members} />
+                      {group.failedDeliveries.length > 0 && (
+                        <GroupDeliveriesTable deliveries={group.failedDeliveries} />
+                      )}
+                    </Flex>
+                  ),
+                }))}
+              />
+            </Card>
+          )}
+        </>
+      )}
+    </Flex>
+  );
+
+  return (
+    <Flex vertical gap={16}>
+      <Title level={4} style={{ margin: 0 }}>
+        Match History
+      </Title>
+
+      <Tabs
+        items={[
+          { key: "matches", label: "Matches", children: matchesTab },
+          {
+            key: "not-sent",
+            label: notSent
+              ? `Not Sent (${notSent.blockedRuns.length + notSent.groups.length})`
+              : "Not Sent",
+            children: notSentTab,
+          },
+        ]}
+      />
     </Flex>
   );
 }
