@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App,
@@ -149,7 +149,6 @@ interface NotSentResponse {
 interface DeliveryStateRow {
   id: string;
   groupId: string;
-  runId: string;
   cycleDate: string | null;
   source: string;
   deliveryMode: string;
@@ -158,18 +157,26 @@ interface DeliveryStateRow {
   recipientName: string | null;
   deliverToEmail: string;
   originalTo: string[] | null;
+  /** Live Resend last_event (normalized). */
   status: string;
-  resendMessageId: string | null;
-  attemptCount: number;
+  /** Stored introduction_deliveries.status (may lag until webhooks work). */
+  storedStatus: string;
+  resendMessageId: string;
+  subject: string | null;
+  from: string | null;
   error: string | null;
+  /** Resend email created_at — the real send time. */
   sentAt: string | null;
   lastEventAt: string | null;
   events: HistoryDeliveryEvent[];
 }
 
 const PROVIDER_STATUS_OPTIONS = [
+  { value: "sent", label: "Sent" },
   { value: "delivered", label: "Delivered" },
   { value: "delayed", label: "Delayed" },
+  { value: "opened", label: "Opened" },
+  { value: "clicked", label: "Clicked" },
   { value: "bounced", label: "Bounced" },
   { value: "suppressed", label: "Suppressed" },
   { value: "complained", label: "Complained" },
@@ -191,6 +198,8 @@ const STATUS_COLORS: Record<string, string> = {
   sent: "blue",
   delivered: "green",
   delayed: "orange",
+  opened: "geekblue",
+  clicked: "cyan",
   bounced: "red",
   complained: "red",
   suppressed: "red",
@@ -423,11 +432,10 @@ export default function IntroductionsHistoryPage() {
   const [dsPerson, setDsPerson] = useState("");
 
   const fetchDeliveryStates = useCallback(
-    async (days: number, statuses: string[], city?: string, person?: string) => {
+    async (statuses: string[], city?: string, person?: string) => {
       setDeliveryStatesLoading(true);
       try {
         const params = new URLSearchParams();
-        params.set("days", String(days));
         if (statuses.length > 0) params.set("statuses", statuses.join(","));
         if (city) params.set("city", city);
         if (person?.trim()) params.set("person", person.trim());
@@ -450,7 +458,7 @@ export default function IntroductionsHistoryPage() {
   );
 
   useEffect(() => {
-    void fetchDeliveryStates(14, [], undefined, "");
+    void fetchDeliveryStates([], undefined, "");
   }, [fetchDeliveryStates]);
 
   const search = useCallback(async () => {
@@ -756,10 +764,30 @@ export default function IntroductionsHistoryPage() {
     </Flex>
   );
 
+  const visibleDeliveryStates = useMemo(() => {
+    if (!deliveryStates) return [];
+    if (dsDays <= 0) return deliveryStates;
+    const cutoff = Date.now() - dsDays * 24 * 60 * 60 * 1000;
+    return deliveryStates.filter((row) => {
+      if (!row.sentAt) return true;
+      const t = Date.parse(row.sentAt);
+      return Number.isNaN(t) || t >= cutoff;
+    });
+  }, [deliveryStates, dsDays]);
+
   const deliveryStatesTab = (
     <Flex vertical gap={16}>
       <Card size="small" title="What do these states mean?">
         <Space direction="vertical" size={4}>
+          <Text type="secondary">
+            Statuses are fetched live from the Resend API (latest event per email) — no
+            webhook needed. Expand a row to see the stored webhook status and provider
+            events.
+          </Text>
+          <Text>
+            <Tag color="blue">sent</Tag> — accepted by Resend but no delivery confirmation
+            yet (in flight or never confirmed).
+          </Text>
           <Text>
             <Tag color="green">delivered</Tag> — the recipient&apos;s mail server accepted
             the email. Good, final state.
@@ -795,10 +823,7 @@ export default function IntroductionsHistoryPage() {
         <Select
           style={{ minWidth: 150 }}
           value={dsDays}
-          onChange={(value: number) => {
-            setDsDays(value);
-            void fetchDeliveryStates(value, dsStatuses, dsCity, dsPerson);
-          }}
+          onChange={(value: number) => setDsDays(value)}
           options={DAYS_OPTIONS}
         />
         <Select
@@ -809,7 +834,7 @@ export default function IntroductionsHistoryPage() {
           value={dsStatuses}
           onChange={(value: string[]) => {
             setDsStatuses(value);
-            void fetchDeliveryStates(dsDays, value, dsCity, dsPerson);
+            void fetchDeliveryStates(value, dsCity, dsPerson);
           }}
           options={PROVIDER_STATUS_OPTIONS}
         />
@@ -822,7 +847,7 @@ export default function IntroductionsHistoryPage() {
           value={dsCity}
           onChange={(value?: string) => {
             setDsCity(value);
-            void fetchDeliveryStates(dsDays, dsStatuses, value, dsPerson);
+            void fetchDeliveryStates(dsStatuses, value, dsPerson);
           }}
           options={cities.map((city) => ({
             value: city.cityCode,
@@ -834,23 +859,21 @@ export default function IntroductionsHistoryPage() {
           placeholder="Recipient email"
           value={dsPerson}
           onChange={(e) => setDsPerson(e.target.value)}
-          onPressEnter={() =>
-            void fetchDeliveryStates(dsDays, dsStatuses, dsCity, dsPerson)
-          }
+          onPressEnter={() => void fetchDeliveryStates(dsStatuses, dsCity, dsPerson)}
           allowClear
         />
         <Button
           type="primary"
           icon={<SearchOutlined />}
           loading={deliveryStatesLoading}
-          onClick={() => void fetchDeliveryStates(dsDays, dsStatuses, dsCity, dsPerson)}
+          onClick={() => void fetchDeliveryStates(dsStatuses, dsCity, dsPerson)}
         >
           Apply
         </Button>
         <Button
           icon={<ReloadOutlined />}
           loading={deliveryStatesLoading}
-          onClick={() => void fetchDeliveryStates(dsDays, dsStatuses, dsCity, dsPerson)}
+          onClick={() => void fetchDeliveryStates(dsStatuses, dsCity, dsPerson)}
         >
           Refresh
         </Button>
@@ -868,21 +891,33 @@ export default function IntroductionsHistoryPage() {
           rowKey="id"
           loading={deliveryStatesLoading}
           pagination={{ pageSize: 20 }}
-          dataSource={deliveryStates}
+          dataSource={visibleDeliveryStates}
           expandable={{
-            expandedRowRender: (row) =>
-              row.events.length === 0 ? (
-                <Text type="secondary">No provider events yet</Text>
-              ) : (
-                <Space direction="vertical" size={4}>
-                  {row.events.map((event, index) => (
+            expandedRowRender: (row) => (
+              <Space direction="vertical" size={4}>
+                <Text type="secondary">
+                  Resend id: <Text code>{row.resendMessageId}</Text>
+                  {row.subject ? ` · subject: "${row.subject}"` : ""}
+                </Text>
+                {row.from && <Text type="secondary">From: {row.from}</Text>}
+                <Text type="secondary">
+                  Stored webhook status:{" "}
+                  <Tag color={STATUS_COLORS[row.storedStatus] ?? "default"}>
+                    {row.storedStatus}
+                  </Tag>
+                </Text>
+                {row.events.length === 0 ? (
+                  <Text type="secondary">No stored provider events yet</Text>
+                ) : (
+                  row.events.map((event, index) => (
                     <Text key={index} type="secondary">
                       {event.eventType} ·{" "}
                       {event.providerTs ? new Date(event.providerTs).toLocaleString() : "—"}
                     </Text>
-                  ))}
-                </Space>
-              ),
+                  ))
+                )}
+              </Space>
+            ),
           }}
           columns={[
             {
