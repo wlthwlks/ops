@@ -146,6 +146,44 @@ interface NotSentResponse {
   groups: NotSentGroup[];
 }
 
+interface DeliveryStateRow {
+  id: string;
+  groupId: string;
+  runId: string;
+  cycleDate: string | null;
+  source: string;
+  deliveryMode: string;
+  cityName: string | null;
+  recipientEmail: string;
+  recipientName: string | null;
+  deliverToEmail: string;
+  originalTo: string[] | null;
+  status: string;
+  resendMessageId: string | null;
+  attemptCount: number;
+  error: string | null;
+  sentAt: string | null;
+  lastEventAt: string | null;
+  events: HistoryDeliveryEvent[];
+}
+
+const PROVIDER_STATUS_OPTIONS = [
+  { value: "delivered", label: "Delivered" },
+  { value: "delayed", label: "Delayed" },
+  { value: "bounced", label: "Bounced" },
+  { value: "suppressed", label: "Suppressed" },
+  { value: "complained", label: "Complained" },
+  { value: "failed", label: "Failed" },
+];
+
+const DAYS_OPTIONS = [
+  { value: 7, label: "Last 7 days" },
+  { value: 14, label: "Last 14 days" },
+  { value: 30, label: "Last 30 days" },
+  { value: 60, label: "Last 60 days" },
+  { value: 0, label: "All" },
+];
+
 const STATUS_COLORS: Record<string, string> = {
   planned: "default",
   approved: "blue",
@@ -376,6 +414,44 @@ export default function IntroductionsHistoryPage() {
       )
       .catch(() => {});
   }, []);
+
+  const [deliveryStates, setDeliveryStates] = useState<DeliveryStateRow[] | null>(null);
+  const [deliveryStatesLoading, setDeliveryStatesLoading] = useState(false);
+  const [dsDays, setDsDays] = useState<number>(14);
+  const [dsStatuses, setDsStatuses] = useState<string[]>([]);
+  const [dsCity, setDsCity] = useState<string | undefined>(undefined);
+  const [dsPerson, setDsPerson] = useState("");
+
+  const fetchDeliveryStates = useCallback(
+    async (days: number, statuses: string[], city?: string, person?: string) => {
+      setDeliveryStatesLoading(true);
+      try {
+        const params = new URLSearchParams();
+        params.set("days", String(days));
+        if (statuses.length > 0) params.set("statuses", statuses.join(","));
+        if (city) params.set("city", city);
+        if (person?.trim()) params.set("person", person.trim());
+        const res = await fetch(`/api/introductions/delivery-states?${params.toString()}`, {
+          cache: "no-store",
+        });
+        const body = await res.json();
+        if (!res.ok || body.success === false) {
+          message.error(body.message ?? "Could not load delivery states");
+          return;
+        }
+        setDeliveryStates(body.rows ?? []);
+      } catch {
+        message.error("Could not load delivery states");
+      } finally {
+        setDeliveryStatesLoading(false);
+      }
+    },
+    [message]
+  );
+
+  useEffect(() => {
+    void fetchDeliveryStates(14, [], undefined, "");
+  }, [fetchDeliveryStates]);
 
   const search = useCallback(async () => {
     setLoading(true);
@@ -680,6 +756,202 @@ export default function IntroductionsHistoryPage() {
     </Flex>
   );
 
+  const deliveryStatesTab = (
+    <Flex vertical gap={16}>
+      <Card size="small" title="What do these states mean?">
+        <Space direction="vertical" size={4}>
+          <Text>
+            <Tag color="green">delivered</Tag> — the recipient&apos;s mail server accepted
+            the email. Good, final state.
+          </Text>
+          <Text>
+            <Tag color="orange">delayed</Tag> — delivery is temporarily deferred (e.g. the
+            recipient&apos;s server is throttling or greylisting). Resend keeps retrying
+            automatically and it will end as delivered or bounced. Not a failure yet.
+          </Text>
+          <Text>
+            <Tag color="red">bounced</Tag> — the recipient&apos;s mail server permanently
+            rejected the email (address doesn&apos;t exist, domain rejects mail, …).
+            Terminal; never retried automatically.
+          </Text>
+          <Text>
+            <Tag color="red">suppressed</Tag> — the send was blocked before reaching the
+            mail server because the address is on Resend&apos;s suppression list (usually
+            after a previous bounce or spam complaint). Terminal; the address must be
+            removed from the suppression list before it can be emailed again.
+          </Text>
+          <Text>
+            <Tag color="red">complained</Tag> — the recipient marked the email as spam.
+            Terminal.
+          </Text>
+          <Text>
+            <Tag color="red">failed</Tag> — the provider could not send (invalid address
+            format, …). Terminal unless re-queued via the Not Sent tab.
+          </Text>
+        </Space>
+      </Card>
+
+      <Flex gap={12} wrap align="center">
+        <Select
+          style={{ minWidth: 150 }}
+          value={dsDays}
+          onChange={(value: number) => {
+            setDsDays(value);
+            void fetchDeliveryStates(value, dsStatuses, dsCity, dsPerson);
+          }}
+          options={DAYS_OPTIONS}
+        />
+        <Select
+          mode="multiple"
+          style={{ minWidth: 320 }}
+          placeholder="Statuses (all by default)"
+          allowClear
+          value={dsStatuses}
+          onChange={(value: string[]) => {
+            setDsStatuses(value);
+            void fetchDeliveryStates(dsDays, value, dsCity, dsPerson);
+          }}
+          options={PROVIDER_STATUS_OPTIONS}
+        />
+        <Select
+          style={{ minWidth: 220 }}
+          placeholder="City"
+          showSearch
+          allowClear
+          optionFilterProp="label"
+          value={dsCity}
+          onChange={(value?: string) => {
+            setDsCity(value);
+            void fetchDeliveryStates(dsDays, dsStatuses, value, dsPerson);
+          }}
+          options={cities.map((city) => ({
+            value: city.cityCode,
+            label: city.cityName ?? city.cityCode,
+          }))}
+        />
+        <Input
+          style={{ maxWidth: 260 }}
+          placeholder="Recipient email"
+          value={dsPerson}
+          onChange={(e) => setDsPerson(e.target.value)}
+          onPressEnter={() =>
+            void fetchDeliveryStates(dsDays, dsStatuses, dsCity, dsPerson)
+          }
+          allowClear
+        />
+        <Button
+          type="primary"
+          icon={<SearchOutlined />}
+          loading={deliveryStatesLoading}
+          onClick={() => void fetchDeliveryStates(dsDays, dsStatuses, dsCity, dsPerson)}
+        >
+          Apply
+        </Button>
+        <Button
+          icon={<ReloadOutlined />}
+          loading={deliveryStatesLoading}
+          onClick={() => void fetchDeliveryStates(dsDays, dsStatuses, dsCity, dsPerson)}
+        >
+          Refresh
+        </Button>
+      </Flex>
+
+      {deliveryStates === null ? (
+        <Alert
+          type="info"
+          showIcon
+          message={deliveryStatesLoading ? "Loading…" : "No data loaded."}
+        />
+      ) : (
+        <Table<DeliveryStateRow>
+          size="small"
+          rowKey="id"
+          loading={deliveryStatesLoading}
+          pagination={{ pageSize: 20 }}
+          dataSource={deliveryStates}
+          expandable={{
+            expandedRowRender: (row) =>
+              row.events.length === 0 ? (
+                <Text type="secondary">No provider events yet</Text>
+              ) : (
+                <Space direction="vertical" size={4}>
+                  {row.events.map((event, index) => (
+                    <Text key={index} type="secondary">
+                      {event.eventType} ·{" "}
+                      {event.providerTs ? new Date(event.providerTs).toLocaleString() : "—"}
+                    </Text>
+                  ))}
+                </Space>
+              ),
+          }}
+          columns={[
+            {
+              title: "Recipient",
+              dataIndex: "recipientEmail",
+              render: (email: string, row) => (
+                <Space direction="vertical" size={0}>
+                  <Text strong>{email}</Text>
+                  {row.recipientName && <Text type="secondary">{row.recipientName}</Text>}
+                </Space>
+              ),
+            },
+            {
+              title: "City",
+              dataIndex: "cityName",
+              render: (v: string | null) => v ?? "—",
+            },
+            {
+              title: "Kind",
+              render: (_, row) => (
+                <Space size={4} wrap>
+                  <Text code>{row.source}</Text>
+                  {MODE_TAG[row.deliveryMode] && (
+                    <Tag color={MODE_TAG[row.deliveryMode].color}>
+                      {MODE_TAG[row.deliveryMode].label}
+                    </Tag>
+                  )}
+                </Space>
+              ),
+            },
+            {
+              title: "Status",
+              dataIndex: "status",
+              render: (status: string) => (
+                <Tag color={STATUS_COLORS[status] ?? "default"}>{status}</Tag>
+              ),
+            },
+            {
+              title: "Deliver to",
+              dataIndex: "deliverToEmail",
+              render: (email: string, row) =>
+                row.originalTo ? (
+                  <Space>
+                    <Tag color="gold">{email}</Tag>
+                    <Text type="secondary">
+                      original: {(row.originalTo ?? []).join(", ")}
+                    </Text>
+                  </Space>
+                ) : (
+                  email
+                ),
+            },
+            {
+              title: "Sent at",
+              dataIndex: "sentAt",
+              render: (v: string | null) => (v ? new Date(v).toLocaleString() : "—"),
+            },
+            {
+              title: "Error",
+              dataIndex: "error",
+              ellipsis: true,
+              render: (v: string | null) => (v ? <Text type="danger">{v}</Text> : "—"),
+            },
+          ]}
+        />
+      )}
+    </Flex>
+  );
+
   return (
     <Flex vertical gap={16}>
       <Title level={4} style={{ margin: 0 }}>
@@ -695,6 +967,13 @@ export default function IntroductionsHistoryPage() {
               ? `Not Sent (${notSent.blockedRuns.length + notSent.groups.length})`
               : "Not Sent",
             children: notSentTab,
+          },
+          {
+            key: "delivery-states",
+            label: deliveryStates
+              ? `Delivery States (${deliveryStates.length})`
+              : "Delivery States",
+            children: deliveryStatesTab,
           },
         ]}
       />
