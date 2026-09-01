@@ -251,6 +251,56 @@ describe("updateServiceAccessUntilForCustomer", () => {
     expect(call[0].fields[SERVICE_ACCESS_FIELD]).toBeUndefined();
   });
 
+  it("never un-pauses a paused member", async () => {
+    const at = mockAirtable([
+      {
+        id: "rec1",
+        fields: {
+          "Stripe Customer ID": "cus_x",
+          "Billing pause until": "2026-12-20",
+          Membership: "Paused",
+          "Stripe subscription status": "paused",
+          [SERVICE_ACCESS_FIELD]: "2026-09-01T12:00:00.000Z",
+        },
+      },
+    ]);
+    const r = await updateServiceAccessUntilForCustomer({
+      airtable: at,
+      stripeCustomerId: "cus_x",
+      paidThrough,
+      stripeInvoiceId: "in_1",
+      billing: {
+        stripeSubscriptionId: "sub_x",
+        stripeSubscriptionStatus: "active",
+      },
+    });
+    expect(r.status).toBe("skipped_paused");
+    expect(r.results[0]?.status).toBe("skipped_paused");
+    expect(at.updateRecordsBatched).not.toHaveBeenCalled();
+  });
+
+  it("skips records whose pause date is set even when the other fields read active", async () => {
+    const at = mockAirtable([
+      {
+        id: "rec1",
+        fields: {
+          "Stripe Customer ID": "cus_x",
+          "Billing pause until": "2026-12-20",
+          Membership: "Active",
+          "Stripe subscription status": "active",
+        },
+      },
+    ]);
+    const r = await updateServiceAccessUntilForCustomer({
+      airtable: at,
+      stripeCustomerId: "cus_x",
+      paidThrough,
+      stripeInvoiceId: "in_1",
+    });
+    expect(r.status).toBe("skipped_paused");
+    expect(at.updateRecordsBatched).not.toHaveBeenCalled();
+  });
+
   it("writes native price_ to Stripe Price ID and commerce id to Memberstack Plan ID", async () => {
     const prevMs = process.env.MEMBERSTACK_MEMBERSHIP_PRICE_ID;
     const prevStripe = process.env.STRIPE_MEMBERSHIP_PRICE_IDS;

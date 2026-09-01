@@ -6,6 +6,7 @@ import {
   repairActiveSubscription,
   listActiveMembershipSubscriptions,
   namesFromStripeCustomer,
+  deriveMemberStatusFromSubscriptions,
   type ActiveMembershipSubscription,
 } from "@/lib/billing/historical-stripe-member-repair";
 import {
@@ -626,6 +627,31 @@ describe("listActiveMembershipSubscriptions", () => {
     expect(byCus.has("cus_b")).toBe(false);
   });
 
+  it("excludes pause-collection subscriptions from the active census", async () => {
+    const stripe = {
+      subscriptions: {
+        list: vi.fn(async (params: { status?: string }) => {
+          if (params.status === "active") {
+            return {
+              data: [
+                sub({ id: "sub_paused", customer: { id: "cus_p" }, pause_collection: { resumes_at: null } }),
+                sub({ id: "sub_active", customer: { id: "cus_a" } }),
+              ],
+              has_more: false,
+            };
+          }
+          return { data: [], has_more: false };
+        }),
+      },
+    };
+    const out = await listActiveMembershipSubscriptions(
+      stripe as never,
+      new Set(["price_mem"])
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]?.stripeCustomerId).toBe("cus_a");
+  });
+
   it("returns empty when no native price_ allowlist", async () => {
     const stripe = {
       subscriptions: { list: vi.fn(async () => ({ data: [], has_more: false })) },
@@ -633,5 +659,44 @@ describe("listActiveMembershipSubscriptions", () => {
     const out = await listActiveMembershipSubscriptions(stripe as never, new Set(["prc_memberstack"]));
     expect(out).toHaveLength(0);
     expect(stripe.subscriptions.list).not.toHaveBeenCalled();
+  });
+});
+
+describe("deriveMemberStatusFromSubscriptions", () => {
+  function membershipSub(overrides: Record<string, unknown>) {
+    return {
+      id: "sub_x",
+      status: "active",
+      cancel_at_period_end: false,
+      items: { data: [{ price: { id: "price_mem" } }] },
+      ...overrides,
+    } as never;
+  }
+
+  it("derives Active for active subscriptions without pause", () => {
+    const derived = deriveMemberStatusFromSubscriptions(
+      [membershipSub({ status: "active" })],
+      new Set(["price_mem"])
+    );
+    expect(derived.membership).toBe("Active");
+    expect(derived.stripeSubscriptionStatus).toBe("active");
+  });
+
+  it("derives Paused for pause-collection subscriptions even though status is active", () => {
+    const derived = deriveMemberStatusFromSubscriptions(
+      [membershipSub({ status: "active", pause_collection: { resumes_at: null } })],
+      new Set(["price_mem"])
+    );
+    expect(derived.membership).toBe("Paused");
+    expect(derived.stripeSubscriptionStatus).toBe("paused");
+  });
+
+  it("derives Paused when the only sub has status paused", () => {
+    const derived = deriveMemberStatusFromSubscriptions(
+      [membershipSub({ status: "paused" })],
+      new Set(["price_mem"])
+    );
+    expect(derived.membership).toBe("Paused");
+    expect(derived.stripeSubscriptionStatus).toBe("paused");
   });
 });

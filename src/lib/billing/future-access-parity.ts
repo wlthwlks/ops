@@ -36,6 +36,7 @@ import {
   type StripeInvoiceListClient,
 } from "@/lib/billing/stripe-entitlement";
 import { PRIMARY_EMAIL_FIELD } from "@/lib/billing/webhook-invoice-sync";
+import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 
 export type ParityExtraReason =
   | "cus_id_not_in_qualifying_set"
@@ -308,6 +309,26 @@ export async function repairParityExtras(input: {
           airtableRecordId: extra.airtableRecordId,
           action: "skipped",
           reason: "Record changed since parity scan — skipped",
+        });
+        continue;
+      }
+
+      // Pause-sticky guard: members paused via Stripe pause collection keep
+      // subscription status "active", so the parity scan would otherwise
+      // "correct" them back to active. Never touch paused members here —
+      // only pause-sync may clear the pause.
+      const pauseUntil = fieldStr(record.fields, MEMBER_FIELDS.billingPauseUntil);
+      const storedSubStatus = fieldStr(
+        record.fields,
+        STRIPE_SUBSCRIPTION_STATUS_FIELD
+      ).toLowerCase();
+      const storedMembership = fieldStr(record.fields, MEMBERSHIP_FIELD).toLowerCase();
+      if (pauseUntil !== "" || storedSubStatus === "paused" || storedMembership === "paused") {
+        skipped++;
+        details.push({
+          airtableRecordId: extra.airtableRecordId,
+          action: "skipped",
+          reason: "Paused member — leave to pause-sync",
         });
         continue;
       }

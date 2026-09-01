@@ -182,7 +182,7 @@ export function deriveMemberStatusFromSubscriptions(
   subs: Stripe.Subscription[],
   membershipPriceIds: Set<string>
 ): {
-  membership: "Active" | "Cancelled";
+  membership: "Active" | "Cancelled" | "Paused";
   stripeSubscriptionId: string;
   stripeSubscriptionStatus: string;
   cancelAtPeriodEnd: boolean;
@@ -200,9 +200,21 @@ export function deriveMemberStatusFromSubscriptions(
       const be = subscriptionCurrentPeriodEndUnix(b) ?? 0;
       return be - ae;
     })[0];
-  const hasActive = membershipSubs.some((s) => s.status === "active" || s.status === "trialing");
+  // Pause collection keeps subscription status "active" — the pause only
+  // exists in `pause_collection`, so paused subs must never count as active.
+  const hasActive = membershipSubs.some(
+    (s) =>
+      (s.status === "active" || s.status === "trialing") &&
+      s.pause_collection == null
+  );
+  const hasPausedOnly =
+    !hasActive &&
+    membershipSubs.some((s) => s.status === "paused" || s.pause_collection != null);
+  const latestPaused =
+    latest != null &&
+    (latest.status === "paused" || latest.pause_collection != null);
   let cancellationDate = "";
-  if (!hasActive) {
+  if (!hasActive && !hasPausedOnly) {
     const cancelledUnix = membershipSubs
       .map((s) =>
         typeof s.canceled_at === "number"
@@ -217,9 +229,9 @@ export function deriveMemberStatusFromSubscriptions(
     }
   }
   return {
-    membership: hasActive ? "Active" : "Cancelled",
+    membership: hasActive ? "Active" : hasPausedOnly ? "Paused" : "Cancelled",
     stripeSubscriptionId: latest?.id ?? "",
-    stripeSubscriptionStatus: latest?.status ?? "",
+    stripeSubscriptionStatus: latestPaused ? "paused" : latest?.status ?? "",
     cancelAtPeriodEnd: Boolean(latest?.cancel_at_period_end),
     stripePriceId: latest ? (subscriptionItemPriceIds(latest)[0] ?? "") : "",
     cancellationDate,
@@ -676,6 +688,11 @@ export async function listActiveMembershipSubscriptions(
         expand: ["data.customer", "data.items.data.price"],
       });
       for (const sub of page.data) {
+        // Pause collection keeps subscription status "active" — the pause only
+        // exists in `pause_collection`. Paused subs are NOT qualifying active
+        // memberships: including them makes paused members look like paying
+        // members ("holes") and lets repairs un-pause them in Airtable.
+        if (sub.pause_collection != null) continue;
         if (options?.limit && best.size >= options.limit) break statusLoop;
         const priceIds = subscriptionItemPriceIds(sub).filter((id) =>
           allow.has(id)

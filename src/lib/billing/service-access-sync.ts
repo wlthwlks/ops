@@ -10,7 +10,7 @@ import {
   getMemberstackPlanIdForStripePrice,
   nativeMembershipPriceAllowlist,
 } from "@/lib/billing/catalog";
-import { MEMBERS_TABLE as AIRTABLE_MEMBERS_TABLE } from "@/lib/ops/airtable-fields";
+import { MEMBERS_TABLE as AIRTABLE_MEMBERS_TABLE, MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 
 export const SERVICE_ACCESS_FIELD = "Service access until";
 export const STRIPE_CUSTOMER_ID_FIELD = "Stripe Customer ID";
@@ -330,6 +330,7 @@ export const BILLING_SYNC_READ_FIELDS = [
   LAST_STRIPE_EVENT_ID_FIELD,
   "Memberstack Plan ID",
   "Name",
+  MEMBER_FIELDS.billingPauseUntil,
 ] as const;
 
 export async function findAirtableMembersByStripeCustomerId(
@@ -349,6 +350,7 @@ export type ServiceAccessSyncStatus =
   | "existing_later"
   | "no_airtable_member"
   | "invalid_existing_date"
+  | "skipped_paused"
   | "skipped";
 
 export interface ServiceAccessRecordResult {
@@ -449,7 +451,39 @@ export async function updateServiceAccessUntilForCustomer(input: {
   const results: ServiceAccessRecordResult[] = [];
   const toUpdate: Array<{ id: string; fields: Record<string, unknown> }> = [];
 
+  const fieldValue = (raw: unknown): string => {
+    if (raw == null) return "";
+    if (Array.isArray(raw)) return String(raw[0] ?? "").trim();
+    return String(raw).trim();
+  };
+
   for (const rec of records) {
+    // Pause-sticky guard: a member paused via Stripe pause collection must
+    // stay paused in Airtable until resume. Stripe keeps the subscription
+    // status "active" during pause collection, so every generic billing
+    // sync (invoice.paid webhook, parity-cron hole repair, repair scripts)
+    // would otherwise un-pause the member. Only pause-sync's resume flow is
+    // allowed to clear the pause state.
+    const pauseUntil = fieldValue(rec.fields[MEMBER_FIELDS.billingPauseUntil]);
+    const storedSubStatus = fieldValue(rec.fields[STRIPE_SUBSCRIPTION_STATUS_FIELD]);
+    const storedMembership = fieldValue(rec.fields[MEMBERSHIP_FIELD]);
+    if (
+      pauseUntil !== "" ||
+      storedSubStatus.toLowerCase() === "paused" ||
+      storedMembership.toLowerCase() === "paused"
+    ) {
+      results.push({
+        airtableRecordId: rec.id,
+        stripeCustomerId,
+        oldValue: null,
+        newValue: null,
+        status: "skipped_paused",
+        reason: "Member is paused — generic billing sync must not un-pause",
+        updated: false,
+      });
+      continue;
+    }
+
     const oldRaw = rec.fields[SERVICE_ACCESS_FIELD];
     const oldValue =
       oldRaw == null || oldRaw === "" ? null : String(oldRaw);
@@ -631,6 +665,8 @@ export async function updateServiceAccessUntilForCustomer(input: {
     overall = "existing_later";
   } else if (results.some((r) => r.status === "invalid_existing_date")) {
     overall = "invalid_existing_date";
+  } else if (results.some((r) => r.status === "skipped_paused")) {
+    overall = "skipped_paused";
   }
 
   console.log(

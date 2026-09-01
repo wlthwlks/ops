@@ -118,4 +118,38 @@ describe("calculateStripeEntitlement trialing promotion", () => {
     expect(ent.paidThroughIso).toBe("2026-09-01T00:00:00.000Z");
     expect(ent.hasEntitlementNow).toBe(true);
   });
+
+  it("does not promote a pause-collection subscription despite status active", async () => {
+    const ent = await entitlement(
+      [subscription({ status: "active", pause_collection: { resumes_at: null } })],
+      new Set(["price_trial"])
+    );
+    expect(ent.paidThroughIso).toBeNull();
+    expect(ent.hasEntitlementNow).toBe(false);
+  });
+
+  it("reports a pause-collection subscription as paused in the primary snapshot", async () => {
+    const ent = await entitlement(
+      [subscription({ status: "active", pause_collection: { resumes_at: 1999999999 } })],
+      new Set(["price_trial"])
+    );
+    expect(ent.primarySubscription?.status).toBe("paused");
+    expect(ent.primarySubscription?.pauseCollection).toBe(true);
+  });
+
+  it("ranks a pause-collection sub below an active sub when both exist", async () => {
+    const ent = await entitlement(
+      [
+        subscription({
+          id: "sub_paused",
+          status: "active",
+          pause_collection: { resumes_at: null },
+          current_period_end: LATER_END,
+        }),
+        subscription({ id: "sub_active", status: "active" }),
+      ],
+      new Set(["price_trial"])
+    );
+    expect(ent.primarySubscription?.id).toBe("sub_active");
+  });
 });
