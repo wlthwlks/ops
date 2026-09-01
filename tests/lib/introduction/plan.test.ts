@@ -221,6 +221,25 @@ describe("buildPlanMember", () => {
     });
     expect(member.industry).toBe("TECH_SAAS");
   });
+
+  it("keeps the run's own city name instead of folding to the parent metro", () => {
+    const record = memberRecord("rec_pa", { City: "Palo Alto" });
+    const member = buildPlanMember(record, {
+      catalog,
+      vectors: new Map(),
+      geo: { lat: null, lon: null, displayName: null, source: "none", unknown: true },
+      runCityName: "Palo Alto",
+    });
+    expect(member.city).toBe("Palo Alto");
+
+    // Without the run context the legacy metro canonicalization still applies.
+    const legacy = buildPlanMember(record, {
+      catalog,
+      vectors: new Map(),
+      geo: { lat: null, lon: null, displayName: null, source: "none", unknown: true },
+    });
+    expect(legacy.city).toBe("San Francisco");
+  });
 });
 
 describe("computePairMatrix", () => {

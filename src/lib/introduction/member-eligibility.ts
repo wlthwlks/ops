@@ -2,6 +2,7 @@ import { normalizeCityKey } from "@/lib/ops/city-normalize";
 import { evaluateServiceAccess } from "./service-access";
 import { resolveIntroPauseState } from "./pause-state";
 import { haversineDistanceKm } from "./geo-cache";
+import { canonicalizeCityName } from "./city-matching";
 import {
   isMemberRecent,
   isPairRecent,
@@ -110,7 +111,13 @@ export function checkMemberEligibility(
   }
 
   if (options.runCity != null) {
-    if (normalizeCityKey(member.city ?? "") !== normalizeCityKey(options.runCity)) {
+    // Both sides are canonicalized through the same alias table so member
+    // cities that are standalone runs of their own (e.g. "Palo Alto" as its
+    // own ALL CITIES record, historically an alias of "San Francisco") and
+    // label variants ("St Louis" vs "St. Louis") never spuriously mismatch.
+    const memberCityKey = normalizeCityKey(canonicalizeCityName(member.city ?? ""));
+    const runCityKey = normalizeCityKey(canonicalizeCityName(options.runCity));
+    if (!memberCityKey || !runCityKey || memberCityKey !== runCityKey) {
       return { eligible: false, reason: "city_mismatch" };
     }
   }

@@ -33,6 +33,7 @@ import {
 } from "./member-eligibility";
 import { loadPairHistory, type PairHistory } from "./pair-history";
 import { cityAliasFilterFormula, canonicalizeCityName } from "./city-matching";
+import { normalizeCityKey } from "@/lib/ops/city-normalize";
 import { resolveMemberGeo, type ResolvedGeo } from "./geo-cache";
 import { vectorIdsFor } from "./semantic-profile";
 import { DEFAULT_SEMANTIC_NAMESPACE } from "@/lib/ops/sync-intro-profiles";
@@ -239,6 +240,9 @@ export function buildPlanMember(
     catalog: MatchingOptionsCatalog;
     vectors: Map<string, VectorRecord>;
     geo: ResolvedGeo;
+    /** The run's own city name — kept verbatim when the record's city text
+     *  matches it, instead of folding to the legacy parent metro. */
+    runCityName?: string | null;
   }
 ): PlanMember {
   const f = record.fields;
@@ -252,6 +256,12 @@ export function buildPlanMember(
   const helpWanted = resolveCategoryCodes(f[MEMBER_FIELDS.helpWanted], opts.catalog.helpWantedOptions);
   const expertise = resolveCategoryCodes(f[MEMBER_FIELDS.expertise], opts.catalog.expertiseOptions);
 
+  const cityRaw = String(f["City"] ?? "").trim();
+  let city: string | null = canonicalizeCityName(cityRaw) || null;
+  if (opts.runCityName && normalizeCityKey(cityRaw) === normalizeCityKey(opts.runCityName)) {
+    city = opts.runCityName;
+  }
+
   return {
     key: memberKey(email, record.id),
     airtableRecordId: record.id,
@@ -262,7 +272,7 @@ export function buildPlanMember(
     phone: String(f[MEMBER_FIELDS.phone] ?? "").trim() || null,
     socialMedia: String(f[MEMBER_FIELDS.socialMedia] ?? "").trim() || null,
     website: String(f[MEMBER_FIELDS.businessWebsite] ?? "").trim() || null,
-    city: canonicalizeCityName(String(f["City"] ?? "").trim()) || null,
+    city,
     lat: opts.geo.lat,
     lon: opts.geo.lon,
     postcode: String(f["post code"] ?? "").trim() || null,
@@ -509,11 +519,13 @@ export async function runIntroductionPreview(
 
   // Members linked to this city's ALL CITIES record belong to the run even
   // when their City text is stale or non-canonical ("LA", "Los Angeles, CA").
-  const canonicalCity = canonicalizeCityName(cityName ?? "") || cityName || null;
+  // The run's own city name is used (not the legacy metro canonicalization)
+  // so standalone cities like "Palo Alto" never get folded into their parent
+  // metro ("San Francisco") in snapshots and eligibility checks.
   for (const record of records) {
     const relationIds = linkIdsFromField(record.fields[MEMBER_FIELDS.cityRelation]);
-    if (canonicalCity && relationIds.includes(cityCode)) {
-      record.fields["City"] = canonicalCity;
+    if (cityName && relationIds.includes(cityCode)) {
+      record.fields["City"] = cityName;
     }
   }
 
@@ -549,6 +561,7 @@ export async function runIntroductionPreview(
       catalog,
       vectors,
       geo: geoByRecordId.get(record.id) ?? { lat: null, lon: null, displayName: null, source: "none", unknown: true },
+      runCityName: cityName,
     })
   );
 

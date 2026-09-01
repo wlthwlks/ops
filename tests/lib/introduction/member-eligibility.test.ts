@@ -232,6 +232,46 @@ describe("checkMemberEligibility — city and postcode", () => {
     expect(result.eligible).toBe(true);
   });
 
+  it("accepts members whose city is a legacy alias of the run city", () => {
+    // "Palo Alto" is a standalone city run, but historically an alternative
+    // of "San Francisco" in the CITIES alias table.
+    const result = checkMemberEligibility(member({ city: "Palo Alto" }), {
+      cycleDate: CYCLE,
+      runCity: "Palo Alto",
+      constraints,
+    });
+    expect(result.eligible).toBe(true);
+  });
+
+  it("accepts already-canonicalized member cities against the raw run city", () => {
+    // buildPlanMember canonicalizes "Palo Alto" → "San Francisco"; the run
+    // city stays the raw name from city settings.
+    const result = checkMemberEligibility(member({ city: "San Francisco" }), {
+      cycleDate: CYCLE,
+      runCity: "Palo Alto",
+      constraints,
+    });
+    expect(result.eligible).toBe(true);
+  });
+
+  it("accepts label variants that differ in punctuation", () => {
+    const result = checkMemberEligibility(member({ city: "St Louis" }), {
+      cycleDate: CYCLE,
+      runCity: "St. Louis",
+      constraints,
+    });
+    expect(result.eligible).toBe(true);
+  });
+
+  it("still rejects genuinely different cities", () => {
+    const result = checkMemberEligibility(member({ city: "Palo Alto" }), {
+      cycleDate: CYCLE,
+      runCity: "London",
+      constraints,
+    });
+    expect(result).toEqual({ eligible: false, reason: "city_mismatch" });
+  });
+
   it("rejects missing postcodes unless allowed", () => {
     const strict = checkMemberEligibility(member({ postcode: "" }), {
       cycleDate: CYCLE,
