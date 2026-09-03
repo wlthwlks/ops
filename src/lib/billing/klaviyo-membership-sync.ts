@@ -17,6 +17,13 @@
  *   the next run). Suppression properties drive Klaviyo suppression segments
  *   attached to the newsletter / churned / active campaigns.
  *
+ * Email suppression sweep: any MEMBERS row with at least one of the three
+ * suppression checkboxes checked is globally unsubscribed from email marketing
+ * in Klaviyo (bulk unsubscribe job), independent of Stripe status. Missing
+ * profiles are created already-unsubscribed. Unchecking all boxes stops future
+ * unsubscribe calls but does NOT re-subscribe anyone (consent stays a manual
+ * step in the Klaviyo UI).
+ *
  * List reconciliation is full: actives are subscribed to the active list and
  * unsubscribed from the churned list; churned get the inverse. "Date added" in
  * Klaviyo is set automatically by the bulk subscribe jobs.
@@ -197,6 +204,37 @@ export async function fetchMemberEnrichment(
 }
 
 /**
+ * ALL MEMBERS rows with at least one of the three email-suppression checkboxes
+ * checked, as normalized emails. Swept with ONE field-projected full read of
+ * MEMBERS (same pattern as fetchMemberEnrichment). Includes members outside
+ * the Stripe census — anyone the team checked must stop receiving email.
+ */
+export async function fetchEmailSuppressionEmails(
+  airtable: AirtableClient
+): Promise<string[]> {
+  const emails = new Set<string>();
+  const records = await airtable.listRecords(MEMBERS_TABLE, {
+    fields: [
+      PRIMARY_EMAIL_FIELD,
+      MEMBER_FIELDS.emailSuppressionNewsletter,
+      MEMBER_FIELDS.emailSuppressionChurned,
+      MEMBER_FIELDS.emailSuppressionActive,
+    ],
+  });
+  for (const rec of records) {
+    const anyChecked =
+      fieldBool(rec.fields, MEMBER_FIELDS.emailSuppressionNewsletter) ||
+      fieldBool(rec.fields, MEMBER_FIELDS.emailSuppressionChurned) ||
+      fieldBool(rec.fields, MEMBER_FIELDS.emailSuppressionActive);
+    if (!anyChecked) continue;
+    const email = normalizeEmailForIndex(fieldStr(rec.fields, PRIMARY_EMAIL_FIELD));
+    if (!email || !EMAIL_RE.test(email)) continue;
+    emails.add(email);
+  }
+  return [...emails];
+}
+
+/**
  * ALL CITIES record id → { city, country } map for city-relation resolution.
  * CITIES.Country is a linked field to COUNTRIES — the API returns record ids,
  * so the country is resolved to its COUNTRIES.Name label here. Anything that
@@ -364,6 +402,13 @@ export type KlaviyoMembershipSyncResult = {
   unresolvedProfiles: number;
 };
 
+export type KlaviyoEmailSuppressionResult = {
+  /** Emails globally unsubscribed from email marketing (any suppression checkbox). */
+  emailSuppressionsRequested: number;
+  /** Bulk unsubscribe job calls made (100 emails per call). */
+  emailSuppressionCalls: number;
+};
+
 /**
  * Full reconcile of the two Klaviyo lists:
  *   1. Bulk-upsert profiles (identity + columns + custom properties) and wait
@@ -421,6 +466,26 @@ export async function syncKlaviyoMembershipLists(input: {
   };
 }
 
+/**
+ * Globally unsubscribe emails (any of the three Airtable suppression
+ * checkboxes checked) from email marketing. Runs after list reconciliation —
+ * the bulk unsubscribe job creates missing profiles itself, so it never
+ * depends on the profile import above.
+ */
+export async function syncKlaviyoEmailSuppressions(input: {
+  klaviyo: KlaviyoClient;
+  emails: string[];
+}): Promise<KlaviyoEmailSuppressionResult> {
+  if (input.emails.length === 0) {
+    return { emailSuppressionsRequested: 0, emailSuppressionCalls: 0 };
+  }
+  const unsubscribed = await input.klaviyo.unsubscribeProfilesFromEmail(input.emails);
+  return {
+    emailSuppressionsRequested: unsubscribed.requested,
+    emailSuppressionCalls: unsubscribed.calls,
+  };
+}
+
 /** End-to-end helper used by the parity cron route. */
 export async function runKlaviyoMembershipSync(input: {
   stripe: KlaviyoStripeClient;
@@ -429,7 +494,7 @@ export async function runKlaviyoMembershipSync(input: {
   membershipPriceIds: Set<string>;
   activeListId: string;
   churnedListId: string;
-}): Promise<KlaviyoMembershipSyncResult> {
+}): Promise<KlaviyoMembershipSyncResult & KlaviyoEmailSuppressionResult> {
   const { stripe, airtable, klaviyo, membershipPriceIds, activeListId, churnedListId } =
     input;
 
@@ -441,6 +506,7 @@ export async function runKlaviyoMembershipSync(input: {
   ];
 
   const enrichmentByEmail = await fetchMemberEnrichment(airtable, allEmails);
+  const suppressionEmails = await fetchEmailSuppressionEmails(airtable);
   const citiesById = await fetchCityCountries(airtable);
 
   const built = buildKlaviyoProfiles({
@@ -450,7 +516,7 @@ export async function runKlaviyoMembershipSync(input: {
     citiesById,
   });
 
-  return syncKlaviyoMembershipLists({
+  const lists = await syncKlaviyoMembershipLists({
     klaviyo,
     activeListId,
     churnedListId,
@@ -459,4 +525,11 @@ export async function runKlaviyoMembershipSync(input: {
     churnedEmails: built.churnedEmails,
     skippedNoEmail: built.skippedNoEmail,
   });
+
+  const suppressions = await syncKlaviyoEmailSuppressions({
+    klaviyo,
+    emails: suppressionEmails,
+  });
+
+  return { ...lists, ...suppressions };
 }

@@ -3,8 +3,12 @@
  * future-access-parity cron, but runnable on demand).
  *
  *   npm run klaviyo:sync-members                       # dry-run preview (no Klaviyo writes)
- *   npm run klaviyo:sync-members -- --apply            # full sync (imports + list reconcile)
+ *   npm run klaviyo:sync-members -- --apply            # full sync (imports + list reconcile + email suppression sweep)
  *   npm run klaviyo:sync-members -- --apply --limit=50 # small sanity run
+ *
+ * The email-suppression sweep globally unsubscribes every MEMBERS row with at
+ * least one of the three suppression checkboxes checked, regardless of Stripe
+ * status. Unchecking boxes does NOT re-subscribe anyone.
  *
  * Reads the same env vars as the cron:
  *   KLAVIYO_PRIVATE_API_KEY / KLAVIYO_ACTIVE_LIST_ID / KLAVIYO_CHURNED_LIST_ID
@@ -23,7 +27,9 @@ import {
   buildKlaviyoProfiles,
   computeKlaviyoCensus,
   fetchCityCountries,
+  fetchEmailSuppressionEmails,
   fetchMemberEnrichment,
+  syncKlaviyoEmailSuppressions,
   syncKlaviyoMembershipLists,
 } from "../src/lib/billing/klaviyo-membership-sync";
 import { extractStripeCustomerEmail } from "../src/lib/billing/webhook-invoice-sync";
@@ -144,6 +150,11 @@ async function main() {
   const enrichmentByEmail = await fetchMemberEnrichment(airtable, emails);
   console.log(`  enriched rows: ${enrichmentByEmail.size}\n`);
 
+  const suppressionEmails = await fetchEmailSuppressionEmails(airtable);
+  console.log(
+    `  email-suppression sweep: ${suppressionEmails.length} member(s) with ≥1 suppression checkbox checked\n`
+  );
+
   const citiesById = await fetchCityCountries(airtable);
   console.log(`  city records: ${citiesById.size}\n`);
 
@@ -161,6 +172,7 @@ async function main() {
   console.log(`  subscribe → churned list:  ${built.churnedEmails.length}`);
   console.log(`  unsubscribe → churned list: ${built.activeEmails.length}`);
   console.log(`  skipped (no/invalid email): ${built.skippedNoEmail}`);
+  console.log(`  unsubscribe email marketing (suppression boxes): ${suppressionEmails.length}`);
   console.log(
     `  lists: active=${activeListId} churned=${churnedListId} revision=${(process.env.KLAVIYO_API_REVISION || "").trim() || "2026-07-15"}`
   );
@@ -183,10 +195,16 @@ async function main() {
     skippedNoEmail: built.skippedNoEmail,
   });
 
+  console.log("\nApplying email-suppression sweep...");
+  const suppressions = await syncKlaviyoEmailSuppressions({
+    klaviyo,
+    emails: suppressionEmails,
+  });
+
   console.log("\n=== Klaviyo sync result ===");
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify({ ...result, ...suppressions }, null, 2));
   console.log(
-    "\nProfile import job completed; list membership changes are applied by Klaviyo promptly."
+    "\nProfile import job completed; list membership changes and email unsubscribes are applied by Klaviyo promptly."
   );
 }
 

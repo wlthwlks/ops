@@ -7,10 +7,13 @@
  *   - GET   /api/profiles?filter=any(email,[...])     resolve profile ids by email
  *   - POST  /api/lists/{id}/relationships/profiles/   add profiles to a list (1000/call)
  *   - DELETE /api/lists/{id}/relationships/profiles/  remove profiles from a list (1000/call)
+ *   - POST  /api/profile-subscription-bulk-delete-jobs/  global email unsubscribe (100/call)
  *
  * List membership add/remove endpoints do NOT touch email consent (unlike the
  * profile-subscription bulk jobs, which can globally unsubscribe profiles
- * that are not on the target list).
+ * that are not on the target list). The bulk unsubscribe job is the deliberate
+ * consent-changing counterpart: profiles without the suppression checkboxes
+ * are never passed to it.
  *
  * The bulk import job is async (202) — the caller waits for completion before
  * resolving profile ids so new profiles are guaranteed to exist.
@@ -66,6 +69,7 @@ function sleep(ms: number): Promise<void> {
 const PROFILE_IMPORT_CHUNK = 5000;
 const EMAIL_FILTER_CHUNK = 100;
 const LIST_MUTATION_CHUNK = 1000;
+const UNSUBSCRIBE_CHUNK = 100;
 
 type HttpMethod = "GET" | "POST" | "DELETE";
 
@@ -273,12 +277,48 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
     return mutateListMembership("DELETE", listId, profileIds);
   }
 
+  /**
+   * Globally unsubscribe emails from email marketing. No list relationship is
+   * provided, so every profile in the job is unsubscribed regardless of list
+   * membership. Missing profiles are created already-unsubscribed. Idempotent:
+   * profiles that are already unsubscribed simply stay unsubscribed.
+   */
+  async function unsubscribeProfilesFromEmail(
+    emails: string[]
+  ): Promise<{ requested: number; calls: number }> {
+    let calls = 0;
+    for (let i = 0; i < emails.length; i += UNSUBSCRIBE_CHUNK) {
+      const chunk = emails.slice(i, i + UNSUBSCRIBE_CHUNK);
+      await request("POST", "/profile-subscription-bulk-delete-jobs/", {
+        data: {
+          type: "profile-subscription-bulk-delete-job",
+          attributes: {
+            profiles: {
+              data: chunk.map((email) => ({
+                type: "profile",
+                attributes: {
+                  email,
+                  subscriptions: {
+                    email: { marketing: { consent: "UNSUBSCRIBED" } },
+                  },
+                },
+              })),
+            },
+          },
+        },
+      });
+      calls++;
+    }
+    return { requested: emails.length, calls };
+  }
+
   return {
     importProfiles,
     waitForImportJobs,
     listProfileIdsByEmails,
     addProfilesToList,
     removeProfilesFromList,
+    unsubscribeProfilesFromEmail,
   };
 }
 

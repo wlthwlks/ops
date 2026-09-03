@@ -185,6 +185,50 @@ describe("KlaviyoClient", () => {
     expect(result).toEqual({ requested: 2, calls: 1 });
   });
 
+  it("unsubscribeProfilesFromEmail sends the bulk unsubscribe job payload", async () => {
+    mockFetch.mockImplementation(() => emptyResponse(202));
+    const result = await client.unsubscribeProfilesFromEmail(["a@x.com", "b@x.com"]);
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(String(url)).toBe(
+      "https://a.klaviyo.test/api/profile-subscription-bulk-delete-jobs/"
+    );
+    expect(init.method).toBe("POST");
+    const body = JSON.parse(init.body);
+    expect(body.data.type).toBe("profile-subscription-bulk-delete-job");
+    expect(body.data.attributes.profiles.data).toEqual([
+      {
+        type: "profile",
+        attributes: {
+          email: "a@x.com",
+          subscriptions: { email: { marketing: { consent: "UNSUBSCRIBED" } } },
+        },
+      },
+      {
+        type: "profile",
+        attributes: {
+          email: "b@x.com",
+          subscriptions: { email: { marketing: { consent: "UNSUBSCRIBED" } } },
+        },
+      },
+    ]);
+    expect(body.data.relationships).toBeUndefined();
+    expect(result).toEqual({ requested: 2, calls: 1 });
+  });
+
+  it("unsubscribeProfilesFromEmail chunks at 100 emails per call", async () => {
+    mockFetch.mockImplementation(() => emptyResponse(202));
+    const emails = Array.from({ length: 101 }, (_, i) => `u${i}@x.com`);
+    const result = await client.unsubscribeProfilesFromEmail(emails);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const first = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(first.data.attributes.profiles.data).toHaveLength(100);
+    expect(first.data.attributes.profiles.data[99].attributes.email).toBe("u99@x.com");
+    const second = JSON.parse(mockFetch.mock.calls[1][1].body);
+    expect(second.data.attributes.profiles.data).toHaveLength(1);
+    expect(second.data.attributes.profiles.data[0].attributes.email).toBe("u100@x.com");
+    expect(result).toEqual({ requested: 101, calls: 2 });
+  });
+
   it("retries on 429 after Retry-After delay", async () => {
     mockFetch
       .mockResolvedValueOnce({

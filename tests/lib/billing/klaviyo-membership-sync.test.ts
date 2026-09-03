@@ -6,8 +6,10 @@ import {
   computeKlaviyoCensus,
   fetchMemberEnrichment,
   fetchCityCountries,
+  fetchEmailSuppressionEmails,
   buildKlaviyoProfiles,
   syncKlaviyoMembershipLists,
+  syncKlaviyoEmailSuppressions,
   mergePhoneNumber,
 } from "@/lib/billing/klaviyo-membership-sync";
 import { MEMBERS_TABLE, CITIES_TABLE, COUNTRIES_TABLE } from "@/lib/ops/airtable-fields";
@@ -103,12 +105,17 @@ function mockKlaviyo() {
       requested: ids.length,
       calls: 1,
     })),
+    unsubscribeProfilesFromEmail: vi.fn(async (emails: string[]) => ({
+      requested: emails.length,
+      calls: 1,
+    })),
   } as unknown as KlaviyoClient & {
     importProfiles: ReturnType<typeof vi.fn>;
     waitForImportJobs: ReturnType<typeof vi.fn>;
     listProfileIdsByEmails: ReturnType<typeof vi.fn>;
     addProfilesToList: ReturnType<typeof vi.fn>;
     removeProfilesFromList: ReturnType<typeof vi.fn>;
+    unsubscribeProfilesFromEmail: ReturnType<typeof vi.fn>;
   };
 }
 
@@ -525,5 +532,60 @@ describe("syncKlaviyoMembershipLists", () => {
     expect(klaviyo.removeProfilesFromList).toHaveBeenCalledWith("list_active", []);
     expect(result.unresolvedProfiles).toBe(1);
     expect(result.churnedSubscribed).toBe(0);
+  });
+});
+
+describe("fetchEmailSuppressionEmails", () => {
+  it("returns normalized deduped emails for rows with any suppression checkbox checked", async () => {
+    const airtable = mockAirtable([
+      {
+        id: "rec1",
+        fields: { email: "QUIET@X.com", "Email suppression newsletter": true },
+      },
+      {
+        id: "rec2",
+        fields: { email: "quiet@x.com", "Email suppression churned": true },
+      },
+      {
+        id: "rec3",
+        fields: { email: "active@x.com", "Email suppression active": true },
+      },
+      { id: "rec4", fields: { email: "loud@x.com" } },
+      { id: "rec5", fields: { email: "bad-email", "Email suppression active": true } },
+      { id: "rec6", fields: { "Email suppression newsletter": true } },
+    ]);
+    const emails = await fetchEmailSuppressionEmails(airtable);
+    expect(emails).toEqual(["quiet@x.com", "active@x.com"]);
+    expect(airtable.listRecords).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns an empty list when no rows have suppression checkboxes", async () => {
+    const airtable = mockAirtable([
+      { id: "rec1", fields: { email: "loud@x.com" } },
+      { id: "rec2", fields: { email: "other@x.com", "Email suppression churned": false } },
+    ]);
+    expect(await fetchEmailSuppressionEmails(airtable)).toEqual([]);
+  });
+});
+
+describe("syncKlaviyoEmailSuppressions", () => {
+  it("skips the Klaviyo call entirely when there are no emails", async () => {
+    const klaviyo = mockKlaviyo();
+    const result = await syncKlaviyoEmailSuppressions({ klaviyo, emails: [] });
+    expect(klaviyo.unsubscribeProfilesFromEmail).not.toHaveBeenCalled();
+    expect(result).toEqual({ emailSuppressionsRequested: 0, emailSuppressionCalls: 0 });
+  });
+
+  it("unsubscribes the swept emails and reports counts", async () => {
+    const klaviyo = mockKlaviyo();
+    const result = await syncKlaviyoEmailSuppressions({
+      klaviyo,
+      emails: ["quiet@x.com", "active@x.com"],
+    });
+    expect(klaviyo.unsubscribeProfilesFromEmail).toHaveBeenCalledWith([
+      "quiet@x.com",
+      "active@x.com",
+    ]);
+    expect(result).toEqual({ emailSuppressionsRequested: 2, emailSuppressionCalls: 1 });
   });
 });

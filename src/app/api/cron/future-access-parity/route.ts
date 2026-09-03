@@ -14,7 +14,6 @@ import {
 } from "@/lib/billing/future-access-parity";
 import {
   runKlaviyoMembershipSync,
-  type KlaviyoMembershipSyncResult,
 } from "@/lib/billing/klaviyo-membership-sync";
 import { recordIntegrationError } from "@/lib/forms/webhooks/store";
 import { rejectUnauthorizedCron } from "@/lib/ops/cron-auth";
@@ -44,6 +43,9 @@ export const maxDuration = 300;
  *
  * Klaviyo membership-list sync (runs LAST, after both repairs):
  *   KLAVIYO_SYNC_ENABLED            default "false"; enables the list reconcile
+ *                                   AND the email-suppression sweep (any MEMBERS
+ *                                   row with ≥1 suppression checkbox checked is
+ *                                   globally unsubscribed from email marketing)
  *   KLAVIYO_PRIVATE_API_KEY         private API key (pk_…)
  *   KLAVIYO_ACTIVE_LIST_ID          list id for "WW Active members reliable"
  *   KLAVIYO_CHURNED_LIST_ID         list id for churned members
@@ -173,7 +175,7 @@ export async function POST(request: NextRequest) {
 
     let klaviyo: {
       success: boolean;
-      result?: KlaviyoMembershipSyncResult;
+      result?: ReturnType<typeof runKlaviyoMembershipSync> extends Promise<infer R> ? R : never;
       error?: string;
       skipped?: boolean;
       reason?: string;
