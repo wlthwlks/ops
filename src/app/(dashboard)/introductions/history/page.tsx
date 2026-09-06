@@ -217,7 +217,15 @@ const MODE_TAG: Record<string, { color: string; label: string }> = {
   production: { color: "red", label: "Production" },
 };
 
-function GroupMembersTable({ members }: { members: HistoryMember[] }) {
+function GroupMembersTable({
+  members,
+  resendingKey,
+  onResend,
+}: {
+  members: HistoryMember[];
+  resendingKey: string | null;
+  onResend: (member: HistoryMember) => void;
+}) {
   return (
     <Table<HistoryMember>
       size="small"
@@ -270,6 +278,23 @@ function GroupMembersTable({ members }: { members: HistoryMember[] }) {
                 <Text>Offers: {member.expertise.join(", ")}</Text>
               )}
             </Space>
+          ),
+        },
+        {
+          title: "",
+          key: "actions",
+          width: 140,
+          render: (_, member) => (
+            <Popconfirm
+              title="Resend this email?"
+              description={`Send the introduction email to ${member.email} again.`}
+              okText="Resend"
+              onConfirm={() => onResend(member)}
+            >
+              <Button size="small" loading={resendingKey === member.key}>
+                Resend email
+              </Button>
+            </Popconfirm>
           ),
         },
       ]}
@@ -361,6 +386,7 @@ export default function IntroductionsHistoryPage() {
   const [notSent, setNotSent] = useState<NotSentResponse | null>(null);
   const [notSentLoading, setNotSentLoading] = useState(false);
   const [resendingGroupId, setResendingGroupId] = useState<string | null>(null);
+  const [resendingMemberKey, setResendingMemberKey] = useState<string | null>(null);
 
   const loadNotSent = useCallback(async () => {
     setNotSentLoading(true);
@@ -483,6 +509,30 @@ export default function IntroductionsHistoryPage() {
       setLoading(false);
     }
   }, [person, cityCode, message]);
+
+  const resendMember = useCallback(
+    async (groupId: string, member: HistoryMember) => {
+      setResendingMemberKey(member.key);
+      try {
+        const res = await fetch(
+          `/api/introductions/groups/${groupId}/members/${encodeURIComponent(member.key)}/resend`,
+          { method: "POST" }
+        );
+        const body = await res.json();
+        if (!res.ok || body.success === false) {
+          message.error(body.message ?? "Resend failed");
+          return;
+        }
+        message.success(`Resent the email to ${body.to ?? member.email}`);
+        if (searched) void search();
+      } catch {
+        message.error("Resend failed");
+      } finally {
+        setResendingMemberKey(null);
+      }
+    },
+    [message, searched, search]
+  );
 
   const matchesTab = (
     <Flex vertical gap={16}>
@@ -616,7 +666,11 @@ export default function IntroductionsHistoryPage() {
                         ))}
                       </Space>
                     )}
-                    <GroupMembersTable members={group.members} />
+                    <GroupMembersTable
+                      members={group.members}
+                      resendingKey={resendingMemberKey}
+                      onResend={(member) => void resendMember(group.id, member)}
+                    />
                     <GroupDeliveriesTable deliveries={group.deliveries} />
                   </Flex>
                 ),
@@ -749,7 +803,11 @@ export default function IntroductionsHistoryPage() {
                   ),
                   children: (
                     <Flex vertical gap={12}>
-                      <GroupMembersTable members={group.members} />
+                      <GroupMembersTable
+                        members={group.members}
+                        resendingKey={resendingMemberKey}
+                        onResend={(member) => void resendMember(group.id, member)}
+                      />
                       {group.failedDeliveries.length > 0 && (
                         <GroupDeliveriesTable deliveries={group.failedDeliveries} />
                       )}
