@@ -193,6 +193,7 @@ const DAYS_OPTIONS = [
 
 const STATUS_COLORS: Record<string, string> = {
   planned: "default",
+  preview: "purple",
   approved: "blue",
   sending: "processing",
   sent: "blue",

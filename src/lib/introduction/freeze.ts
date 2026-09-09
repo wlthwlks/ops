@@ -160,7 +160,7 @@ export async function freezeIntroductionRun(
     .limit(1);
   const run: IntroductionRun | undefined = runRows[0];
   if (!run) throw new FreezeError("PLAN_RUN_NOT_FOUND", `Run ${options.runId} not found`);
-  if (run.status !== "planned") {
+  if (run.status !== "planned" && run.status !== "preview") {
     throw new FreezeError(
       "PLAN_ALREADY_FROZEN",
       `Run ${options.runId} is already ${run.status} and cannot be re-approved`
@@ -359,6 +359,7 @@ export async function freezeIntroductionRun(
     .update(introductionRuns)
     .set({
       status: "approved",
+      dryRun: false,
       planHash,
       deliveryMode,
       emailTemplateVersionId: template.versionId,

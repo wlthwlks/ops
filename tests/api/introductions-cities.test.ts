@@ -65,7 +65,7 @@ describe("/api/introductions/cities/[cityCode]", () => {
     expect(body.city.cityCode).toBe("rec_london");
     expect(body.effective.enabled).toBe(true);
     expect(body.effective.constraints.repeatPairDays).toBe(90);
-    expect(body.effective.groupSizes).toEqual({ target: 3, min: 2, max: 6, strict: false });
+    expect(body.effective.groupSizes).toEqual({ target: 3, min: 2, max: 4, strict: false });
     expect(body.effective.schedule?.dayOfMonth).toBe(1);
   });
 

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, ne, or } from "drizzle-orm";
 import type { AppDb } from "@/db";
 import {
   introductionRuns,
@@ -466,6 +466,46 @@ async function resolveCityName(
   }
 }
 
+/**
+ * Delete older operator-created previews for the same city + cycle date.
+ * A new preview replaces the previous one, so abandoned previews never pile
+ * up and never shadow the scheduler's monthly cycle check.
+ */
+async function cleanupPreviousOperatorPreviews(
+  db: AppDb,
+  input: { cityCode: string; cycleDateStr: string; keepRunId: string }
+): Promise<number> {
+  const staleRuns = await db
+    .select({ id: introductionRuns.id })
+    .from(introductionRuns)
+    .where(
+      and(
+        eq(introductionRuns.cityCodesJson, JSON.stringify([input.cityCode])),
+        eq(introductionRuns.cycleDate, input.cycleDateStr),
+        eq(introductionRuns.dryRun, true),
+        isNotNull(introductionRuns.initiatedBy),
+        or(eq(introductionRuns.status, "preview"), eq(introductionRuns.status, "planned")),
+        ne(introductionRuns.id, input.keepRunId)
+      )
+    );
+
+  for (const run of staleRuns) {
+    const groups = await db
+      .select({ id: introductionGroups.id })
+      .from(introductionGroups)
+      .where(eq(introductionGroups.runId, run.id));
+    if (groups.length > 0) {
+      await db
+        .delete(introductionGroupMembers)
+        .where(inArray(introductionGroupMembers.groupId, groups.map((g) => g.id)));
+    }
+    await db.delete(introductionGroups).where(eq(introductionGroups.runId, run.id));
+    await db.delete(introductionPairScores).where(eq(introductionPairScores.runId, run.id));
+    await db.delete(introductionRuns).where(eq(introductionRuns.id, run.id));
+  }
+  return staleRuns.length;
+}
+
 export async function runIntroductionPreview(
   deps: IntroductionPlanDeps,
   options: IntroductionPreviewOptions
@@ -715,7 +755,9 @@ export async function runIntroductionPreview(
     cycleDate: cycleDateStr,
     mode: "preview",
     dryRun: true,
-    status: "planned",
+    // Operator previews are throwaway tools (status "preview") until frozen;
+    // scheduler-created previews stay "planned" (they freeze right after).
+    status: options.createdBy ? "preview" : "planned",
     dueOnly: false,
     initiatedBy: options.createdBy ?? null,
     matchingProfileVersionId: effective.profileVersionId,
@@ -782,6 +824,17 @@ export async function runIntroductionPreview(
     }
   }
   deps.log(`Persisted ${grouped.groups.length} group(s)`);
+
+  // Operator previews are throwaway tools: creating a new one for the same
+  // city + cycle date replaces the previous one so abandoned previews never
+  // pile up (and never block the scheduler — see cycleIdExists).
+  if (options.createdBy) {
+    await cleanupPreviousOperatorPreviews(db, {
+      cityCode,
+      cycleDateStr,
+      keepRunId: runId,
+    });
+  }
 
   const matchedMembers = grouped.groups.flat().map((m) => m.key);
   const avgGroupScore =
@@ -865,7 +918,7 @@ async function loadRunForEdit(db: AppDb, runId: string) {
     .limit(1);
   const run = rows[0];
   if (!run) throw new PlanEditError("PLAN_RUN_NOT_FOUND", `Run ${runId} not found`);
-  if (run.status !== "planned") {
+  if (run.status !== "planned" && run.status !== "preview") {
     throw new PlanEditError("PLAN_FROZEN", "The plan is frozen and can no longer be edited");
   }
   return run;

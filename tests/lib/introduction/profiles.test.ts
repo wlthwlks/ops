@@ -45,8 +45,8 @@ describe("normalizeWeights", () => {
     const sum = SCORE_COMPONENTS.reduce((acc, key) => acc + result.components[key], 0);
     expect(sum).toBeCloseTo(1, 10);
     expect(result.total).toBe(100);
-    expect(result.components.proximity).toBeCloseTo(0.3, 10);
-    expect(result.components.ai_correlation).toBeCloseTo(0.25, 10);
+    expect(result.components.proximity).toBeCloseTo(0.2, 10);
+    expect(result.components.ai_correlation).toBeCloseTo(0.2, 10);
     expect(result.components.business_stage).toBeCloseTo(0.05, 10);
   });
 
@@ -77,18 +77,18 @@ describe("normalizeWeights", () => {
 });
 
 describe("default constraints", () => {
-  it("uses target 3, min 2, max 6, non-strict by default", () => {
+  it("uses target 3, min 2, max 4, non-strict by default", () => {
     const c = defaultConstraints();
     expect(c.targetGroupSize).toBe(3);
     expect(c.minGroupSize).toBe(2);
-    expect(c.maxGroupSize).toBe(6);
+    expect(c.maxGroupSize).toBe(4);
     expect(c.strictGroupSize).toBe(false);
     expect(c.requireSameCity).toBe(true);
     expect(c.maxDistanceKm).toBeNull();
     // Lenient default: members without a geocodable postcode stay eligible.
     expect(c.allowUnknownPostcode).toBe(true);
-    // City gate off by default.
-    expect(c.minEligibleMembers).toBe(0);
+    // City gate: a city needs at least this many eligible members.
+    expect(c.minEligibleMembers).toBe(12);
   });
 
   it("preserves an explicit strict unknown-postcode setting", () => {
@@ -120,8 +120,8 @@ describe("default constraints", () => {
     process.env.INTRO_PAIR_COOLDOWN_DAYS = "not-a-number";
     process.env.INTRO_MEMBER_COOLDOWN_DAYS = "-3";
     const c = defaultConstraints();
-    expect(c.repeatPairDays).toBe(60);
-    expect(c.memberCooldownDays).toBe(14);
+    expect(c.repeatPairDays).toBe(180);
+    expect(c.memberCooldownDays).toBe(21);
   });
 
   it("rejects inconsistent group sizes", () => {

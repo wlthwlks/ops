@@ -1,9 +1,10 @@
 import { DateTime } from "luxon";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import type { AppDb } from "@/db";
 import {
   cityIntroductionSettings,
   introductionGroups,
+  introductionRuns,
   type CityIntroductionSettings,
 } from "@/db/schema";
 import { cityScheduleSchema, type CitySchedule } from "./settings";
@@ -71,11 +72,26 @@ export async function listDueCities(
   return rows.filter((row) => isCityDue(row, now));
 }
 
+/**
+ * True when the cycle already has a "real" plan: a frozen (approved) run, or
+ * a planned preview created by the scheduler itself (retry safety after a
+ * failed freeze). Operator-created previews (dry-run, initiated_by set) are
+ * throwaway tools and never block the scheduled monthly run.
+ */
 export async function cycleIdExists(db: AppDb, cycleId: string): Promise<boolean> {
   const rows = await db
     .select({ id: introductionGroups.id })
     .from(introductionGroups)
-    .where(eq(introductionGroups.cycleId, cycleId))
+    .innerJoin(introductionRuns, eq(introductionRuns.id, introductionGroups.runId))
+    .where(
+      and(
+        eq(introductionGroups.cycleId, cycleId),
+        or(
+          eq(introductionRuns.status, "approved"),
+          and(eq(introductionRuns.dryRun, true), isNull(introductionRuns.initiatedBy))
+        )
+      )
+    )
     .limit(1);
   return rows.length > 0;
 }
