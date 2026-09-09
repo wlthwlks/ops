@@ -284,6 +284,9 @@ describe("POST /api/webhooks/stripe", () => {
   });
 
   it("does not link by email when Stripe Customer ID is missing on Airtable", async () => {
+    // Date-proof: the fixture uses fixed timestamps, so widen the retry
+    // window far enough that "now" always falls inside it.
+    process.env.STRIPE_MEMBER_REGISTRATION_RETRY_HOURS = "8760";
     const periodEnd = Math.floor(new Date("2026-09-01T00:00:00.000Z").getTime() / 1000);
     constructEvent.mockReturnValue({
       id: "evt_link",

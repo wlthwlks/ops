@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterAll, beforeAll, beforeEach } from "vitest";
-import { createTestDb, resetIntroductionsV2Tables } from "../../helpers/test-db";
+import { createTestDb, resetIntroductionsV2Tables, seedTestDefaultProfile } from "../../helpers/test-db";
 import {
   computeNextRunAt,
   listDueCities,
@@ -97,6 +97,7 @@ afterAll(async () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   await resetIntroductionsV2Tables(db);
+  await seedTestDefaultProfile(db);
   await db.delete(await import("@/db/schema").then((m) => m.matchEventMatches));
   await db.delete(await import("@/db/schema").then((m) => m.matchEvents));
   airtableGetRecord.mockResolvedValue({ id: "rec_city_london", fields: { City: "London" } });
@@ -373,5 +374,68 @@ describe("cycleIdExists", () => {
     });
     expect(await cycleIdExists(db, "intro-rec_x-2026-08-16")).toBe(true);
     expect(await cycleIdExists(db, "intro-rec_x-2026-08-17")).toBe(false);
+  });
+
+  async function seedRun(opts: {
+    id: string;
+    groupId: string;
+    cycleId: string;
+    status: string;
+    dryRun: boolean;
+    initiatedBy: string | null;
+  }) {
+    await db.insert(introductionRuns).values({
+      id: opts.id,
+      requestId: `req-${opts.id}`,
+      source: "city",
+      mode: "preview",
+      dryRun: opts.dryRun,
+      status: opts.status,
+      initiatedBy: opts.initiatedBy,
+    });
+    await db.insert(introductionGroups).values({
+      id: opts.groupId,
+      runId: opts.id,
+      source: "city",
+      cycleId: opts.cycleId,
+      groupFingerprint: `fp-${opts.id}`,
+      status: "planned",
+    });
+  }
+
+  it("ignores operator-created previews so they never block the monthly run", async () => {
+    await seedRun({
+      id: "r_op",
+      groupId: "g_op",
+      cycleId: "intro-rec_x-2026-08-16",
+      status: "preview",
+      dryRun: true,
+      initiatedBy: "user_x",
+    });
+    expect(await cycleIdExists(db, "intro-rec_x-2026-08-16")).toBe(false);
+  });
+
+  it("ignores pre-fix operator planned runs (dry-run with an operator id)", async () => {
+    await seedRun({
+      id: "r_op2",
+      groupId: "g_op2",
+      cycleId: "intro-rec_x-2026-08-16",
+      status: "planned",
+      dryRun: true,
+      initiatedBy: "user_x",
+    });
+    expect(await cycleIdExists(db, "intro-rec_x-2026-08-16")).toBe(false);
+  });
+
+  it("counts frozen operator previews (approved) to prevent duplicate sends", async () => {
+    await seedRun({
+      id: "r_op3",
+      groupId: "g_op3",
+      cycleId: "intro-rec_x-2026-08-16",
+      status: "approved",
+      dryRun: false,
+      initiatedBy: "user_x",
+    });
+    expect(await cycleIdExists(db, "intro-rec_x-2026-08-16")).toBe(true);
   });
 });

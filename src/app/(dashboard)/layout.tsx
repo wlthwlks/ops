@@ -19,6 +19,7 @@ import {
   MailOutlined,
   SendOutlined,
   HistoryOutlined,
+  DollarOutlined,
 } from "@ant-design/icons";
 import { useRouter, usePathname } from "next/navigation";
 import { UserButton } from "@clerk/nextjs";
@@ -78,6 +79,15 @@ const NAV: NavItem[] = [
     ],
   },
   {
+    key: "billing",
+    label: "Billing",
+    children: [
+      { key: "/billing", icon: <DollarOutlined />, label: "Neon Database" },
+      { key: "/billing/vercel", icon: <DollarOutlined />, label: "Vercel" },
+      { key: "/billing/resend", icon: <DollarOutlined />, label: "Resend Email" },
+    ],
+  },
+  {
     key: "system",
     label: "System",
     children: [
@@ -102,6 +112,9 @@ function selectedKey(pathname: string): string {
   if (pathname.startsWith("/members/slack-access")) return "/members/slack-access";
   if (pathname.startsWith("/members/billing")) return "/members/billing";
   if (pathname.startsWith("/members")) return "/members";
+  if (pathname.startsWith("/billing/vercel")) return "/billing/vercel";
+  if (pathname.startsWith("/billing/resend")) return "/billing/resend";
+  if (pathname.startsWith("/billing")) return "/billing";
   if (pathname.startsWith("/ops/webhook-errors")) return "/ops/webhook-errors";
   if (pathname.startsWith("/ops/form-analytics")) return "/ops/form-analytics";
   if (pathname.startsWith("/ops")) return "/ops";

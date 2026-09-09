@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, beforeAll, beforeEach } from "vitest";
-import { createTestDb, resetIntroductionsV2Tables } from "../../helpers/test-db";
+import { createTestDb, resetIntroductionsV2Tables, seedTestDefaultProfile } from "../../helpers/test-db";
 import {
   buildSimulationReport,
   deliveryModeSafety,
@@ -92,6 +92,7 @@ afterAll(async () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   await resetIntroductionsV2Tables(db);
+  await seedTestDefaultProfile(db);
   await db.delete(matchEventMatches);
   await db.delete(matchEvents);
   airtableGetRecord.mockResolvedValue({ id: "rec_city_london", fields: { City: "London" } });

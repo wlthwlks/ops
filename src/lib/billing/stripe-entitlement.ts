@@ -32,6 +32,8 @@ export type QualifyingPaymentPeriod = {
 export type StripeSubscriptionSnapshot = {
   id: string;
   status: string;
+  /** True when the sub carries a Stripe pause_collection (stays "active"). */
+  pauseCollection: boolean;
   cancelAtPeriodEnd: boolean;
   cancelAtUnix: number | null;
   canceledAtUnix: number | null;
@@ -266,9 +268,14 @@ function snapshotSub(sub: Stripe.Subscription): StripeSubscriptionSnapshot {
     items?: { data?: Array<{ current_period_end?: number }> };
   };
   const itemEnd = s.items?.data?.[0]?.current_period_end;
+  // Pause collection keeps status "active" — report paused subs as "paused"
+  // so downstream writers (e.g. parity extras correction) never write
+  // "active" over a paused member.
+  const pauseCollection = sub.pause_collection != null;
   return {
     id: sub.id,
-    status: sub.status,
+    status: pauseCollection ? "paused" : sub.status,
+    pauseCollection,
     cancelAtPeriodEnd: Boolean(sub.cancel_at_period_end),
     cancelAtUnix: typeof s.cancel_at === "number" ? s.cancel_at : null,
     canceledAtUnix: typeof s.canceled_at === "number" ? s.canceled_at : null,
@@ -401,12 +408,14 @@ export async function calculateStripeEntitlement(input: {
         limit: 20,
       });
       const ranked = [...subs.data].sort((a, b) => {
-        const rank = (s: Stripe.Subscription) =>
-          s.status === "active" || s.status === "trialing"
-            ? 0
-            : s.status === "past_due"
-              ? 1
-              : 2;
+        const rank = (s: Stripe.Subscription) => {
+          // Paused (pause collection) subs rank below everything active so
+          // they are never selected as the entitlement-driving subscription.
+          if (s.pause_collection != null) return 3;
+          if (s.status === "active" || s.status === "trialing") return 0;
+          if (s.status === "past_due") return 1;
+          return 2;
+        };
         return rank(a) - rank(b);
       });
       if (ranked[0]) {
@@ -441,8 +450,11 @@ export async function calculateStripeEntitlement(input: {
         // when the renewal invoice is still open/draft — Stripe keeps the sub active
         // (member keeps access) until dunning fails. Without this, a member whose
         // renewal hasn't paid yet would look expired from paid invoices alone.
+        // Paused (pause collection) subs are NOT promoted — a paused member must
+        // never gain future access from this path.
         if (
           primarySubscription.status === "active" &&
+          !primarySubscription.pauseCollection &&
           primarySubscription.currentPeriodEndUnix != null &&
           (paidThroughUnix == null ||
             primarySubscription.currentPeriodEndUnix > paidThroughUnix)

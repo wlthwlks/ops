@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, beforeAll, beforeEach, vi } from "vitest";
-import { createTestDb, resetIntroductionsV2Tables } from "../../helpers/test-db";
+import { createTestDb, resetIntroductionsV2Tables, seedTestDefaultProfile } from "../../helpers/test-db";
 import {
   computePlanHash,
   deliveryKeyFor,
@@ -98,6 +98,7 @@ afterAll(async () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   await resetIntroductionsV2Tables(db);
+  await seedTestDefaultProfile(db);
   await db.delete(matchEventMatches);
   await db.delete(matchEvents);
   airtableGetRecord.mockResolvedValue({ id: "rec_city_london", fields: { City: "London" } });
@@ -354,6 +355,22 @@ describe("freezeIntroductionRun", () => {
     expect(tick.claimed).toBeGreaterThan(0);
     expect(tick.sent).toBe(tick.claimed);
     expect(sender.sendBatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("freezes operator previews (status preview) and flips dry_run off", async () => {
+    await ensureDefaultTemplate(db);
+    const runId = await makePlan();
+    await db
+      .update(introductionRuns)
+      .set({ status: "preview", initiatedBy: "user_x" })
+      .where(eq(introductionRuns.id, runId));
+
+    const result = await freezeIntroductionRun(db, { runId, deliveryMode: "simulation" });
+    expect(result.success).toBe(true);
+
+    const runs = await db.select().from(introductionRuns).where(eq(introductionRuns.id, runId));
+    expect(runs[0].status).toBe("approved");
+    expect(runs[0].dryRun).toBe(false);
   });
 
   it("provider-test mode uses provider-test addresses", async () => {

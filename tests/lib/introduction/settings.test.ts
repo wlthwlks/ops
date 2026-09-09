@@ -118,11 +118,12 @@ describe("resolveEffectiveCitySettings", () => {
     const effective = await resolveEffectiveCitySettings(db, "rec_unknown");
     expect(effective.enabled).toBe(false);
     expect(effective.schedulingMode).toBe("manual");
-    expect(effective.groupSizes).toEqual({ target: 3, min: 2, max: 6, strict: false });
+    expect(effective.groupSizes).toEqual({ target: 3, min: 2, max: 4, strict: false });
     expect(effective.constraints.requireSameCity).toBe(true);
-    expect(effective.constraints.repeatPairDays).toBe(60);
+    expect(effective.constraints.repeatPairDays).toBe(180);
+    expect(effective.constraints.memberCooldownDays).toBe(21);
     expect(effective.constraints.allowUnknownPostcode).toBe(true);
-    expect(effective.constraints.minEligibleMembers).toBe(0);
+    expect(effective.constraints.minEligibleMembers).toBe(12);
     expect(effective.meetupTime).toBe("10:00");
     expect(effective.profileVersionId).toBeNull();
   });

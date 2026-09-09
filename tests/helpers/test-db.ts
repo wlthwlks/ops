@@ -476,6 +476,47 @@ export async function createTestDb(options?: { matchmake?: boolean; introduction
 export type TestDb = AppDb;
 
 /**
+ * Pre-minimum-gate constraints used by most introduction tests: the gate is
+ * off (minEligibleMembers 0) and group sizes are the historical defaults, so
+ * fixtures with a handful of members build groups instead of blocking.
+ * Tests that exercise the production defaults (12 / max 4) override this.
+ */
+export const TEST_DEFAULT_CONSTRAINTS = {
+  requireSameCity: true,
+  maxDistanceKm: null,
+  allowUnknownPostcode: true,
+  repeatPairDays: 60,
+  memberCooldownDays: 14,
+  minEligibleMembers: 0,
+  targetGroupSize: 3,
+  minGroupSize: 2,
+  maxGroupSize: 6,
+  strictGroupSize: false,
+} as const;
+
+/**
+ * Seed a "Default" matching profile (latest version) with test-friendly
+ * constraints so plan/freeze/scheduler tests do not depend on the live
+ * built-in defaults.
+ */
+export async function seedTestDefaultProfile(
+  db: AppDb,
+  constraints: typeof TEST_DEFAULT_CONSTRAINTS = TEST_DEFAULT_CONSTRAINTS
+) {
+  const { createMatchingProfile, createMatchingProfileVersion } =
+    await import("@/lib/introduction/profiles");
+  const profile = await createMatchingProfile(db, {
+    name: "Default",
+    isDefault: true,
+  });
+  await createMatchingProfileVersion(db, {
+    profileId: profile.id,
+    constraints: { ...constraints },
+  });
+  return profile;
+}
+
+/**
  * Delete every row from the unified introduction engine tables (and the
  * base introduction ledger tables) in FK-safe order. Useful in before/between
  * tests that share one PGlite instance.

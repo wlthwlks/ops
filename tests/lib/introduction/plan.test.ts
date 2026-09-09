@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterAll, beforeAll, beforeEach } from "vitest";
-import { createTestDb, resetIntroductionsV2Tables } from "../../helpers/test-db";
+import { createTestDb, resetIntroductionsV2Tables, seedTestDefaultProfile } from "../../helpers/test-db";
 import {
   buildPlanMember,
   computePairMatrix,
@@ -124,6 +124,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   logs.length = 0;
   await resetIntroductionsV2Tables(db);
+  await seedTestDefaultProfile(db);
   await db.delete(schema.matchEventMatches);
   await db.delete(schema.matchEvents);
   airtableGetRecord.mockResolvedValue({ id: "rec_city_london", fields: { City: "London" } });
@@ -220,6 +221,25 @@ describe("buildPlanMember", () => {
       geo: { lat: null, lon: null, displayName: null, source: "none", unknown: true },
     });
     expect(member.industry).toBe("TECH_SAAS");
+  });
+
+  it("keeps the run's own city name instead of folding to the parent metro", () => {
+    const record = memberRecord("rec_pa", { City: "Palo Alto" });
+    const member = buildPlanMember(record, {
+      catalog,
+      vectors: new Map(),
+      geo: { lat: null, lon: null, displayName: null, source: "none", unknown: true },
+      runCityName: "Palo Alto",
+    });
+    expect(member.city).toBe("Palo Alto");
+
+    // Without the run context the legacy metro canonicalization still applies.
+    const legacy = buildPlanMember(record, {
+      catalog,
+      vectors: new Map(),
+      geo: { lat: null, lon: null, displayName: null, source: "none", unknown: true },
+    });
+    expect(legacy.city).toBe("San Francisco");
   });
 });
 
@@ -343,6 +363,7 @@ describe("runIntroductionPreview", () => {
       .sort();
 
     await resetIntroductionsV2Tables(db);
+    await seedTestDefaultProfile(db);
     const second = await runIntroductionPreview(makeDeps(), {
       cityCode: "rec_city_london",
       cycleDate: "2026-08-16",
@@ -352,6 +373,37 @@ describe("runIntroductionPreview", () => {
       .from(introductionGroups)
       .where(eq(introductionGroups.runId, second.runId!));
     expect(secondGroups.map((g) => g.groupFingerprint).sort()).toEqual(firstFingerprints);
+  });
+
+  it("marks operator previews as preview and replaces the previous preview for the same city+cycle", async () => {
+    const first = await runIntroductionPreview(makeDeps(), {
+      cityCode: "rec_city_london",
+      cycleDate: "2026-08-16",
+      createdBy: "user_x",
+    });
+
+    const afterFirst = await db.select().from(introductionRuns);
+    expect(afterFirst).toHaveLength(1);
+    expect(afterFirst[0].status).toBe("preview");
+    expect(afterFirst[0].initiatedBy).toBe("user_x");
+
+    const second = await runIntroductionPreview(makeDeps(), {
+      cityCode: "rec_city_london",
+      cycleDate: "2026-08-16",
+      createdBy: "user_x",
+    });
+
+    const afterSecond = await db.select().from(introductionRuns);
+    expect(afterSecond).toHaveLength(1);
+    expect(afterSecond[0].id).toBe(second.runId);
+    expect(afterSecond[0].id).not.toBe(first.runId);
+
+    const groups = await db.select().from(introductionGroups);
+    expect(groups.length).toBeGreaterThan(0);
+    expect(groups.every((g) => g.runId === second.runId)).toBe(true);
+
+    const pairScores = await db.select().from(introductionPairScores);
+    expect(pairScores.every((p) => p.runId === second.runId)).toBe(true);
   });
 
   it("excludes ineligible members and reports reasons", async () => {

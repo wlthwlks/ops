@@ -279,7 +279,7 @@ export default function CityRunsPage() {
     }
   }, [message, loadCities, loadRuns]);
 
-  const frozen = runMeta?.status !== "planned";
+  const frozen = runMeta ? runMeta.status !== "planned" && runMeta.status !== "preview" : true;
   const cityOptions = useMemo(
     () =>
       cities.map((c) => ({

@@ -122,6 +122,7 @@ describe("computeFutureAccessParity", () => {
       stripe,
       airtable,
       membershipPriceIds: new Set(["price_mem"]),
+      now: new Date("2026-08-16T00:00:00.000Z"),
     });
     expect(p.airtableFutureAccess).toBe(1);
     expect(p.stripeQualifying).toBe(1);
@@ -140,6 +141,7 @@ describe("computeFutureAccessParity", () => {
       stripe,
       airtable,
       membershipPriceIds: new Set(["price_mem"]),
+      now: new Date("2026-08-16T00:00:00.000Z"),
     });
     expect(p.extras).toHaveLength(1);
     expect(p.extras[0].airtableRecordId).toBe("rec2");
@@ -158,6 +160,7 @@ describe("computeFutureAccessParity", () => {
       stripe,
       airtable,
       membershipPriceIds: new Set(["price_mem"]),
+      now: new Date("2026-08-16T00:00:00.000Z"),
     });
     expect(p.extras).toHaveLength(1);
     expect(p.extras[0].reason).toBe("no_stripe_customer_id");
@@ -173,6 +176,7 @@ describe("computeFutureAccessParity", () => {
       stripe,
       airtable,
       membershipPriceIds: new Set(["price_mem"]),
+      now: new Date("2026-08-16T00:00:00.000Z"),
     });
     expect(p.duplicates).toEqual([{ stripeCustomerId: "cus_1", count: 2 }]);
     expect(p.extras).toHaveLength(2);
@@ -304,6 +308,36 @@ describe("repairParityExtras", () => {
     const written = airtable.updateRecordsBatched.mock.calls[0][1];
     expect(written[0].id).toBe("rec2");
     expect(written[0].fields[SERVICE_ACCESS_FIELD]).toBeNull();
+  });
+
+  it("never touches a paused member (pause date set)", async () => {
+    const stripe = mockExtrasStripe(
+      [{ id: "in_1" }],
+      [{ pricing: { price_details: { price: "price_mem" } }, period: { end: periodEnd } }]
+    );
+    const airtable = mockAirtable([
+      {
+        id: "rec2",
+        fields: {
+          [STRIPE_CUSTOMER_ID_FIELD]: "cus_zzz",
+          [SERVICE_ACCESS_FIELD]: "2026-12-01T00:00:00.000Z",
+          "Billing pause until": "2027-01-22",
+          Membership: "Paused",
+          "Stripe subscription status": "paused",
+        },
+      },
+    ]);
+    const r = await repairParityExtras({
+      stripe,
+      airtable,
+      extras: [extra()],
+      qualifyingMemberships: [membership()],
+      membershipPriceIds: new Set(["price_mem"]),
+    });
+    expect(r.skipped).toBe(1);
+    expect(r.corrected).toBe(0);
+    expect(r.cleared).toBe(0);
+    expect(airtable.updateRecordsBatched).not.toHaveBeenCalled();
   });
 
   it("corrects future access to Stripe paid-through (reduction allowed)", async () => {

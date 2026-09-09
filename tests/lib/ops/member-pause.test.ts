@@ -27,7 +27,7 @@ describe("pauseSnapshotFromRecord", () => {
       pauseSnapshotFromRecord(
         record({
           [MEMBER_FIELDS.recurringIntroStatus]: "Paused",
-          [MEMBER_FIELDS.recurringPauseUntil]: "2026-09-01",
+          [MEMBER_FIELDS.recurringPauseUntil]: "2099-09-01",
         })
       )
     ).toMatchObject({ state: "paused", isPaused: true, missingDate: false });

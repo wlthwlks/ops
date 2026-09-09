@@ -30,11 +30,11 @@ export type ScoreComponent = (typeof SCORE_COMPONENTS)[number];
 export type MatchingWeights = Partial<Record<ScoreComponent, number>>;
 
 export const DEFAULT_WEIGHTS: Required<MatchingWeights> = {
-  proximity: 30,
-  ai_correlation: 25,
-  help_expertise: 20,
+  proximity: 20,
+  ai_correlation: 20,
+  help_expertise: 30,
   goal_relevance: 10,
-  connection_type: 5,
+  connection_type: 10,
   industry: 5,
   business_stage: 5,
 };
@@ -60,12 +60,12 @@ const groupSizeValue = z.number().int().min(2).max(12);
 
 export function envPairCooldownDays(): number {
   const parsed = Number.parseInt(process.env.INTRO_PAIR_COOLDOWN_DAYS ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 60;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 180;
 }
 
 export function envMemberCooldownDays(): number {
   const parsed = Number.parseInt(process.env.INTRO_MEMBER_COOLDOWN_DAYS ?? "", 10);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 14;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 21;
 }
 
 export const matchingConstraintsSchema = z
@@ -81,10 +81,10 @@ export const matchingConstraintsSchema = z
      * City gate: a city only runs when it has at least this many eligible
      * members. 0 disables the gate. Overridable per city.
      */
-    minEligibleMembers: z.number().int().min(0).max(1000).default(0),
+    minEligibleMembers: z.number().int().min(0).max(1000).default(12),
     targetGroupSize: groupSizeValue.default(3),
     minGroupSize: groupSizeValue.default(2),
-    maxGroupSize: groupSizeValue.default(6),
+    maxGroupSize: groupSizeValue.default(4),
     strictGroupSize: z.boolean().default(false),
   })
   .superRefine((c, ctx) => {

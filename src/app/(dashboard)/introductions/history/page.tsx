@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   App,
@@ -10,6 +10,7 @@ import {
   Descriptions,
   Flex,
   Input,
+  Popconfirm,
   Select,
   Space,
   Table,
@@ -145,13 +146,61 @@ interface NotSentResponse {
   groups: NotSentGroup[];
 }
 
+interface DeliveryStateRow {
+  id: string;
+  groupId: string;
+  cycleDate: string | null;
+  source: string;
+  deliveryMode: string;
+  cityName: string | null;
+  recipientEmail: string;
+  recipientName: string | null;
+  deliverToEmail: string;
+  originalTo: string[] | null;
+  /** Live Resend last_event (normalized). */
+  status: string;
+  /** Stored introduction_deliveries.status (may lag until webhooks work). */
+  storedStatus: string;
+  resendMessageId: string;
+  subject: string | null;
+  from: string | null;
+  error: string | null;
+  /** Resend email created_at — the real send time. */
+  sentAt: string | null;
+  lastEventAt: string | null;
+  events: HistoryDeliveryEvent[];
+}
+
+const PROVIDER_STATUS_OPTIONS = [
+  { value: "sent", label: "Sent" },
+  { value: "delivered", label: "Delivered" },
+  { value: "delayed", label: "Delayed" },
+  { value: "opened", label: "Opened" },
+  { value: "clicked", label: "Clicked" },
+  { value: "bounced", label: "Bounced" },
+  { value: "suppressed", label: "Suppressed" },
+  { value: "complained", label: "Complained" },
+  { value: "failed", label: "Failed" },
+];
+
+const DAYS_OPTIONS = [
+  { value: 7, label: "Last 7 days" },
+  { value: 14, label: "Last 14 days" },
+  { value: 30, label: "Last 30 days" },
+  { value: 60, label: "Last 60 days" },
+  { value: 0, label: "All" },
+];
+
 const STATUS_COLORS: Record<string, string> = {
   planned: "default",
+  preview: "purple",
   approved: "blue",
   sending: "processing",
   sent: "blue",
   delivered: "green",
   delayed: "orange",
+  opened: "geekblue",
+  clicked: "cyan",
   bounced: "red",
   complained: "red",
   suppressed: "red",
@@ -169,7 +218,15 @@ const MODE_TAG: Record<string, { color: string; label: string }> = {
   production: { color: "red", label: "Production" },
 };
 
-function GroupMembersTable({ members }: { members: HistoryMember[] }) {
+function GroupMembersTable({
+  members,
+  resendingKey,
+  onResend,
+}: {
+  members: HistoryMember[];
+  resendingKey: string | null;
+  onResend: (member: HistoryMember) => void;
+}) {
   return (
     <Table<HistoryMember>
       size="small"
@@ -222,6 +279,23 @@ function GroupMembersTable({ members }: { members: HistoryMember[] }) {
                 <Text>Offers: {member.expertise.join(", ")}</Text>
               )}
             </Space>
+          ),
+        },
+        {
+          title: "",
+          key: "actions",
+          width: 140,
+          render: (_, member) => (
+            <Popconfirm
+              title="Resend this email?"
+              description={`Send the introduction email to ${member.email} again.`}
+              okText="Resend"
+              onConfirm={() => onResend(member)}
+            >
+              <Button size="small" loading={resendingKey === member.key}>
+                Resend email
+              </Button>
+            </Popconfirm>
           ),
         },
       ]}
@@ -312,6 +386,8 @@ export default function IntroductionsHistoryPage() {
   const [loading, setLoading] = useState(false);
   const [notSent, setNotSent] = useState<NotSentResponse | null>(null);
   const [notSentLoading, setNotSentLoading] = useState(false);
+  const [resendingGroupId, setResendingGroupId] = useState<string | null>(null);
+  const [resendingMemberKey, setResendingMemberKey] = useState<string | null>(null);
 
   const loadNotSent = useCallback(async () => {
     setNotSentLoading(true);
@@ -334,6 +410,36 @@ export default function IntroductionsHistoryPage() {
     void loadNotSent();
   }, [loadNotSent]);
 
+  const resendGroup = useCallback(
+    async (groupId: string) => {
+      setResendingGroupId(groupId);
+      try {
+        const res = await fetch(`/api/introductions/groups/${groupId}/resend`, {
+          method: "POST",
+        });
+        const body = await res.json();
+        if (!res.ok || body.success === false) {
+          message.error(body.message ?? "Resend failed");
+          return;
+        }
+        const worker = body.worker ?? {};
+        const skipped = body.skippedDeliveries?.length ?? 0;
+        const parts = [
+          `Re-queued ${body.reQueuedDeliveries ?? 0} delivery(ies)`,
+          `worker: ${worker.sent ?? 0} sent, ${worker.failed ?? 0} failed, ${worker.deferred ?? 0} deferred`,
+        ];
+        if (skipped > 0) parts.push(`${skipped} skipped`);
+        message.success(parts.join(" · "));
+        void loadNotSent();
+      } catch {
+        message.error("Resend failed");
+      } finally {
+        setResendingGroupId(null);
+      }
+    },
+    [message, loadNotSent]
+  );
+
   useEffect(() => {
     fetch("/api/introductions/cities", { cache: "no-store" })
       .then((res) => res.json())
@@ -344,6 +450,43 @@ export default function IntroductionsHistoryPage() {
       )
       .catch(() => {});
   }, []);
+
+  const [deliveryStates, setDeliveryStates] = useState<DeliveryStateRow[] | null>(null);
+  const [deliveryStatesLoading, setDeliveryStatesLoading] = useState(false);
+  const [dsDays, setDsDays] = useState<number>(14);
+  const [dsStatuses, setDsStatuses] = useState<string[]>([]);
+  const [dsCity, setDsCity] = useState<string | undefined>(undefined);
+  const [dsPerson, setDsPerson] = useState("");
+
+  const fetchDeliveryStates = useCallback(
+    async (statuses: string[], city?: string, person?: string) => {
+      setDeliveryStatesLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (statuses.length > 0) params.set("statuses", statuses.join(","));
+        if (city) params.set("city", city);
+        if (person?.trim()) params.set("person", person.trim());
+        const res = await fetch(`/api/introductions/delivery-states?${params.toString()}`, {
+          cache: "no-store",
+        });
+        const body = await res.json();
+        if (!res.ok || body.success === false) {
+          message.error(body.message ?? "Could not load delivery states");
+          return;
+        }
+        setDeliveryStates(body.rows ?? []);
+      } catch {
+        message.error("Could not load delivery states");
+      } finally {
+        setDeliveryStatesLoading(false);
+      }
+    },
+    [message]
+  );
+
+  useEffect(() => {
+    void fetchDeliveryStates([], undefined, "");
+  }, [fetchDeliveryStates]);
 
   const search = useCallback(async () => {
     setLoading(true);
@@ -367,6 +510,30 @@ export default function IntroductionsHistoryPage() {
       setLoading(false);
     }
   }, [person, cityCode, message]);
+
+  const resendMember = useCallback(
+    async (groupId: string, member: HistoryMember) => {
+      setResendingMemberKey(member.key);
+      try {
+        const res = await fetch(
+          `/api/introductions/groups/${groupId}/members/${encodeURIComponent(member.key)}/resend`,
+          { method: "POST" }
+        );
+        const body = await res.json();
+        if (!res.ok || body.success === false) {
+          message.error(body.message ?? "Resend failed");
+          return;
+        }
+        message.success(`Resent the email to ${body.to ?? member.email}`);
+        if (searched) void search();
+      } catch {
+        message.error("Resend failed");
+      } finally {
+        setResendingMemberKey(null);
+      }
+    },
+    [message, searched, search]
+  );
 
   const matchesTab = (
     <Flex vertical gap={16}>
@@ -500,7 +667,11 @@ export default function IntroductionsHistoryPage() {
                         ))}
                       </Space>
                     )}
-                    <GroupMembersTable members={group.members} />
+                    <GroupMembersTable
+                      members={group.members}
+                      resendingKey={resendingMemberKey}
+                      onResend={(member) => void resendMember(group.id, member)}
+                    />
                     <GroupDeliveriesTable deliveries={group.deliveries} />
                   </Flex>
                 ),
@@ -615,11 +786,29 @@ export default function IntroductionsHistoryPage() {
                       {group.subject && (
                         <Text type="secondary">{group.subject}</Text>
                       )}
+                      <Popconfirm
+                        title="Resend this group email?"
+                        description="Refreshes the failed members' emails from Airtable by record id and sends now."
+                        onConfirm={() => void resendGroup(group.id)}
+                      >
+                        <Button
+                          size="small"
+                          type="primary"
+                          loading={resendingGroupId === group.id}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          Resend
+                        </Button>
+                      </Popconfirm>
                     </Space>
                   ),
                   children: (
                     <Flex vertical gap={12}>
-                      <GroupMembersTable members={group.members} />
+                      <GroupMembersTable
+                        members={group.members}
+                        resendingKey={resendingMemberKey}
+                        onResend={(member) => void resendMember(group.id, member)}
+                      />
                       {group.failedDeliveries.length > 0 && (
                         <GroupDeliveriesTable deliveries={group.failedDeliveries} />
                       )}
@@ -630,6 +819,229 @@ export default function IntroductionsHistoryPage() {
             </Card>
           )}
         </>
+      )}
+    </Flex>
+  );
+
+  const visibleDeliveryStates = useMemo(() => {
+    if (!deliveryStates) return [];
+    if (dsDays <= 0) return deliveryStates;
+    const cutoff = Date.now() - dsDays * 24 * 60 * 60 * 1000;
+    return deliveryStates.filter((row) => {
+      if (!row.sentAt) return true;
+      const t = Date.parse(row.sentAt);
+      return Number.isNaN(t) || t >= cutoff;
+    });
+  }, [deliveryStates, dsDays]);
+
+  const deliveryStatesTab = (
+    <Flex vertical gap={16}>
+      <Card size="small" title="What do these states mean?">
+        <Space direction="vertical" size={4}>
+          <Text type="secondary">
+            Statuses are fetched live from the Resend API (latest event per email) — no
+            webhook needed. Expand a row to see the stored webhook status and provider
+            events.
+          </Text>
+          <Text>
+            <Tag color="blue">sent</Tag> — accepted by Resend but no delivery confirmation
+            yet (in flight or never confirmed).
+          </Text>
+          <Text>
+            <Tag color="green">delivered</Tag> — the recipient&apos;s mail server accepted
+            the email. Good, final state.
+          </Text>
+          <Text>
+            <Tag color="orange">delayed</Tag> — delivery is temporarily deferred (e.g. the
+            recipient&apos;s server is throttling or greylisting). Resend keeps retrying
+            automatically and it will end as delivered or bounced. Not a failure yet.
+          </Text>
+          <Text>
+            <Tag color="red">bounced</Tag> — the recipient&apos;s mail server permanently
+            rejected the email (address doesn&apos;t exist, domain rejects mail, …).
+            Terminal; never retried automatically.
+          </Text>
+          <Text>
+            <Tag color="red">suppressed</Tag> — the send was blocked before reaching the
+            mail server because the address is on Resend&apos;s suppression list (usually
+            after a previous bounce or spam complaint). Terminal; the address must be
+            removed from the suppression list before it can be emailed again.
+          </Text>
+          <Text>
+            <Tag color="red">complained</Tag> — the recipient marked the email as spam.
+            Terminal.
+          </Text>
+          <Text>
+            <Tag color="red">failed</Tag> — the provider could not send (invalid address
+            format, …). Terminal unless re-queued via the Not Sent tab.
+          </Text>
+        </Space>
+      </Card>
+
+      <Flex gap={12} wrap align="center">
+        <Select
+          style={{ minWidth: 150 }}
+          value={dsDays}
+          onChange={(value: number) => setDsDays(value)}
+          options={DAYS_OPTIONS}
+        />
+        <Select
+          mode="multiple"
+          style={{ minWidth: 320 }}
+          placeholder="Statuses (all by default)"
+          allowClear
+          value={dsStatuses}
+          onChange={(value: string[]) => {
+            setDsStatuses(value);
+            void fetchDeliveryStates(value, dsCity, dsPerson);
+          }}
+          options={PROVIDER_STATUS_OPTIONS}
+        />
+        <Select
+          style={{ minWidth: 220 }}
+          placeholder="City"
+          showSearch
+          allowClear
+          optionFilterProp="label"
+          value={dsCity}
+          onChange={(value?: string) => {
+            setDsCity(value);
+            void fetchDeliveryStates(dsStatuses, value, dsPerson);
+          }}
+          options={cities.map((city) => ({
+            value: city.cityCode,
+            label: city.cityName ?? city.cityCode,
+          }))}
+        />
+        <Input
+          style={{ maxWidth: 260 }}
+          placeholder="Recipient email"
+          value={dsPerson}
+          onChange={(e) => setDsPerson(e.target.value)}
+          onPressEnter={() => void fetchDeliveryStates(dsStatuses, dsCity, dsPerson)}
+          allowClear
+        />
+        <Button
+          type="primary"
+          icon={<SearchOutlined />}
+          loading={deliveryStatesLoading}
+          onClick={() => void fetchDeliveryStates(dsStatuses, dsCity, dsPerson)}
+        >
+          Apply
+        </Button>
+        <Button
+          icon={<ReloadOutlined />}
+          loading={deliveryStatesLoading}
+          onClick={() => void fetchDeliveryStates(dsStatuses, dsCity, dsPerson)}
+        >
+          Refresh
+        </Button>
+      </Flex>
+
+      {deliveryStates === null ? (
+        <Alert
+          type="info"
+          showIcon
+          message={deliveryStatesLoading ? "Loading…" : "No data loaded."}
+        />
+      ) : (
+        <Table<DeliveryStateRow>
+          size="small"
+          rowKey="id"
+          loading={deliveryStatesLoading}
+          pagination={{ pageSize: 20 }}
+          dataSource={visibleDeliveryStates}
+          expandable={{
+            expandedRowRender: (row) => (
+              <Space direction="vertical" size={4}>
+                <Text type="secondary">
+                  Resend id: <Text code>{row.resendMessageId}</Text>
+                  {row.subject ? ` · subject: "${row.subject}"` : ""}
+                </Text>
+                {row.from && <Text type="secondary">From: {row.from}</Text>}
+                <Text type="secondary">
+                  Stored webhook status:{" "}
+                  <Tag color={STATUS_COLORS[row.storedStatus] ?? "default"}>
+                    {row.storedStatus}
+                  </Tag>
+                </Text>
+                {row.events.length === 0 ? (
+                  <Text type="secondary">No stored provider events yet</Text>
+                ) : (
+                  row.events.map((event, index) => (
+                    <Text key={index} type="secondary">
+                      {event.eventType} ·{" "}
+                      {event.providerTs ? new Date(event.providerTs).toLocaleString() : "—"}
+                    </Text>
+                  ))
+                )}
+              </Space>
+            ),
+          }}
+          columns={[
+            {
+              title: "Recipient",
+              dataIndex: "recipientEmail",
+              render: (email: string, row) => (
+                <Space direction="vertical" size={0}>
+                  <Text strong>{email}</Text>
+                  {row.recipientName && <Text type="secondary">{row.recipientName}</Text>}
+                </Space>
+              ),
+            },
+            {
+              title: "City",
+              dataIndex: "cityName",
+              render: (v: string | null) => v ?? "—",
+            },
+            {
+              title: "Kind",
+              render: (_, row) => (
+                <Space size={4} wrap>
+                  <Text code>{row.source}</Text>
+                  {MODE_TAG[row.deliveryMode] && (
+                    <Tag color={MODE_TAG[row.deliveryMode].color}>
+                      {MODE_TAG[row.deliveryMode].label}
+                    </Tag>
+                  )}
+                </Space>
+              ),
+            },
+            {
+              title: "Status",
+              dataIndex: "status",
+              render: (status: string) => (
+                <Tag color={STATUS_COLORS[status] ?? "default"}>{status}</Tag>
+              ),
+            },
+            {
+              title: "Deliver to",
+              dataIndex: "deliverToEmail",
+              render: (email: string, row) =>
+                row.originalTo ? (
+                  <Space>
+                    <Tag color="gold">{email}</Tag>
+                    <Text type="secondary">
+                      original: {(row.originalTo ?? []).join(", ")}
+                    </Text>
+                  </Space>
+                ) : (
+                  email
+                ),
+            },
+            {
+              title: "Sent at",
+              dataIndex: "sentAt",
+              render: (v: string | null) => (v ? new Date(v).toLocaleString() : "—"),
+            },
+            {
+              title: "Error",
+              dataIndex: "error",
+              ellipsis: true,
+              render: (v: string | null) => (v ? <Text type="danger">{v}</Text> : "—"),
+            },
+          ]}
+        />
       )}
     </Flex>
   );
@@ -649,6 +1061,13 @@ export default function IntroductionsHistoryPage() {
               ? `Not Sent (${notSent.blockedRuns.length + notSent.groups.length})`
               : "Not Sent",
             children: notSentTab,
+          },
+          {
+            key: "delivery-states",
+            label: deliveryStates
+              ? `Delivery States (${deliveryStates.length})`
+              : "Delivery States",
+            children: deliveryStatesTab,
           },
         ]}
       />

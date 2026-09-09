@@ -192,13 +192,34 @@ export async function listNotSentItems(db: AppDb): Promise<NotSentResponse> {
     });
 
   // Blocked/failed runs that produced no groups at all — nothing was ever
-  // sent for these cities.
+  // sent for these cities. Runs superseded by a NEWER run for the same city
+  // (e.g. a later successful re-run after the block was resolved) are stale
+  // and hidden.
+  const firstCityCode = (cityCodesJson: string | null): string | null => {
+    try {
+      const parsed = JSON.parse(cityCodesJson ?? "[]") as unknown;
+      if (Array.isArray(parsed) && parsed.length > 0) return String(parsed[0]);
+    } catch {
+      // fall through
+    }
+    return null;
+  };
   const blockedRuns: NotSentBlockedRun[] = runs
     .filter(
       (run) =>
         (NOT_SENT_RUN_STATUSES as readonly string[]).includes(run.status) &&
         !groups.some((g) => g.runId === run.id)
     )
+    .filter((run) => {
+      const code = firstCityCode(run.cityCodesJson);
+      if (!code) return true;
+      return !runs.some(
+        (other) =>
+          other.id !== run.id &&
+          other.createdAt.getTime() > run.createdAt.getTime() &&
+          firstCityCode(other.cityCodesJson) === code
+      );
+    })
     .map((run) => ({
       id: run.id,
       cycleDate: run.cycleDate,
