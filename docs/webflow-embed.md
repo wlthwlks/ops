@@ -56,6 +56,23 @@ Behaviour:
 - Logged out → "Log in to view Getting Started" message
 - Authed → full Getting Started page
 
+## Events
+
+```html
+<div id="wlth-events-root"></div>
+<link rel="stylesheet" href="https://ops.wlthwlks.com/widgets/events/v1/events.css" />
+<script src="https://ops.wlthwlks.com/widgets/events/v1/events.js" defer></script>
+```
+
+| Attribute | Purpose | Required? |
+|---|---|---|
+| `data-embed-src` | Full Sweatpals community events embed script URL (overrides the default staging embed) | Optional |
+
+Behaviour:
+- Renders the WLTH WLKS "Events" header (eyebrow, title, description)
+- Injects the Sweatpals embed script into a container below the header; Sweatpals mounts its events UI (shadow root or iframe) next to that script tag
+- Shows a loading state until the embed mounts, and a friendly error message if the script fails to load
+
 ## Staging
 
 1. Embed only on Webflow staging / password pages first.

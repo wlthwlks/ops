@@ -91,10 +91,17 @@ export default defineConfig({
   publicDir: false,
   assetsInclude: ["**/*.lottie"],
   css:
-    widget === "getting-started"
+    widget === "getting-started" || widget === "events"
       ? {
           postcss: {
-            plugins: [removeCssLayers, prefixwrap("#wlth-getting-started-root")],
+            plugins: [
+              removeCssLayers,
+              prefixwrap(
+                widget === "events"
+                  ? "#wlth-events-root"
+                  : "#wlth-getting-started-root"
+              ),
+            ],
           },
         }
       : undefined,
@@ -111,14 +118,18 @@ export default defineConfig({
           ? "WlthSignup"
           : widget === "update-details"
             ? "WlthUpdateDetails"
-            : "WlthGettingStarted",
+            : widget === "events"
+              ? "WlthEvents"
+              : "WlthGettingStarted",
       formats: ["iife"],
       fileName: () =>
         widget === "signup"
           ? "signup.js"
           : widget === "update-details"
             ? "update-details.js"
-            : "getting-started.js",
+            : widget === "events"
+              ? "events.js"
+              : "getting-started.js",
     },
     rollupOptions: {
       output: {
@@ -129,7 +140,9 @@ export default defineConfig({
               ? "signup.css"
               : widget === "update-details"
                 ? "update-details.css"
-                : "getting-started.css";
+                : widget === "events"
+                  ? "events.css"
+                  : "getting-started.css";
           }
           return "assets/[name]-[hash][extname]";
         },

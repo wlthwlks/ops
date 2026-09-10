@@ -34,10 +34,11 @@
     "billing:backfill-pauses": "npx tsx scripts/backfill-billing-pauses.ts",
     "billing:backfill-pauses:local": "npx tsx scripts/backfill-billing-pauses.ts --env-file=.env.local",
     "klaviyo:sync-members": "npx tsx scripts/sync-klaviyo-members.ts",
-    "widgets:build": "WIDGET=signup vite build --config widgets/vite.config.ts && WIDGET=update-details vite build --config widgets/vite.config.ts && WIDGET=getting-started vite build --config widgets/vite.config.ts",
+    "widgets:build": "WIDGET=signup vite build --config widgets/vite.config.ts && WIDGET=update-details vite build --config widgets/vite.config.ts && WIDGET=getting-started vite build --config widgets/vite.config.ts && WIDGET=events vite build --config widgets/vite.config.ts",
     "widgets:build:signup": "WIDGET=signup vite build --config widgets/vite.config.ts",
     "widgets:build:update": "WIDGET=update-details vite build --config widgets/vite.config.ts",
     "widgets:build:getting-started": "WIDGET=getting-started vite build --config widgets/vite.config.ts",
+    "widgets:build:events": "WIDGET=events vite build --config widgets/vite.config.ts",
     "forms:city-alias-dry-run": "npx tsx scripts/report-city-alias-dry-run.ts",
     "security:check-files": "tsx scripts/check-sensitive-files.ts",
     "test:e2e": "playwright test"
