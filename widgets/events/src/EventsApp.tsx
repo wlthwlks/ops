@@ -37,7 +37,7 @@ export function EventsApp({ embedSrc }: Props) {
   }, [embedSrc]);
 
   return (
-    <main className="min-h-dvh overflow-x-hidden bg-background">
+    <main className="min-h-dvh overflow-x-clip bg-background">
       <section className="relative">
         <div className="relative mx-auto flex max-w-4xl flex-col items-center justify-center px-5 pt-16 pb-12 text-center sm:px-8 sm:pt-24 sm:pb-16">
           <span className="animate-fade-up mb-6 inline-flex items-center gap-2 rounded-full border border-border/80 bg-background/40 px-4 py-1.5 text-[11px] font-medium uppercase tracking-brand text-muted-foreground backdrop-blur-sm">
