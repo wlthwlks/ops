@@ -49,7 +49,13 @@ Memberstack DOM script must be on the page (same as signup/update-details).
 | Attribute | Purpose | Required? |
 |---|---|---|
 | `data-directory-url` | URL for Member Directory CTA button | Optional (defaults to `#`) |
+| `data-events-url` | URL for the Browse Events CTA button | Optional (auto-detected otherwise) |
 | `data-allow-anonymous` | Set to `true` to skip Memberstack gate (dev only) | Optional (defaults `false`) |
+
+Browse Events URL auto-detection:
+- `data-events-url` on `#wlth-getting-started-root` always wins
+- Hostname ending in `.webflow.io` → `https://wlthwlks.webflow.io/events` (staging)
+- Otherwise → `https://women.wlthwlks.com/events` (production)
 
 Behaviour:
 - Resolves Memberstack session via shared `tryResolveSessionAccessToken`

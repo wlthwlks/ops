@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { CalendarSubscribeMenu } from './CalendarSubscribeMenu'
+import { BrandButton } from './BrandButton'
 
 type Pillar = {
   number: string
@@ -23,7 +23,8 @@ const virtualPrograms = [
   },
 ]
 
-const pillars: Pillar[] = [
+function buildPillars(eventsUrl: string): Pillar[] {
+  return [
   {
     number: '01',
     kicker: 'Meet founders we think you should know',
@@ -99,7 +100,7 @@ const pillars: Pillar[] = [
           wherever you happen to be.
         </p>
         <div className="pt-2">
-          <CalendarSubscribeMenu />
+          <BrandButton href={eventsUrl}>Browse Events</BrandButton>
         </div>
       </>
     ),
@@ -168,9 +169,12 @@ const pillars: Pillar[] = [
       </>
     ),
   },
-]
+  ]
+}
 
-export function MembershipPillars() {
+export function MembershipPillars(props: { eventsUrl?: string }) {
+  const eventsUrl = props.eventsUrl || "#";
+  const pillars = buildPillars(eventsUrl);
   return (
     <section className="mx-auto w-full min-w-0 max-w-4xl px-5 sm:px-8">
       <div className="mb-14 flex flex-col gap-2 text-center">

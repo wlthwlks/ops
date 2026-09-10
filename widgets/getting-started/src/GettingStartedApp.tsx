@@ -15,6 +15,8 @@ import { SiteFooter } from "./components/SiteFooter";
 type Props = {
   /** When true, skip Memberstack gate (for local preview only). */
   allowAnonymous?: boolean;
+  /** URL of the community events page for the Browse Events CTA. */
+  eventsUrl?: string;
 };
 
 type Gate = "loading" | "authed" | "logged_out" | "error";
@@ -97,7 +99,7 @@ export function GettingStartedApp(props: Props) {
       <GsHero />
       <div className="flex flex-col gap-20 py-20 sm:gap-28 sm:py-28">
         <MonthlyRhythm />
-        <MembershipPillars />
+        <MembershipPillars eventsUrl={props.eventsUrl} />
         <MembershipTips />
         <CommunityGuidelines />
         <FaqSection />
