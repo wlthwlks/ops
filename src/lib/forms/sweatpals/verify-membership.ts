@@ -405,6 +405,10 @@ export type SweatpalsReconcileResult = SweatpalsVerifyResult & {
   mirrorStatus: string;
   mirrorRecordId: string | null;
   changedCount: number;
+  /** ISO date (YYYY-MM-DD) of the authoritative access window end. */
+  accessUntil: string | null;
+  /** Name of the active membership tier (when active). */
+  membershipName: string | null;
 };
 
 /**
@@ -432,6 +436,8 @@ export async function reconcileSweatpalsMember(
       mirrorStatus: "not_configured",
       mirrorRecordId: null,
       changedCount: 0,
+      accessUntil: null,
+      membershipName: null,
     };
   }
 
@@ -455,6 +461,8 @@ export async function reconcileSweatpalsMember(
       mirrorStatus: "api_error",
       mirrorRecordId: null,
       changedCount: 0,
+      accessUntil: null,
+      membershipName: null,
     };
   }
   if (outcome.kind === "not_found") {
@@ -470,6 +478,8 @@ export async function reconcileSweatpalsMember(
       mirrorStatus: "unresolved",
       mirrorRecordId: null,
       changedCount: 0,
+      accessUntil: null,
+      membershipName: null,
     };
   }
 
@@ -528,6 +538,8 @@ export async function reconcileSweatpalsMember(
     mirrorStatus: mirror.status,
     mirrorRecordId: mirror.recordId,
     changedCount: Object.keys(mirror.changed).length,
+    accessUntil: state.accessUntil,
+    membershipName: state.activeItem?.membershipName || null,
   };
 }
 

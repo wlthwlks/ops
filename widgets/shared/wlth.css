@@ -377,6 +377,54 @@
   width: 100%;
 }
 
+/* —— SweatPals billing (update-details footer) —— */
+.wlth-widget .wlth-sweatpals-billing {
+  border: 1px solid var(--wlth-border);
+  border-radius: var(--wlth-radius-sm);
+  background: var(--wlth-surface);
+  padding: 16px;
+  margin-top: 20px;
+}
+
+.wlth-widget .wlth-sweatpals-billing h4 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.wlth-widget .wlth-sweatpals-billing .wlth-muted {
+  margin: 0 0 12px;
+}
+
+.wlth-widget .wlth-sweatpals-link {
+  display: inline-block;
+  padding: 10px 16px;
+  border-radius: var(--wlth-radius-sm);
+  background: var(--wlth-button, var(--wlth-accent, var(--wlth-primary)));
+  color: var(--wlth-button-text, #fff);
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.wlth-widget .wlth-sweatpals-qr {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.wlth-widget .wlth-sweatpals-qr img {
+  border: 1px solid var(--wlth-border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+  display: block;
+}
+
+.wlth-widget .wlth-sweatpals-qr .wlth-muted {
+  margin: 0;
+}
+
 /* —— Promo code —— */
 .wlth-widget .wlth-promo {
   margin: 14px 0 18px;

@@ -222,6 +222,23 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   /** True when Airtable onboarding is not COMPLETE — use step API + resume. */
   const [onboardingIncomplete, setOnboardingIncomplete] = useState(false);
   const [paymentConfirmed, setPaymentConfirmed] = useState(false);
+  const [sweatpalsCfg, setSweatpalsCfg] = useState<{
+    enabled: boolean;
+    link: string;
+    qrPath: string;
+  }>({ enabled: false, link: "", qrPath: "" });
+  const [sweatpalsStatus, setSweatpalsStatus] = useState<{
+    configured: boolean;
+    status: string;
+    active: boolean;
+    paused: boolean;
+    membershipName: string | null;
+    accessUntil: string | null;
+  } | null>(null);
+  const sweatpalsStatusRef = useRef(sweatpalsStatus);
+  useEffect(() => {
+    sweatpalsStatusRef.current = sweatpalsStatus;
+  }, [sweatpalsStatus]);
   const [refreshStep, setRefreshStep] = useState<RefreshStep>("location");
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [previousCityUnavailable, setPreviousCityUnavailable] = useState(false);
@@ -467,15 +484,52 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     }
   };
 
+  const refreshSweatpalsStatus = async (
+    accessToken?: string | null,
+    opts?: { force?: boolean }
+  ) => {
+    const t = accessToken || token;
+    if (!t) return;
+    const cur = sweatpalsStatusRef.current;
+    // Don't hammer the SweatPals API for members without SweatPals linkage.
+    if (!opts?.force && cur && cur.status === "unresolved") return;
+    try {
+      const res = await api(props.apiBase, "/api/member/sweatpals-status", {
+        token: t,
+        cache: "no-store",
+      });
+      setSweatpalsStatus({
+        configured: Boolean(res.configured),
+        status: String(res.status || "unknown"),
+        active: Boolean(res.active),
+        paused: Boolean(res.paused),
+        membershipName:
+          typeof res.membershipName === "string" ? res.membershipName : null,
+        accessUntil: typeof res.accessUntil === "string" ? res.accessUntil : null,
+      });
+    } catch {
+      /* ignore — status refreshes on next mount */
+    }
+  };
+
+  const sweatpalsQrUrl = useMemo(() => {
+    const q = sweatpalsCfg.qrPath;
+    if (!q) return "";
+    if (/^https?:\/\//i.test(q)) return q;
+    return props.apiBase.replace(/\/+$/, "") + (q.startsWith("/") ? q : `/${q}`);
+  }, [sweatpalsCfg.qrPath, props.apiBase]);
+
   // Refresh billing when the user returns to this tab (e.g. after Stripe portal).
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== "visible" || !token) return;
       void refreshBilling(token);
+      if (sweatpalsCfg.enabled) void refreshSweatpalsStatus(token);
     };
     const onFocus = () => {
       if (!token) return;
       void refreshBilling(token);
+      if (sweatpalsCfg.enabled) void refreshSweatpalsStatus(token);
     };
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("focus", onFocus);
@@ -484,7 +538,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       window.removeEventListener("focus", onFocus);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.apiBase, token]);
+  }, [props.apiBase, token, sweatpalsCfg.enabled]);
 
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
@@ -525,6 +579,21 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         setMembershipPriceId(
           String((cfg as { membershipPriceId?: string }).membershipPriceId || "")
         );
+        const sp = (cfg as {
+          sweatpals?: {
+            updateDetails?: { enabled?: boolean; link?: string; qrPath?: string };
+          };
+        }).sweatpals?.updateDetails;
+        if (sp) {
+          setSweatpalsCfg({
+            enabled: Boolean(sp.enabled),
+            link: String(sp.link || ""),
+            qrPath: String(sp.qrPath || ""),
+          });
+          if (sp.enabled) {
+            void refreshSweatpalsStatus(t);
+          }
+        }
         const p = (profileRes.profile || {}) as Record<string, unknown>;
         const status = (statusRes || {}) as {
           exists?: boolean;
@@ -2983,6 +3052,60 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               : " until further notice"}
             .
           </p>
+        )}
+
+        {sweatpalsCfg.enabled && (
+          <div className="wlth-sweatpals-billing">
+            <h4>Membership billing</h4>
+            <p className="wlth-muted">
+              {sweatpalsStatus === null
+                ? "Checking your membership…"
+                : !sweatpalsStatus.configured
+                  ? "Membership billing is managed by SweatPals."
+                  : sweatpalsStatus.active
+                    ? `Membership active${
+                        sweatpalsStatus.membershipName
+                          ? ` — ${sweatpalsStatus.membershipName}`
+                          : ""
+                      }${
+                        sweatpalsStatus.accessUntil
+                          ? ` · access until ${sweatpalsStatus.accessUntil}`
+                          : ""
+                      }`
+                    : sweatpalsStatus.paused
+                      ? `Membership paused${
+                          sweatpalsStatus.accessUntil
+                            ? ` — access until ${sweatpalsStatus.accessUntil}`
+                            : ""
+                        }`
+                      : sweatpalsStatus.status === "inactive"
+                        ? "Membership expired or cancelled"
+                        : sweatpalsStatus.status === "unresolved"
+                          ? "No SweatPals membership found for this account"
+                          : "Membership status unavailable"}
+            </p>
+            {sweatpalsCfg.link && (
+              <a
+                className="wlth-sweatpals-link"
+                href={sweatpalsCfg.link}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Update payment details on SweatPals
+              </a>
+            )}
+            {sweatpalsQrUrl && (
+              <div className="wlth-sweatpals-qr">
+                <img
+                  src={sweatpalsQrUrl}
+                  alt="Update your payment details on SweatPals"
+                  width={160}
+                  height={160}
+                />
+                <p className="wlth-muted">Scan to update your billing details</p>
+              </div>
+            )}
+          </div>
         )}
 
       </div>

@@ -22,6 +22,7 @@ export function getFormFeatureFlags() {
     billingAlertsToSlackEnabled: flag("BILLING_ALERTS_TO_SLACK_ENABLED"),
     serviceAccessPolicyV2Enabled: flag("SERVICE_ACCESS_POLICY_V2_ENABLED"),
     sweatpalsPaymentStepEnabled: flag("SWEATPALS_PAYMENT_STEP_ENABLED"),
+    sweatpalsUpdateDetailsEnabled: flag("SWEATPALS_UPDATE_DETAILS_ENABLED"),
   } as const;
 }
 

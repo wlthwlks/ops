@@ -39,6 +39,11 @@ export async function GET(request: Request) {
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean),
+        updateDetails: {
+          enabled: flags.sweatpalsUpdateDetailsEnabled,
+          link: process.env.SWEATPALS_UPDATE_DETAILS_LINK || "",
+          qrPath: process.env.SWEATPALS_UPDATE_DETAILS_QR_PATH || "/complete-profile-qr-community.png",
+        },
       },
     }),
     request
