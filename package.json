@@ -31,6 +31,7 @@
     "airtable:audit-member-duplicates": "npx tsx scripts/audit-airtable-member-duplicates.ts",
     "billing:audit": "npx tsx scripts/entitlement-audit.ts",
     "billing:reconcile": "npx tsx scripts/entitlement-reconcile.ts",
+    "sweatpals:reconcile": "npx tsx scripts/reconcile-sweatpals.ts",
     "billing:backfill-pauses": "npx tsx scripts/backfill-billing-pauses.ts",
     "billing:backfill-pauses:local": "npx tsx scripts/backfill-billing-pauses.ts --env-file=.env.local",
     "klaviyo:sync-members": "npx tsx scripts/sync-klaviyo-members.ts",

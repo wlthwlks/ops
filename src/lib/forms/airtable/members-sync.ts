@@ -111,6 +111,17 @@ export async function findMemberByNormalizedEmailForSignupRecovery(
   email: string,
   airtable: AirtableClient = getFormsAirtableClient()
 ): Promise<AirtableRecord[]> {
+  return findMemberByNormalizedEmail(email, airtable);
+}
+
+/**
+ * General normalized-email lookup for reconciliation paths (never identity
+ * for payment linkage). Case-insensitive, exact-normalized match.
+ */
+export async function findMemberByNormalizedEmail(
+  email: string,
+  airtable: AirtableClient = getFormsAirtableClient()
+): Promise<AirtableRecord[]> {
   const n = normalizeEmailStrict(email);
   if (!n) return [];
   return airtable.listRecords(MEMBERS_TABLE, {

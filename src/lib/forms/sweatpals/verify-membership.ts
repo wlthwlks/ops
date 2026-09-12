@@ -1,17 +1,20 @@
 /**
- * SweatPals membership verification (server-side).
+ * SweatPals membership verification + reconciliation (server-side).
  *
- * Flow: the signup widget forwards SweatPals checkout events (email typed in
- * the widget, purchase) → this module looks the member up on SweatPals via the
- * external API (lookup-only), upserts rows into `sweatpals_memberships`, and
- * mirrors the derived state to the existing Airtable billing columns
- * (Membership / Payment / Service access until) so every existing reader
- * (widgets, scripts, crons) keeps working unchanged.
+ * SweatPals is the source of truth for membership state. This module:
+ *   1. looks a member up on SweatPals via the external API (lookup-only),
+ *   2. upserts rows into `sweatpals_memberships` (keyed by SweatPals id),
+ *   3. invalidates rows SweatPals no longer lists for the same email,
+ *   4. mirrors the derived state to the existing Airtable billing columns
+ *      (Membership / Payment / Service access until) so every existing
+ *      reader (widgets, scripts, crons) keeps working unchanged.
  *
- * SweatPals remains the source of truth; this is the linking layer between
- * SweatPals and our member records.
+ * `verifySweatpalsMembershipForMember` is the signup-payment path (member
+ * identity known). `reconcileSweatpalsMember` is the gating/reconcile path
+ * (may only know the SweatPals email) — same logic, mirror falls back to
+ * finding the Airtable member by normalized email.
  */
-import { sql } from "drizzle-orm";
+import { and, eq, notInArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { sweatpalsMemberships } from "@/db/schema";
 import {
@@ -24,13 +27,14 @@ import {
 import { MEMBER_FIELDS, MEMBERS_TABLE } from "@/lib/ops/airtable-fields";
 import {
   findMemberByMemberstackId,
+  findMemberByNormalizedEmail,
   getFormsAirtableClient,
 } from "@/lib/forms/airtable/members-sync";
 import { stripComputedMemberWriteFields } from "@/lib/forms/airtable/write-guards";
 import { sanitizeMembersWriteFields } from "@/lib/ops/airtable-fields";
 import { getFormFeatureFlags } from "@/lib/forms/feature-flags";
 import { isInProgressOnboarding } from "@/lib/forms/onboarding/onboarding-status";
-import type { AirtableClient } from "@/lib/integrations/airtable";
+import type { AirtableClient, AirtableRecord } from "@/lib/integrations/airtable";
 
 export type SweatpalsVerifyInput = {
   /** Our member account id (Memberstack id). */
@@ -47,7 +51,7 @@ export type SweatpalsVerifyResult = {
   success: boolean;
   /**
    * active | paused | inactive | unresolved | not_configured | api_error |
-   * airtable_member_not_found
+   * airtable_member_not_found | airtable_member_conflict
    */
   status: string;
   /** True when SweatPals reports at least one active membership. */
@@ -60,15 +64,29 @@ export type SweatpalsVerifyResult = {
   sweeatpalsMemberId?: string;
 };
 
+export type SweatpalsDerivedState = {
+  active: boolean;
+  paused: boolean;
+  cancelled: boolean;
+  /** ISO date (YYYY-MM-DD) of the authoritative access window end. */
+  accessUntil: string | null;
+  activeItem: SweatpalsMembershipItem | null;
+};
+
 type LookupOutcome =
-  | { kind: "resolved"; page: SweatpalsMembershipsPage; via: string }
+  | {
+      kind: "resolved";
+      page: SweatpalsMembershipsPage;
+      via: "email" | "phone";
+      email?: string;
+      phone?: string;
+    }
   | { kind: "not_found"; via: string };
 
-function lookupCandidates(input: SweatpalsVerifyInput): {
-  key: string;
-  email?: string;
-  phone?: string;
-}[] {
+function lookupCandidates(
+  emails: (string | undefined)[],
+  phone?: string
+): { key: string; email?: string; phone?: string }[] {
   const out: { key: string; email?: string; phone?: string }[] = [];
   const seen = new Set<string>();
   const push = (key: string, email?: string, phone?: string) => {
@@ -79,16 +97,16 @@ function lookupCandidates(input: SweatpalsVerifyInput): {
     seen.add(dedupe);
     if (email || phone) out.push({ key, email, phone });
   };
-  push("widget_email", input.lookupEmail);
-  push("member_email", input.memberEmail);
-  push("widget_phone", undefined, input.lookupPhone);
+  for (const email of emails) push("email", email);
+  push("phone", undefined, phone);
   return out;
 }
 
 async function lookupSweatpals(
-  input: SweatpalsVerifyInput
+  emails: (string | undefined)[],
+  phone?: string
 ): Promise<LookupOutcome | { kind: "error"; message: string }> {
-  for (const candidate of lookupCandidates(input)) {
+  for (const candidate of lookupCandidates(emails, phone)) {
     try {
       const page = await getMemberMemberships({
         email: candidate.email,
@@ -99,7 +117,13 @@ async function lookupSweatpals(
         // 404 — member unresolved for this community; try the next key.
         continue;
       }
-      return { kind: "resolved", page, via: candidate.key };
+      return {
+        kind: "resolved",
+        page,
+        via: candidate.email ? "email" : "phone",
+        email: candidate.email,
+        phone: candidate.phone,
+      };
     } catch (e) {
       if (e instanceof SweatpalsApiError) {
         return { kind: "error", message: e.message };
@@ -123,7 +147,7 @@ function isoDateOrNull(raw: string | null | undefined): string | null {
 
 /** Upsert the SweatPals list into `sweatpals_memberships`, keyed by SweatPals id. */
 async function upsertMembershipsRows(input: {
-  memberstackId: string;
+  memberstackId?: string | null;
   items: SweatpalsMembershipItem[];
   viaEmail?: string | null;
   viaPhone?: string | null;
@@ -131,7 +155,7 @@ async function upsertMembershipsRows(input: {
   if (input.items.length === 0) return;
   const rows = input.items.map((item) => ({
     id: item.id,
-    memberId: input.memberstackId,
+    memberId: input.memberstackId || null,
     membershipId: item.membershipId || null,
     membershipTierId: item.membershipTierId || null,
     membershipName: item.membershipName || null,
@@ -156,7 +180,8 @@ async function upsertMembershipsRows(input: {
     .onConflictDoUpdate({
       target: sweatpalsMemberships.id,
       set: {
-        memberId: sql`excluded.member_id`,
+        // Preserve an existing member linkage when the reconcile only knows the email.
+        memberId: sql`coalesce(excluded.member_id, sweatpals_memberships.member_id)`,
         membershipId: sql`excluded.membership_id`,
         membershipTierId: sql`excluded.membership_tier_id`,
         membershipName: sql`excluded.membership_name`,
@@ -175,13 +200,31 @@ async function upsertMembershipsRows(input: {
     });
 }
 
-function deriveState(items: SweatpalsMembershipItem[]): {
-  active: boolean;
-  paused: boolean;
-  accessUntil: string | null;
-  cancelled: boolean;
-  activeItem: SweatpalsMembershipItem | null;
-} {
+/**
+ * SweatPals no longer lists these memberships for the resolved email — mark
+ * them inactive so access gating never trusts a removed membership. When the
+ * resolved list is empty, every row for that email is invalidated.
+ */
+async function invalidateMissingRows(
+  email: string,
+  listedIds: string[]
+): Promise<void> {
+  await db
+    .update(sweatpalsMemberships)
+    .set({ active: false, lastSyncedAt: new Date() })
+    .where(
+      and(
+        eq(sweatpalsMemberships.sweatpalsEmail, email),
+        listedIds.length > 0
+          ? notInArray(sweatpalsMemberships.id, listedIds)
+          : undefined
+      )
+    );
+}
+
+export function deriveSweatpalsState(
+  items: SweatpalsMembershipItem[]
+): SweatpalsDerivedState {
   const activeItems = items.filter((i) => i.active);
   if (activeItems.length > 0) {
     const sorted = [...activeItems].sort(
@@ -192,8 +235,8 @@ function deriveState(items: SweatpalsMembershipItem[]): {
     return {
       active: true,
       paused: false,
-      accessUntil: isoDateOrNull(best.actualTo || best.expireDate),
       cancelled: false,
+      accessUntil: isoDateOrNull(best.actualTo || best.expireDate),
       activeItem: best,
     };
   }
@@ -208,8 +251,8 @@ function deriveState(items: SweatpalsMembershipItem[]): {
   return {
     active: false,
     paused,
-    accessUntil: isoDateOrNull(latest?.actualTo),
     cancelled,
+    accessUntil: isoDateOrNull(latest?.actualTo),
     activeItem: null,
   };
 }
@@ -219,38 +262,86 @@ function canWriteBillingToAirtable(): boolean {
   return !getFormFeatureFlags().makeShadowMode;
 }
 
-async function mirrorToAirtable(input: {
-  memberstackId: string;
-  state: ReturnType<typeof deriveState>;
-  activeMembershipId?: string;
+export type SweatpalsMirrorInput = {
+  memberstackId?: string;
+  /** Fallback identity when the member linkage is unknown (reconcile path). */
+  email?: string;
+  state: SweatpalsDerivedState;
+  /** Compute + report the patch but never write Airtable. */
+  dryRun?: boolean;
   airtable?: AirtableClient;
-}): Promise<{ status: string; shadowed: boolean }> {
-  const airtable = input.airtable ?? getFormsAirtableClient();
-  const matches = await findMemberByMemberstackId(input.memberstackId, airtable);
-  if (matches.length === 0) {
-    return { status: "airtable_member_not_found", shadowed: false };
+};
+
+export type SweatpalsMirrorResult = {
+  status:
+    | "updated"
+    | "shadowed"
+    | "dry_run"
+    | "airtable_member_not_found"
+    | "airtable_member_conflict";
+  shadowed: boolean;
+  recordId: string | null;
+  changed: Record<string, { from: unknown; to: unknown }>;
+};
+
+async function findMirrorTarget(
+  input: { memberstackId?: string; email?: string },
+  airtable: AirtableClient
+): Promise<{ record: AirtableRecord; status: string } | null> {
+  if (input.memberstackId) {
+    const byMs = await findMemberByMemberstackId(input.memberstackId, airtable);
+    if (byMs.length === 1) return { record: byMs[0], status: "by_memberstack_id" };
+    if (byMs.length > 1) return { record: byMs[0], status: "conflict" };
   }
-  const record = matches[0];
+  if (input.email) {
+    const byEmail = await findMemberByNormalizedEmail(input.email, airtable);
+    if (byEmail.length === 1) return { record: byEmail[0], status: "by_email" };
+    if (byEmail.length > 1) return { record: byEmail[0], status: "conflict" };
+  }
+  return null;
+}
+
+export async function mirrorSweatpalsStateToAirtable(
+  input: SweatpalsMirrorInput
+): Promise<SweatpalsMirrorResult> {
+  const airtable = input.airtable ?? getFormsAirtableClient();
+  const target = await findMirrorTarget(input, airtable);
+  if (!target) {
+    return {
+      status: "airtable_member_not_found",
+      shadowed: false,
+      recordId: null,
+      changed: {},
+    };
+  }
+  if (target.status === "conflict") {
+    return {
+      status: "airtable_member_conflict",
+      shadowed: false,
+      recordId: null,
+      changed: {},
+    };
+  }
+  const record = target.record;
 
   const patch: Record<string, unknown> = {
     [MEMBER_FIELDS.billingLastSyncedAt]: new Date().toISOString(),
   };
-  if (input.state.active) {
+  if (input.state.active || input.state.paused) {
     patch[MEMBER_FIELDS.membership] = "Active";
     patch[MEMBER_FIELDS.payment] = "Paid";
     if (input.state.accessUntil) {
       patch[MEMBER_FIELDS.serviceAccessUntil] = input.state.accessUntil;
     }
-  } else if (input.state.paused) {
-    patch[MEMBER_FIELDS.membership] = "Active";
-    patch[MEMBER_FIELDS.payment] = "Paid";
-    if (input.state.accessUntil) {
-      patch[MEMBER_FIELDS.serviceAccessUntil] = input.state.accessUntil;
-    }
-  } else if (input.state.cancelled) {
-    patch[MEMBER_FIELDS.membership] = "Cancelled";
   } else {
-    patch[MEMBER_FIELDS.membership] = "Expired";
+    patch[MEMBER_FIELDS.membership] = input.state.cancelled
+      ? "Cancelled"
+      : "Expired";
+    // SweatPals is the source of truth: enforce its access window end so
+    // gating revokes access the moment SweatPals says it ended.
+    if (input.state.accessUntil) {
+      patch[MEMBER_FIELDS.serviceAccessUntil] = input.state.accessUntil;
+    }
   }
 
   const currentStatus = String(
@@ -272,20 +363,23 @@ async function mirrorToAirtable(input: {
       changed[k] = { from, to: v };
     }
   }
+
   if (Object.keys(changed).length > 0) {
     console.error(
       JSON.stringify({
         event: "billing_write",
-        source: "sweatpals_verify",
-        memberstackId: input.memberstackId,
+        source: "sweatpals_mirror",
         airtableRecordId: record.id,
         changed,
       })
     );
   }
 
+  if (input.dryRun) {
+    return { status: "dry_run", shadowed: false, recordId: record.id, changed };
+  }
   if (!canWriteBillingToAirtable()) {
-    return { status: "shadowed", shadowed: true };
+    return { status: "shadowed", shadowed: true, recordId: record.id, changed };
   }
 
   await airtable.updateRecords(
@@ -293,9 +387,151 @@ async function mirrorToAirtable(input: {
     [{ id: record.id, fields: safe }],
     { typecast: true }
   );
-  return { status: "updated", shadowed: false };
+  return { status: "updated", shadowed: false, recordId: record.id, changed };
 }
 
+export type SweatpalsReconcileInput = {
+  memberstackId?: string;
+  /** Lookup emails, most authoritative first (widget-typed, member email…). */
+  emails?: (string | undefined)[];
+  phone?: string;
+  /** Mirror fallback identity (usually the resolved lookup email). */
+  mirrorEmail?: string;
+  dryRun?: boolean;
+  airtable?: AirtableClient;
+};
+
+export type SweatpalsReconcileResult = SweatpalsVerifyResult & {
+  mirrorStatus: string;
+  mirrorRecordId: string | null;
+  changedCount: number;
+};
+
+/**
+ * Shared core for the signup-verify and reconcile paths.
+ * Lookup → upsert rows → invalidate removed rows → mirror to Airtable.
+ */
+export async function reconcileSweatpalsMember(
+  input: SweatpalsReconcileInput
+): Promise<SweatpalsReconcileResult> {
+  const emails = (input.emails ?? []).map((e) => (e ? e.trim() : undefined));
+
+  try {
+    getSweatpalsApiConfig();
+  } catch {
+    return {
+      success: false,
+      status: "not_configured",
+      membershipConfirmed: false,
+      active: false,
+      paused: false,
+      count: 0,
+      shadowed: false,
+      reason:
+        "SweatPals API is not configured (SWEATPALS_API_KEY / SWEATPALS_COMMUNITY_ID)",
+      mirrorStatus: "not_configured",
+      mirrorRecordId: null,
+      changedCount: 0,
+    };
+  }
+
+  const outcome = await lookupSweatpals(emails, input.phone);
+  if (outcome.kind === "error") {
+    console.error(
+      JSON.stringify({
+        event: "sweatpals_lookup_error",
+        error: outcome.message,
+      })
+    );
+    return {
+      success: false,
+      status: "api_error",
+      membershipConfirmed: false,
+      active: false,
+      paused: false,
+      count: 0,
+      shadowed: false,
+      reason: outcome.message,
+      mirrorStatus: "api_error",
+      mirrorRecordId: null,
+      changedCount: 0,
+    };
+  }
+  if (outcome.kind === "not_found") {
+    return {
+      success: true,
+      status: "unresolved",
+      membershipConfirmed: false,
+      active: false,
+      paused: false,
+      count: 0,
+      shadowed: false,
+      reason: "No SweatPals membership found for this member",
+      mirrorStatus: "unresolved",
+      mirrorRecordId: null,
+      changedCount: 0,
+    };
+  }
+
+  const items = outcome.page.list;
+  const state = deriveSweatpalsState(items);
+
+  const resolvedEmail = outcome.via === "email" ? outcome.email : undefined;
+  const resolvedPhone = outcome.via === "phone" ? outcome.phone : undefined;
+
+  await upsertMembershipsRows({
+    memberstackId: input.memberstackId || null,
+    items,
+    viaEmail: resolvedEmail || null,
+    viaPhone: resolvedPhone || null,
+  });
+
+  const invalidationEmail =
+    resolvedEmail || input.mirrorEmail?.toLowerCase().trim() || null;
+  if (invalidationEmail) {
+    await invalidateMissingRows(invalidationEmail, items.map((i) => i.id));
+  }
+
+  const mirror = await mirrorSweatpalsStateToAirtable({
+    memberstackId: input.memberstackId || undefined,
+    email: resolvedEmail || input.mirrorEmail,
+    state,
+    dryRun: input.dryRun,
+    airtable: input.airtable,
+  });
+
+  const baseStatus = state.active
+    ? "active"
+    : state.paused
+      ? "paused"
+      : "inactive";
+  const status =
+    baseStatus !== "inactive" || mirror.status === "updated" || mirror.status === "shadowed" || mirror.status === "dry_run"
+      ? baseStatus
+      : mirror.status;
+
+  return {
+    success: true,
+    status,
+    membershipConfirmed: state.active,
+    active: state.active,
+    paused: state.paused,
+    count: items.length,
+    shadowed: mirror.shadowed,
+    sweeatpalsMemberId: state.activeItem?.id,
+    reason:
+      mirror.status === "airtable_member_not_found"
+        ? "SweatPals membership found, but no Airtable member record exists yet"
+        : mirror.status === "airtable_member_conflict"
+          ? "Multiple Airtable members match this email — mirroring skipped"
+          : undefined,
+    mirrorStatus: mirror.status,
+    mirrorRecordId: mirror.recordId,
+    changedCount: Object.keys(mirror.changed).length,
+  };
+}
+
+/** Signup payment path — member identity known. */
 export async function verifySweatpalsMembershipForMember(
   input: SweatpalsVerifyInput
 ): Promise<SweatpalsVerifyResult> {
@@ -313,84 +549,21 @@ export async function verifySweatpalsMembershipForMember(
     };
   }
 
-  // Fail closed but clearly when the SweatPals key is not provisioned yet.
-  try {
-    getSweatpalsApiConfig();
-  } catch {
-    return {
-      success: false,
-      status: "not_configured",
-      membershipConfirmed: false,
-      active: false,
-      paused: false,
-      count: 0,
-      shadowed: false,
-      reason: "SweatPals API is not configured (SWEATPALS_API_KEY / SWEATPALS_COMMUNITY_ID)",
-    };
-  }
-
-  const outcome = await lookupSweatpals(input);
-  if (outcome.kind === "error") {
-    console.error(
-      JSON.stringify({
-        event: "sweatpals_lookup_error",
-        memberstackId,
-        error: outcome.message,
-      })
-    );
-    return {
-      success: false,
-      status: "api_error",
-      membershipConfirmed: false,
-      active: false,
-      paused: false,
-      count: 0,
-      shadowed: false,
-      reason: outcome.message,
-    };
-  }
-  if (outcome.kind === "not_found") {
-    return {
-      success: true,
-      status: "unresolved",
-      membershipConfirmed: false,
-      active: false,
-      paused: false,
-      count: 0,
-      shadowed: false,
-      reason: "No SweatPals membership found for this member",
-    };
-  }
-
-  const items = outcome.page.list;
-  const state = deriveState(items);
-
-  await upsertMembershipsRows({
+  const result = await reconcileSweatpalsMember({
     memberstackId,
-    items,
-    viaEmail: outcome.via.startsWith("widget_email") || outcome.via === "member_email"
-      ? (input.lookupEmail || input.memberEmail || "").trim().toLowerCase() || null
-      : null,
-    viaPhone: outcome.via === "widget_phone" ? (input.lookupPhone || "").trim() || null : null,
-  });
-
-  const mirror = await mirrorToAirtable({
-    memberstackId,
-    state,
-    activeMembershipId: state.activeItem?.id,
+    emails: [input.lookupEmail, input.memberEmail],
+    phone: input.lookupPhone,
   });
 
   return {
-    success: true,
-    status: state.active ? "active" : state.paused ? "paused" : mirror.status === "airtable_member_not_found" ? mirror.status : "inactive",
-    membershipConfirmed: state.active,
-    active: state.active,
-    paused: state.paused,
-    count: items.length,
-    shadowed: mirror.shadowed,
-    sweeatpalsMemberId: state.activeItem?.id,
-    reason: mirror.status === "airtable_member_not_found"
-      ? "SweatPals membership found, but no Airtable member record exists yet"
-      : undefined,
+    success: result.success,
+    status: result.status,
+    membershipConfirmed: result.membershipConfirmed,
+    active: result.active,
+    paused: result.paused,
+    count: result.count,
+    shadowed: result.shadowed,
+    reason: result.reason,
+    sweeatpalsMemberId: result.sweeatpalsMemberId,
   };
 }

@@ -6,9 +6,16 @@ const dbInsert = vi.fn(() => ({
   })),
 }));
 
+const dbUpdate = vi.fn(() => ({
+  set: vi.fn(() => ({
+    where: vi.fn(async () => undefined),
+  })),
+}));
+
 vi.mock("@/db", () => ({
   db: {
     insert: (...a: unknown[]) => dbInsert(...a),
+    update: (...a: unknown[]) => dbUpdate(...a),
   },
 }));
 
@@ -28,12 +35,14 @@ vi.mock("@/lib/integrations/sweatpals", () => ({
 }));
 
 const findMemberByMs = vi.fn();
+const findMemberByEmail = vi.fn();
 const updateRecords = vi.fn(async (_t: string, records: { id: string; fields: Record<string, unknown> }[]) => [
   { id: records[0]?.id ?? "rec1", fields: { ...(records[0]?.fields ?? {}) } },
 ]);
 
 vi.mock("@/lib/forms/airtable/members-sync", () => ({
   findMemberByMemberstackId: (...a: unknown[]) => findMemberByMs(...a),
+  findMemberByNormalizedEmail: (...a: unknown[]) => findMemberByEmail(...a),
   getFormsAirtableClient: () => ({ updateRecords }),
 }));
 
@@ -184,5 +193,105 @@ describe("verifySweatpalsMembershipForMember", () => {
     });
     expect(res.status).toBe("api_error");
     expect(res.membershipConfirmed).toBe(false);
+  });
+
+  it("revokes access for inactive memberships using SweatPals actualTo", async () => {
+    getMemberships.mockResolvedValue({
+      list: [
+        {
+          ...activeItem,
+          id: "c1c2c3c4-1b2c-4d5e-8f90-a1b2c3d4e5f6",
+          active: false,
+          pauseFuturePayments: false,
+          cancellationEffectiveAt: "2026-09-01T00:00:00.000Z",
+          actualTo: "2026-09-01T00:00:00.000Z",
+        },
+      ],
+      limit: 25,
+      offset: 0,
+      total: 1,
+    });
+    const res = await verifySweatpalsMembershipForMember({
+      memberstackId: "m1",
+      memberEmail: "a@b.com",
+    });
+    expect(res.status).toBe("inactive");
+    expect(res.membershipConfirmed).toBe(false);
+    const [, records] = updateRecords.mock.calls[0];
+    const fields = records[0].fields as Record<string, unknown>;
+    expect(fields["Membership"]).toBe("Cancelled");
+    expect(fields["Service access until"]).toBe("2026-09-01");
+  });
+});
+
+import { reconcileSweatpalsMember } from "@/lib/forms/sweatpals/verify-membership";
+
+describe("reconcileSweatpalsMember", () => {
+  const prevKey = process.env.SWEATPALS_API_KEY;
+  const prevShadow = process.env.MAKE_SHADOW_MODE;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.SWEATPALS_API_KEY = "sp_test_key";
+    process.env.SWEATPALS_COMMUNITY_ID = "5b2f388a-44c0-4587-b0de-e1be39e383dc";
+    process.env.MAKE_SHADOW_MODE = "false";
+    getConfig.mockReturnValue({
+      apiBase: "https://ilove.staging.sweatpals.com",
+      apiKey: "sp_test_key",
+      communityId: "5b2f388a-44c0-4587-b0de-e1be39e383dc",
+      apiKeyHeader: "x-api-key",
+      timeoutMs: 5000,
+    });
+    findMemberByMs.mockResolvedValue([]);
+    findMemberByEmail.mockResolvedValue([{ id: "recEmail1", fields: {} }]);
+    getMemberships.mockResolvedValue({
+      list: [activeItem],
+      limit: 25,
+      offset: 0,
+      total: 1,
+    });
+  });
+
+  afterEach(() => {
+    if (prevKey === undefined) delete process.env.SWEATPALS_API_KEY;
+    else process.env.SWEATPALS_API_KEY = prevKey;
+    if (prevShadow === undefined) delete process.env.MAKE_SHADOW_MODE;
+    else process.env.MAKE_SHADOW_MODE = prevShadow;
+  });
+
+  it("mirrors via email when the member linkage is unknown", async () => {
+    const res = await reconcileSweatpalsMember({
+      emails: ["buyer@widget.com"],
+    });
+    expect(res.status).toBe("active");
+    expect(res.mirrorStatus).toBe("updated");
+    expect(findMemberByEmail).toHaveBeenCalled();
+    const [, records] = updateRecords.mock.calls[0];
+    const fields = records[0].fields as Record<string, unknown>;
+    expect(fields["Membership"]).toBe("Active");
+  });
+
+  it("dry-run computes but never writes", async () => {
+    const res = await reconcileSweatpalsMember({
+      emails: ["buyer@widget.com"],
+      dryRun: true,
+    });
+    expect(res.status).toBe("active");
+    expect(res.mirrorStatus).toBe("dry_run");
+    expect(res.changedCount).toBeGreaterThan(0);
+    expect(updateRecords).not.toHaveBeenCalled();
+    expect(dbInsert).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips mirroring on Airtable email conflict", async () => {
+    findMemberByEmail.mockResolvedValue([
+      { id: "recA", fields: {} },
+      { id: "recB", fields: {} },
+    ]);
+    const res = await reconcileSweatpalsMember({
+      emails: ["buyer@widget.com"],
+    });
+    expect(res.mirrorStatus).toBe("airtable_member_conflict");
+    expect(updateRecords).not.toHaveBeenCalled();
   });
 });
