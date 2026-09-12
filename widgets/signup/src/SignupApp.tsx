@@ -43,6 +43,8 @@ import {
 import { MultiSelectDropdown } from "../../shared/MultiSelectDropdown";
 import { markSignupSessionRefreshComplete } from "../../shared/session-refresh-gate";
 import { runOutboundCheckout } from "../../shared/checkout-outbound";
+import { SweatpalsPaymentPreview } from "./SweatpalsPaymentPreview";
+import type { SweatpalsWidgetEvent } from "../../shared/sweatpals-membership";
 import { onInvalidScrollToError, scrollWidgetToTop } from "../../shared/form-scroll";
 import {
   clearAwaitingPostPaymentMatching,
@@ -245,6 +247,13 @@ export function SignupApp(props: { apiBase: string }) {
   const [config, setConfig] = useState<{
     membershipPriceId: string;
     homeUrl: string;
+    sweatpals?: {
+      enabled: boolean;
+      communityUsername: string;
+      membershipTiersJson: string;
+      scriptUrl: string;
+      purchaseEventNames: string[];
+    };
   } | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [communityOk, setCommunityOk] = useState(false);
@@ -252,6 +261,9 @@ export function SignupApp(props: { apiBase: string }) {
   const [termsOk, setTermsOk] = useState(false);
   const [termsError, setTermsError] = useState<string | undefined>();
   const [promoCode, setPromoCode] = useState("");
+  const [sweatpalsEmail, setSweatpalsEmail] = useState("");
+  const [sweatpalsPhone, setSweatpalsPhone] = useState("");
+  const [sweatpalsChecking, setSweatpalsChecking] = useState(false);
   const [promoApplied, setPromoApplied] = useState<{
     offerCode: string;
     priceKey: string;
@@ -279,6 +291,117 @@ export function SignupApp(props: { apiBase: string }) {
       sessionStorage.removeItem("wlth_payment_ok");
     } catch {
       /* ignore */
+    }
+  };
+
+  /**
+   * Shadow-mode capture of SweatPals widget analytics events (email typed in
+   * checkout, purchase, …). Logged server-side for later linking/verification.
+   * Captures the buyer email/phone for the verify call and triggers the
+   * server-side SweatPals verification on purchase events.
+   */
+  const handleSweatpalsWidgetEvent = (event: SweatpalsWidgetEvent) => {
+    void api(props.apiBase, "/api/onboarding/analytics", {
+      method: "POST",
+      token: token ?? undefined,
+      body: JSON.stringify({
+        eventType: "SWEATPALS_WIDGET_EVENT",
+        memberstackId: memberIdFromAccessToken(token) || undefined,
+        metadata: {
+          action: event.action,
+          eventName: event.eventName,
+          eventParams: event.eventParams,
+        },
+      }),
+    }).catch(() => undefined);
+
+    if (event.eventName === "registration_field_filled") {
+      const fieldName = String(event.eventParams.fieldName || "").toLowerCase();
+      const fieldValue = String(event.eventParams.fieldValue || "").trim();
+      if (fieldName === "email" && fieldValue) setSweatpalsEmail(fieldValue);
+      if (fieldName === "phone" && fieldValue) setSweatpalsPhone(fieldValue);
+      return;
+    }
+
+    const purchaseNames =
+      config?.sweatpals?.purchaseEventNames?.length
+        ? config.sweatpals.purchaseEventNames
+        : ["purchase", "event_purchase"];
+    if (purchaseNames.includes(event.eventName)) {
+      void verifySweatpalsMembership();
+    }
+  };
+
+  /**
+   * SweatPals payment path: verify the membership server-side (lookup by the
+   * email typed in the SweatPals checkout, then by our member email), mirror
+   * billing state, and advance to matching once confirmed.
+   */
+  const verifySweatpalsMembership = async () => {
+    if (!token) {
+      setError("Please stay signed in while we confirm your membership.");
+      await stepper.goTo("payment");
+      scrollSignupToTop();
+      return;
+    }
+    setSweatpalsChecking(true);
+    setError(null);
+    scrollSignupToTop();
+    try {
+      let confirmed = false;
+      let lastStatus = "";
+      for (let i = 0; i < 12; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, 3000));
+        const res = (await api(
+          props.apiBase,
+          "/api/onboarding/sweatpals-verify",
+          {
+            method: "POST",
+            token,
+            body: JSON.stringify({
+              email: sweatpalsEmail || undefined,
+              phone: sweatpalsPhone || undefined,
+            }),
+          }
+        )) as {
+          membershipConfirmed?: boolean;
+          active?: boolean;
+          status?: string;
+          reason?: string;
+        };
+        lastStatus = String(res.status || "");
+        if (res.membershipConfirmed && res.active) {
+          confirmed = true;
+          break;
+        }
+        // Unresolvable / misconfigured / failing API — stop hammering.
+        if (["unresolved", "not_configured", "api_error"].includes(lastStatus)) {
+          break;
+        }
+      }
+      if (confirmed) {
+        clearCheckoutFlags();
+        clearAwaitingPostPaymentMatching();
+        await new Promise((r) => setTimeout(r, 700));
+        markPreGoalComplete(stepper);
+        await stepper.goTo("goal");
+        setAsyncState({ kind: "idle" });
+        scrollSignupToTop();
+      } else {
+        setError(
+          lastStatus === "not_configured"
+            ? "SweatPals verification is not configured yet. Your progress is saved — contact support if this continues."
+            : lastStatus === "unresolved"
+              ? "We couldn't find your SweatPals membership yet. If you just paid, give it a moment and try Verify again — your progress is saved."
+              : "We're still confirming your SweatPals membership. Your progress is saved — try Verify again in a moment."
+        );
+      }
+    } catch {
+      setError(
+        "We couldn't confirm your SweatPals membership. Your progress is saved — try Verify again in a moment."
+      );
+    } finally {
+      setSweatpalsChecking(false);
     }
   };
 
@@ -591,7 +714,19 @@ export function SignupApp(props: { apiBase: string }) {
           api(props.apiBase, "/api/forms/config"),
           api(props.apiBase, "/api/reference-data/onboarding"),
         ]);
-        setConfig(cfg as { membershipPriceId: string; homeUrl: string });
+        setConfig(
+          cfg as {
+            membershipPriceId: string;
+            homeUrl: string;
+            sweatpals?: {
+              enabled: boolean;
+              communityUsername: string;
+              membershipTiersJson: string;
+              scriptUrl: string;
+              purchaseEventNames: string[];
+            };
+          }
+        );
         const rd = ref as unknown as RefData;
         setRefData(rd);
 
@@ -1555,8 +1690,9 @@ export function SignupApp(props: { apiBase: string }) {
           <div className="wlth-pay-hero wlth-step-panel" key="payment">
             <h1>Your WLTH WLKS membership starts here</h1>
             <p>
-              Complete your secure payment through Stripe and unlock a more intentional way
-              to build valuable founder connections.
+              {config?.sweatpals?.enabled
+                ? "Choose your membership below — payment and membership management are handled securely by SweatPals."
+                : "Complete your secure payment through Stripe and unlock a more intentional way to build valuable founder connections."}
             </p>
             <div className="wlth-benefits">
               <p className="wlth-benefit">
@@ -1577,6 +1713,15 @@ export function SignupApp(props: { apiBase: string }) {
               </p>
             </div>
 
+            {config?.sweatpals?.enabled && (
+              <SweatpalsPaymentPreview
+                scriptUrl={config.sweatpals.scriptUrl}
+                communityUsername={config.sweatpals.communityUsername}
+                membershipTiersJson={config.sweatpals.membershipTiersJson}
+                onEvent={handleSweatpalsWidgetEvent}
+              />
+            )}
+
             <CommunityIntentionCard
               checked={communityOk}
               onChange={(v) => {
@@ -1592,62 +1737,83 @@ export function SignupApp(props: { apiBase: string }) {
               termsError={termsError}
             />
 
-            <div className="wlth-promo">
-              <label htmlFor="wlth-promo-code">
-                Have a trial code? Paste it here — it changes your price
-              </label>
-              <div className="wlth-promo-row">
-                <input
-                  id="wlth-promo-code"
-                  type="text"
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="e.g. F87OFFER"
-                  value={promoCode}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setPromoCode(v);
-                    setPromoError(null);
-                    if (
-                      promoApplied &&
-                      promoApplied.offerCode.toUpperCase() !== v.trim().toUpperCase()
-                    ) {
-                      setPromoApplied(null);
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  className="wlth-btn-secondary"
-                  disabled={promoChecking}
-                  onClick={() => void applyPromoCode()}
-                >
-                  {promoChecking ? "Checking…" : "Apply"}
-                </button>
-              </div>
-              {promoApplied && (
-                <p className="wlth-promo-ok">
-                  <strong>{promoApplied.label || promoApplied.offerCode}</strong>
-                  {promoApplied.description ? ` — ${promoApplied.description}` : ""}
+            {config?.sweatpals?.enabled ? (
+              <>
+                <div className="wlth-actions">
+                  <button
+                    type="button"
+                    className="wlth-btn-primary"
+                    disabled={busy || !communityOk || !termsOk || sweatpalsChecking}
+                    onClick={() => void verifySweatpalsMembership()}
+                  >
+                    {sweatpalsChecking ? "Checking your membership…" : "I've paid — verify my membership"}
+                  </button>
+                </div>
+                <p className="wlth-trust">
+                  Payment and membership are managed by SweatPals. After completing your
+                  purchase, come back and verify to continue — or wait for the automatic check.
                 </p>
-              )}
-              {promoError && <p className="wlth-promo-err">{promoError}</p>}
-            </div>
+              </>
+            ) : (
+              <>
+                <div className="wlth-promo">
+                  <label htmlFor="wlth-promo-code">
+                    Have a trial code? Paste it here — it changes your price
+                  </label>
+                  <div className="wlth-promo-row">
+                    <input
+                      id="wlth-promo-code"
+                      type="text"
+                      autoComplete="off"
+                      spellCheck={false}
+                      placeholder="e.g. F87OFFER"
+                      value={promoCode}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setPromoCode(v);
+                        setPromoError(null);
+                        if (
+                          promoApplied &&
+                          promoApplied.offerCode.toUpperCase() !== v.trim().toUpperCase()
+                        ) {
+                          setPromoApplied(null);
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="wlth-btn-secondary"
+                      disabled={promoChecking}
+                      onClick={() => void applyPromoCode()}
+                    >
+                      {promoChecking ? "Checking…" : "Apply"}
+                    </button>
+                  </div>
+                  {promoApplied && (
+                    <p className="wlth-promo-ok">
+                      <strong>{promoApplied.label || promoApplied.offerCode}</strong>
+                      {promoApplied.description ? ` — ${promoApplied.description}` : ""}
+                    </p>
+                  )}
+                  {promoError && <p className="wlth-promo-err">{promoError}</p>}
+                </div>
 
-            <div className="wlth-actions">
-              <button
-                type="button"
-                className="wlth-btn-primary"
-                disabled={busy || !communityOk || !termsOk}
-                onClick={() => void startCheckout()}
-              >
-                Continue to secure checkout
-              </button>
-            </div>
-            <p className="wlth-trust">
-              Secure payment powered by Stripe. You can cancel anytime from your membership
-              settings. We never store your full card details on WLTH WLKS.
-            </p>
+                <div className="wlth-actions">
+                  <button
+                    type="button"
+                    className="wlth-btn-primary"
+                    disabled={busy || !communityOk || !termsOk}
+                    onClick={() => void startCheckout()}
+                  >
+                    Continue to secure checkout
+                  </button>
+                </div>
+                <p className="wlth-trust">
+                  Secure payment powered by Stripe. You can cancel anytime from your membership
+                  settings. We never store your full card details on WLTH WLKS.
+                </p>
+              </>
+            )}
           </div>
         )}
 

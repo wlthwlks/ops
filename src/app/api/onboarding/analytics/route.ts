@@ -22,6 +22,7 @@ const schema = z.object({
     "PROFILE_ENRICHMENT_STARTED",
     "ONBOARDING_COMPLETED",
     "FORM_ABANDONED",
+    "SWEATPALS_WIDGET_EVENT",
   ]),
   sessionId: z.string().max(120).optional(),
   memberstackId: z.string().max(120).optional(),

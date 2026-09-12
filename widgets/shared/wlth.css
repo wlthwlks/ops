@@ -352,6 +352,31 @@
   margin: 12px 0 0;
 }
 
+/* —— SweatPals membership preview (shadow mode) —— */
+.wlth-widget .wlth-sweatpals-preview {
+  border: 1px solid var(--wlth-border);
+  border-radius: var(--wlth-radius-sm);
+  background: var(--wlth-surface);
+  padding: 16px;
+  margin: 0 0 22px;
+}
+
+.wlth-widget .wlth-sweatpals-preview h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+}
+
+.wlth-widget .wlth-sweatpals-note {
+  font-size: 13px;
+  color: var(--wlth-text-muted);
+  margin: 0 0 12px;
+}
+
+.wlth-widget .wlth-sweatpals-container {
+  min-height: 120px;
+  width: 100%;
+}
+
 /* —— Promo code —— */
 .wlth-widget .wlth-promo {
   margin: 14px 0 18px;

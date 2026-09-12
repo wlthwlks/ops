@@ -26,6 +26,20 @@ export async function GET(request: Request) {
         updateDetailsEnabled: flags.newUpdateDetailsWidgetEnabled,
         analyticsEnabled: flags.newFormAnalyticsEnabled,
       },
+      sweatpals: {
+        enabled: flags.sweatpalsPaymentStepEnabled,
+        communityUsername: process.env.SWEATPALS_COMMUNITY_USERNAME || "",
+        membershipTiersJson: process.env.SWEATPALS_MEMBERSHIP_TIERS_JSON || "[]",
+        scriptUrl:
+          process.env.SWEATPALS_MEMBERSHIP_SCRIPT_URL ||
+          `${(
+            process.env.SWEATPALS_APP_ORIGIN || "https://app.sweatpals.com"
+          ).replace(/\/+$/, "")}/static/embed/community/membership/list-v2/script.js`,
+        purchaseEventNames: (process.env.SWEATPALS_PURCHASE_EVENT_NAMES || "purchase,event_purchase")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      },
     }),
     request
   );
