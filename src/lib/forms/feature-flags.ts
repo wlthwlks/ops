@@ -23,6 +23,7 @@ export function getFormFeatureFlags() {
     serviceAccessPolicyV2Enabled: flag("SERVICE_ACCESS_POLICY_V2_ENABLED"),
     sweatpalsPaymentStepEnabled: flag("SWEATPALS_PAYMENT_STEP_ENABLED"),
     sweatpalsUpdateDetailsEnabled: flag("SWEATPALS_UPDATE_DETAILS_ENABLED"),
+    sweatpalsWebhooksEnabled: flag("SWEATPALS_WEBHOOKS_ENABLED"),
   } as const;
 }
 
@@ -45,4 +46,10 @@ export function canApplyExpandedStripeWebhooks(): boolean {
   const f = getFormFeatureFlags();
   if (f.makeShadowMode) return false;
   return f.newStripeWebhooksEnabled;
+}
+
+export function canApplySweatpalsWebhooks(): boolean {
+  const f = getFormFeatureFlags();
+  if (f.makeShadowMode) return false;
+  return f.sweatpalsWebhooksEnabled;
 }

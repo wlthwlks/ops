@@ -240,7 +240,14 @@ export function deriveSweatpalsState(
       activeItem: best,
     };
   }
-  const paused = items.some((i) => i.paused || i.pauseFuturePayments);
+  const now = new Date();
+  // A pause only counts while its access window is still open — a paused
+  // membership whose window already ended is simply inactive (expired).
+  const windowEnded = (i: SweatpalsMembershipItem): boolean =>
+    Boolean(i.actualTo && new Date(i.actualTo).getTime() <= now.getTime());
+  const paused = items.some(
+    (i) => (i.paused || i.pauseFuturePayments) && !windowEnded(i)
+  );
   const cancelled = items.some((i) => i.cancellationEffectiveAt);
   const latest = items
     .filter((i) => i.actualTo)
@@ -432,7 +439,7 @@ export async function reconcileSweatpalsMember(
       count: 0,
       shadowed: false,
       reason:
-        "SweatPals API is not configured (SWEATPALS_API_KEY / SWEATPALS_COMMUNITY_ID)",
+        "SweatPals API is not configured (SWEATPALS_API_KEY)",
       mirrorStatus: "not_configured",
       mirrorRecordId: null,
       changedCount: 0,

@@ -92,6 +92,13 @@
       "when": 1789201867198,
       "tag": "0012_add_sweatpals_memberships",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789328581266,
+      "tag": "0013_add_sweatpals_feed_cursors",
+      "breakpoints": true
     }
   ]
 }

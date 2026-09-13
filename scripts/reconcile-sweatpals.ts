@@ -31,7 +31,7 @@ import {
 } from "../src/lib/forms/sweatpals/reconcile";
 
 dotenv.config({ path: ".env" });
-dotenv.config({ path: ".env.local" });
+dotenv.config({ path: ".env.local", override: true });
 
 const REPORTS_DIR = path.join(process.cwd(), "reports");
 const CHECKPOINT_FILE = path.join(REPORTS_DIR, "sweatpals-reconcile-progress.json");
@@ -98,10 +98,9 @@ async function main(): Promise<void> {
   const limit = parseInt(args.limit || "", 10) || 0;
 
   const apiKey = (process.env.SWEATPALS_API_KEY || "").trim();
-  const communityId = (process.env.SWEATPALS_COMMUNITY_ID || "").trim();
-  if (!apiKey || !communityId) {
+  if (!apiKey) {
     console.error(
-      "Missing SWEATPALS_API_KEY / SWEATPALS_COMMUNITY_ID. Configure env before reconciling."
+      "Missing SWEATPALS_API_KEY. Configure env before reconciling."
     );
     process.exit(1);
   }

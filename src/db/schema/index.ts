@@ -26,3 +26,4 @@ export * from "./introduction-pair-scores";
 export * from "./introduction-deliveries";
 export * from "./introduction-delivery-events";
 export * from "./sweatpals-memberships";
+export * from "./sweatpals-feed-cursors";

@@ -5,7 +5,7 @@ import { and, eq } from "drizzle-orm";
 import { sanitizePayload, type IntegrationErrorCode } from "@/lib/forms/errors";
 
 export async function recordWebhookEvent(input: {
-  provider: "stripe" | "memberstack";
+  provider: "stripe" | "memberstack" | "sweatpals";
   providerEventId: string;
   eventType: string;
   livemode?: boolean;

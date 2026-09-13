@@ -6,6 +6,7 @@ import { db } from "@/db";
 import { webhookEvents } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { handleMemberstackEvent } from "@/lib/forms/webhooks/memberstack-handlers";
+import { handleSweatpalsEvent } from "@/lib/forms/sweatpals/webhook-handler";
 import { updateWebhookEventStatus, recordIntegrationError } from "@/lib/forms/webhooks/store";
 import { FormsError } from "@/lib/forms/errors";
 
@@ -80,6 +81,25 @@ export async function reprocessWebhookEvent(id: string): Promise<{
             : result.status.startsWith("ignored")
               ? "IGNORED"
               : "SUCCEEDED";
+    await updateWebhookEventStatus(id, status, {
+      processedAt: status === "SUCCEEDED" ? new Date() : null,
+    });
+    return { id, status, reason: result.reason };
+  }
+
+  if (row.provider === "sweatpals") {
+    const result = await handleSweatpalsEvent({
+      eventType: row.eventType,
+      payload,
+    });
+    const status =
+      result.status === "succeeded"
+        ? "SUCCEEDED"
+        : result.status === "failed"
+          ? "FAILED"
+          : result.status.startsWith("ignored")
+            ? "IGNORED"
+            : "SUCCEEDED";
     await updateWebhookEventStatus(id, status, {
       processedAt: status === "SUCCEEDED" ? new Date() : null,
     });

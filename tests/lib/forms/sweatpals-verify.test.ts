@@ -67,6 +67,7 @@ const pausedItem = {
   id: "8d9e0f1a-2b3c-4d5e-8f60-7a8b9c0d1e2f",
   active: false,
   pauseFuturePayments: true,
+  actualTo: "2099-08-01T00:00:00.000Z",
 };
 
 describe("verifySweatpalsMembershipForMember", () => {
@@ -164,6 +165,30 @@ describe("verifySweatpalsMembershipForMember", () => {
     const [, records] = updateRecords.mock.calls[0];
     const fields = records[0].fields as Record<string, unknown>;
     expect(fields["Membership"]).toBe("Active");
+    expect(fields["Service access until"]).toBe("2099-08-01");
+  });
+
+  it("treats a pause with an ended window as inactive (expired)", async () => {
+    getMemberships.mockResolvedValue({
+      list: [
+        {
+          ...pausedItem,
+          actualTo: "2026-08-01T00:00:00.000Z",
+        },
+      ],
+      limit: 25,
+      offset: 0,
+      total: 1,
+    });
+    const res = await verifySweatpalsMembershipForMember({
+      memberstackId: "m1",
+      memberEmail: "a@b.com",
+    });
+    expect(res.status).toBe("inactive");
+    expect(res.membershipConfirmed).toBe(false);
+    const [, records] = updateRecords.mock.calls[0];
+    const fields = records[0].fields as Record<string, unknown>;
+    expect(fields["Membership"]).toBe("Expired");
     expect(fields["Service access until"]).toBe("2026-08-01");
   });
 

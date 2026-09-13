@@ -35,6 +35,10 @@
     {
       "path": "/api/cron/reconcile-sweatpals",
       "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/cron/sweatpals-feed-sync",
+      "schedule": "15 * * * *"
     }
   ]
 }
