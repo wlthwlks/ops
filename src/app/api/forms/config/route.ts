@@ -39,6 +39,7 @@ export async function GET(request: Request) {
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean),
+        widgetStyles: parseWidgetStyles(process.env.SWEATPALS_WIDGET_STYLES_JSON),
         updateDetails: {
           enabled: flags.sweatpalsUpdateDetailsEnabled,
           link: process.env.SWEATPALS_UPDATE_DETAILS_LINK || "",
@@ -48,4 +49,23 @@ export async function GET(request: Request) {
     }),
     request
   );
+}
+
+/** Parse SWEATPALS_WIDGET_STYLES_JSON into a string map (bad JSON → {}). */
+function parseWidgetStyles(raw: string | undefined): Record<string, string> {
+  if (!raw || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof v === "string" && v.trim()) out[k] = v.trim();
+        else if (typeof v === "boolean" || typeof v === "number") out[k] = String(v);
+      }
+      return out;
+    }
+  } catch {
+    /* fall through */
+  }
+  return {};
 }

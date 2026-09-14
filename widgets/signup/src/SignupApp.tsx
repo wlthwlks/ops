@@ -253,6 +253,7 @@ export function SignupApp(props: { apiBase: string }) {
       membershipTiersJson: string;
       scriptUrl: string;
       purchaseEventNames: string[];
+      widgetStyles?: Record<string, string>;
     };
   } | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -724,6 +725,7 @@ export function SignupApp(props: { apiBase: string }) {
               membershipTiersJson: string;
               scriptUrl: string;
               purchaseEventNames: string[];
+              widgetStyles?: Record<string, string>;
             };
           }
         );
@@ -1718,6 +1720,7 @@ export function SignupApp(props: { apiBase: string }) {
                 scriptUrl={config.sweatpals.scriptUrl}
                 communityUsername={config.sweatpals.communityUsername}
                 membershipTiersJson={config.sweatpals.membershipTiersJson}
+                styles={config.sweatpals.widgetStyles}
                 onEvent={handleSweatpalsWidgetEvent}
               />
             )}

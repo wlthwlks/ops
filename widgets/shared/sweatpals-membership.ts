@@ -31,6 +31,8 @@ export type SweatpalsMembershipWidgetOptions = {
   communityUsername: string;
   /** JSON array string of membership tier UUIDs to show (membershipTiersJson). */
   membershipTiersJson: string;
+  /** Extra list-iframe query params (colors, font, title…) appended as-is. */
+  styles?: Record<string, string>;
   /** Called for every analytics event forwarded by the widget iframes. */
   onEvent?: (event: SweatpalsWidgetEvent) => void;
 };
@@ -112,6 +114,9 @@ export function mountSweatpalsMembershipWidget(
   url.searchParams.set("communityUsername", opts.communityUsername);
   url.searchParams.set("membershipTiersJson", opts.membershipTiersJson);
   url.searchParams.set("enableAutoEmbed", "true");
+  for (const [key, value] of Object.entries(opts.styles ?? {})) {
+    if (value) url.searchParams.set(key, value);
+  }
   script.src = url.toString();
   container.appendChild(script);
 

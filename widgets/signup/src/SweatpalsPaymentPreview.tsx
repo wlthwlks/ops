@@ -8,6 +8,7 @@ type SweatpalsPaymentPreviewProps = {
   scriptUrl: string;
   communityUsername: string;
   membershipTiersJson: string;
+  styles?: Record<string, string>;
   onEvent?: (event: SweatpalsWidgetEvent) => void;
 };
 
@@ -31,10 +32,11 @@ export function SweatpalsPaymentPreview(props: SweatpalsPaymentPreviewProps) {
       scriptUrl: props.scriptUrl,
       communityUsername: props.communityUsername,
       membershipTiersJson: props.membershipTiersJson,
+      styles: props.styles,
       onEvent: (event) => onEventRef.current?.(event),
     });
     return cleanup;
-  }, [props.scriptUrl, props.communityUsername, props.membershipTiersJson]);
+  }, [props.scriptUrl, props.communityUsername, props.membershipTiersJson, props.styles]);
 
   return (
     <section className="wlth-sweatpals-preview">
