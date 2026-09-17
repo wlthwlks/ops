@@ -228,7 +228,9 @@ export async function PATCH(request: Request) {
 
     if (d.primaryIndustry != null) {
       const industry = resolveIndustryForWrite(d.primaryIndustry, d.otherIndustry);
-      if (industry != null) patch[MEMBER_FIELDS.industry] = industry;
+      if (industry.industry != null) patch[MEMBER_FIELDS.industry] = industry.industry;
+      if (industry.otherIndustry != null)
+        patch[MEMBER_FIELDS.otherIndustry] = industry.otherIndustry;
     }
     if (d.businessStage != null) patch[MEMBER_FIELDS.businessStage] = d.businessStage;
     if (d.annualRevenue != null) patch[MEMBER_FIELDS.revenue] = d.annualRevenue;

@@ -212,7 +212,10 @@ async function stepDataToAirtablePatch(
         data.otherIndustry as string | undefined
       );
       const patch: Record<string, unknown> = {
-        ...(industry != null ? { [MEMBER_FIELDS.industry]: industry } : {}),
+        ...(industry.industry != null ? { [MEMBER_FIELDS.industry]: industry.industry } : {}),
+        ...(industry.otherIndustry != null
+          ? { [MEMBER_FIELDS.otherIndustry]: industry.otherIndustry }
+          : {}),
         [MEMBER_FIELDS.businessStage]: data.businessStage,
         [MEMBER_FIELDS.revenue]: data.annualRevenue,
         [MEMBER_FIELDS.businessDescription]: data.businessDescription,

@@ -13,15 +13,27 @@ describe("industry coaching + other", () => {
     );
   });
 
-  it("writes OTHER custom text into Industry", () => {
-    expect(resolveIndustryForWrite("OTHER", "  Sustainable fashion  ")).toBe(
-      "Sustainable fashion"
-    );
-    expect(resolveIndustryForWrite("COACHING", "")).toBe("COACHING");
-    expect(resolveIndustryForWrite("TECH_SAAS", "ignored")).toBe("TECH_SAAS");
+  it("writes OTHER custom text into Other industry column", () => {
+    expect(resolveIndustryForWrite("OTHER", "  Sustainable fashion  ")).toEqual({
+      industry: "OTHER",
+      otherIndustry: "Sustainable fashion",
+    });
+    expect(resolveIndustryForWrite("COACHING", "")).toEqual({
+      industry: "COACHING",
+      otherIndustry: "",
+    });
+    expect(resolveIndustryForWrite("TECH_SAAS", "ignored")).toEqual({
+      industry: "TECH_SAAS",
+      otherIndustry: "",
+    });
+    expect(resolveIndustryForWrite("OTHER", "   ")).toEqual({});
   });
 
   it("round-trips custom industry into OTHER UI", () => {
+    expect(splitIndustryForUi("OTHER", "Boutique hospitality")).toEqual({
+      primaryIndustry: "OTHER",
+      otherIndustry: "Boutique hospitality",
+    });
     expect(splitIndustryForUi("Boutique hospitality")).toEqual({
       primaryIndustry: "OTHER",
       otherIndustry: "Boutique hospitality",

@@ -54,6 +54,7 @@ export const MEMBER_FIELDS = {
   revenue: "Revenue",
   /** @deprecated use industry — kept for gradual migration of call sites */
   primaryIndustry: "Industry",
+  otherIndustry: "Other industry",
   /** @deprecated use revenue */
   annualRevenue: "Revenue",
   onboardingStatus: "Onboarding status",

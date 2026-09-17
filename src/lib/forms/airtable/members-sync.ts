@@ -1151,7 +1151,10 @@ export function recordToProfileDto(record: AirtableRecord) {
   const rawPrefix = fieldStr(f, MEMBER_FIELDS.phonePrefix);
   const phoneParts = splitStoredPhone(rawPhone, rawPrefix);
 
-  const industrySplit = splitIndustryForUi(fieldStr(f, MEMBER_FIELDS.industry));
+  const industrySplit = splitIndustryForUi(
+    fieldStr(f, MEMBER_FIELDS.industry),
+    fieldStr(f, MEMBER_FIELDS.otherIndustry)
+  );
 
   let helpWanted = linkIdsFromField(f[MEMBER_FIELDS.helpWanted]);
   let helpWantedContext = fieldStr(f, MEMBER_FIELDS.helpWantedContext);

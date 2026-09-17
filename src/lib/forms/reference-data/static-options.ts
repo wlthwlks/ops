@@ -116,29 +116,43 @@ export function availabilityCodesToLegacyString(codes: string[]): string {
     .join("; ");
 }
 
-/** Map stored Industry value → UI { primaryIndustry, otherIndustry }. */
-export function splitIndustryForUi(stored: string): {
+/**
+ * Map stored Industry + "Other industry" → UI { primaryIndustry, otherIndustry }.
+ * Supports the canonical two-column storage and legacy values where custom
+ * text was stored directly inside the Industry column.
+ */
+export function splitIndustryForUi(
+  stored: string,
+  otherStored?: string
+): {
   primaryIndustry: string;
   otherIndustry: string;
 } {
   const v = (stored || "").trim();
-  if (!v) return { primaryIndustry: "", otherIndustry: "" };
+  const other = (otherStored || "").trim();
+  if (!v) return { primaryIndustry: "", otherIndustry: other };
   if (INDUSTRY_CODES.has(v as (typeof INDUSTRIES)[number]["code"]) && v !== "OTHER") {
     return { primaryIndustry: v, otherIndustry: "" };
   }
-  if (v === "OTHER") return { primaryIndustry: "OTHER", otherIndustry: "" };
-  return { primaryIndustry: "OTHER", otherIndustry: v };
+  if (v === "OTHER") return { primaryIndustry: "OTHER", otherIndustry: other };
+  // Legacy: custom text stored directly in Industry
+  return { primaryIndustry: "OTHER", otherIndustry: other || v };
 }
 
-/** Resolve Industry Airtable write value from form fields. */
+/**
+ * Resolve Industry write values from form fields.
+ * Returns the Industry code (or OTHER) and the separate "Other industry" text.
+ */
 export function resolveIndustryForWrite(
   primaryIndustry: string | undefined,
   otherIndustry: string | undefined
-): string | undefined {
-  if (primaryIndustry == null || primaryIndustry === "") return undefined;
-  if (primaryIndustry === "OTHER") {
-    const custom = (otherIndustry || "").trim();
-    return custom || undefined;
+): { industry: string | undefined; otherIndustry: string | undefined } {
+  const primary = (primaryIndustry ?? "").trim();
+  if (!primary) return { industry: undefined, otherIndustry: undefined };
+  if (primary === "OTHER") {
+    const custom = (otherIndustry ?? "").trim();
+    if (custom) return { industry: "OTHER", otherIndustry: custom };
+    return { industry: undefined, otherIndustry: undefined };
   }
-  return primaryIndustry;
+  return { industry: primary, otherIndustry: "" };
 }
