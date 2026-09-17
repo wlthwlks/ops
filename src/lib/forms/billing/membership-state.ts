@@ -100,9 +100,7 @@ export function classifyMembershipUiState(
   if (
     subStatus === "past_due" ||
     subStatus === "unpaid" ||
-    subStatus === "incomplete" ||
-    pay === "failed" ||
-    pay === "unpaid"
+    subStatus === "incomplete"
   ) {
     return "payment_problem";
   }
@@ -140,10 +138,6 @@ export function classifyMembershipUiState(
     return "active";
   }
 
-  if (mem === "pending payment" || pay === "pending") {
-    return "incomplete_onboarding";
-  }
-
   // Fully canceled in Stripe/Airtable but still inside paid-through window
   if (
     subStatus === "canceled" ||
@@ -151,6 +145,18 @@ export function classifyMembershipUiState(
     mem === "canceled"
   ) {
     return accessOk ? "cancellation_scheduled" : "expired";
+  }
+
+  // Legacy Airtable-only signals — only reached when live Stripe/Airtable has
+  // not already proven the subscription is ended. A canceled subscription with
+  // lapsed paid-through takes precedence over a stale Airtable "Payment: Failed"
+  // (otherwise such members keep seeing "Try again" instead of "Subscribe again").
+  if (pay === "failed" || pay === "unpaid") {
+    return "payment_problem";
+  }
+
+  if (mem === "pending payment" || pay === "pending") {
+    return "incomplete_onboarding";
   }
 
   if (!accessOk && (mem !== "active" || pay !== "paid")) {

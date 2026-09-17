@@ -134,6 +134,32 @@ describe("classifyMembershipUiState", () => {
     expect(result).toBe("payment_problem");
   });
 
+  it("failed payment + canceled subscription + lapsed access → expired (not payment_problem)", () => {
+    // scottsdalelender scenario: stale Airtable "Payment: Failed" must not
+    // mask a Stripe-proven canceled subscription whose paid-through ended.
+    const result = classifyMembershipUiState({
+      stripeSubscriptionStatus: "canceled",
+      membership: "Cancelled",
+      payment: "Failed",
+      serviceAccessUntil: "2026-06-15",
+      cancelAtPeriodEnd: false,
+      now,
+    });
+    expect(result).toBe("expired");
+  });
+
+  it("failed payment + canceled subscription + remaining access → cancellation_scheduled", () => {
+    const result = classifyMembershipUiState({
+      stripeSubscriptionStatus: "canceled",
+      membership: "Cancelled",
+      payment: "Failed",
+      serviceAccessUntil: "2026-11-01",
+      cancelAtPeriodEnd: false,
+      now,
+    });
+    expect(result).toBe("cancellation_scheduled");
+  });
+
   it("pending payment → incomplete_onboarding", () => {
     const result = classifyMembershipUiState({
       membership: "Pending Payment",
