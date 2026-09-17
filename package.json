@@ -92,6 +92,7 @@
     "drizzle-kit": "^0.31.10",
     "eslint": "^9",
     "eslint-config-next": "16.2.3",
+    "exceljs": "^4.4.0",
     "pg": "^8.23.0",
     "postcss-prefixwrap": "^1.58.0",
     "tailwindcss": "^4",
