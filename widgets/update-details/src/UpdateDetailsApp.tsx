@@ -750,11 +750,18 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         return { showBanner: true, kind: "expired" as const, endsOn };
       }
       // Only treat future-end Active as scheduled cancel when we also have a cancel signal
-      // (cancel flag OR cancellationEffectiveAt OR uiState). Avoid false positives on normal renewals.
+      // (cancel flag OR a future cancellationEffectiveAt OR uiState). Avoid false positives on
+      // normal renewals and on stale past cancellation dates left over from an old cancellation.
+      const cancellationEffectiveFuture = (() => {
+        const raw = String(billing.cancellationEffectiveAt || "").trim();
+        if (!raw) return false;
+        const d = new Date(raw.length <= 10 ? `${raw}T23:59:59.999Z` : raw);
+        return !Number.isNaN(d.getTime()) && d.getTime() >= Date.now();
+      })();
       if (
         billing.cancelAtPeriodEnd ||
         ui === "cancellation_scheduled" ||
-        Boolean(String(billing.cancellationEffectiveAt || "").trim())
+        cancellationEffectiveFuture
       ) {
         return { showBanner: true, kind: "cancellation_scheduled" as const, endsOn };
       }

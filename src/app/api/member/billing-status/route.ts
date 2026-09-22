@@ -353,7 +353,7 @@ export async function GET(request: Request) {
           live.currentPeriodEnd ||
           "",
         cancelAtPeriodEnd,
-        cancellationEffectiveAt: cancelEffective || cancelDateLegacy || profile.cancellationEffectiveAt,
+        cancellationEffectiveAt: cancelEffective,
         stripeCustomerId: stripeCustomerId || null,
         hasPaymentMethod,
         stripeSubscriptionStatus,
