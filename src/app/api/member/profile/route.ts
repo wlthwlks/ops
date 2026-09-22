@@ -372,6 +372,10 @@ export async function PATCH(request: Request) {
         status: directoryStatus,
       });
 
+      // Reflect the just-written status in the returned profile DTO so the
+      // response is internally consistent (the DTO was built before this write).
+      profileDto.memberDirectoryStatus = directoryStatus;
+
       console.error(
         JSON.stringify({
           event: "member_directory_status",

@@ -8,6 +8,7 @@ import {
 import {
   recordToProfileDtoResolved,
   updateMemberProfile,
+  applyMemberDirectoryStatus,
 } from "@/lib/forms/airtable/members-sync";
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 import { FormsError } from "@/lib/forms/errors";
@@ -195,18 +196,36 @@ export async function DELETE(request: Request) {
       patch: { [MEMBER_FIELDS.profilePhoto]: [] },
     });
 
+    // Removing a required photo demotes an Active directory member to
+    // Incomplete so the stored status never claims a photo is present.
+    const storedStatus = String(
+      result.record?.fields?.[MEMBER_FIELDS.memberDirectoryStatus] ?? ""
+    ).trim();
+    let directoryStatus: string | undefined;
+    if (/^active$/i.test(storedStatus)) {
+      directoryStatus = "Incomplete";
+      await applyMemberDirectoryStatus({
+        memberstackId: member.id,
+        status: directoryStatus,
+      });
+    }
+
     console.error(
       JSON.stringify({
         event: "profile_photo_removed",
         memberstackId: member.id,
         airtableRecordId: result.record?.id ?? null,
+        directoryStatus: directoryStatus ?? storedStatus,
       })
     );
+
+    const profile = await recordToProfileDtoResolved(result.record);
+    if (directoryStatus) profile.memberDirectoryStatus = directoryStatus;
 
     return withCors(
       NextResponse.json({
         success: true,
-        profile: await recordToProfileDtoResolved(result.record),
+        profile,
       }),
       request
     );
