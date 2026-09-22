@@ -122,6 +122,12 @@ export const MEMBER_FIELDS = {
   emailSuppressionChurned: "Email suppression churned",
   /** Checkbox — block active-member email sends in Klaviyo. */
   emailSuppressionActive: "Email suppression active",
+  /** Attachment — profile photo shown in the member directory. */
+  profilePhoto: "Profile photo",
+  /** Single select — "Not in directory" | "Incomplete" | "Active". */
+  memberDirectoryStatus: "Member directory status",
+  /** Checkbox — first directory invitation has been shown/dismissed. */
+  memberDirectoryInviteSeen: "Member directory invite seen",
 } as const;
 
 export const MEMBER_LIST_FIELDS: string[] = [

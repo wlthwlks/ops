@@ -8,9 +8,16 @@ import {
   findMemberByMemberstackId,
   recordToProfileDtoResolved,
   updateMemberProfile,
+  applyMemberDirectoryStatus,
 } from "@/lib/forms/airtable/members-sync";
 import { updateProfileSchema } from "@/lib/forms/schemas/onboarding";
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
+import {
+  directoryInputFromProfileDto,
+  directoryStatusForOptIn,
+  evaluateDirectoryCompleteness,
+  directoryMissingLabels,
+} from "@/lib/forms/directory";
 import { FormsError } from "@/lib/forms/errors";
 import { getFormFeatureFlags } from "@/lib/forms/feature-flags";
 import { enforcePublicWriteRateLimit } from "@/lib/forms/http";
@@ -61,10 +68,18 @@ export async function GET(request: Request) {
         request
       );
     }
+    const profile = await recordToProfileDtoResolved(rows[0]);
+    const completeness = evaluateDirectoryCompleteness(
+      directoryInputFromProfileDto(profile)
+    );
     return withCors(
       NextResponse.json({
         success: true,
-        profile: await recordToProfileDtoResolved(rows[0]),
+        profile,
+        directory: {
+          status: profile.memberDirectoryStatus || "Not in directory",
+          missingFields: directoryMissingLabels(completeness.missing),
+        },
       }),
       request
     );
@@ -305,6 +320,19 @@ export async function PATCH(request: Request) {
     if (d.connectionType != null) patch[MEMBER_FIELDS.connectionType] = d.connectionType;
     if (d.topicsToDiscuss != null) patch[MEMBER_FIELDS.topicsToDiscuss] = d.topicsToDiscuss;
 
+    // ------- Monthly introductions availability -------
+
+    if (d.introAvailable != null) {
+      // Checked = available (Active); unchecked = not available this month
+      // (Excluded). Always clear any stale pause-until date.
+      patch[MEMBER_FIELDS.recurringIntroStatus] = d.introAvailable ? "Active" : "Excluded";
+      patch[MEMBER_FIELDS.recurringPauseUntil] = "";
+    }
+
+    if (d.memberDirectoryInviteSeen != null) {
+      patch[MEMBER_FIELDS.memberDirectoryInviteSeen] = d.memberDirectoryInviteSeen;
+    }
+
     // ------- Write -------
 
     const result = await updateMemberProfile({
@@ -323,11 +351,47 @@ export async function PATCH(request: Request) {
       fields: msFields,
     });
 
+    // ------- Member directory status -------
+
+    const profileDto = await recordToProfileDtoResolved(result.record);
+    let directoryStatus = profileDto.memberDirectoryStatus || "Not in directory";
+    let directoryMissingFields: string[] = [];
+
+    if (d.memberDirectoryRequested != null) {
+      const completeness = evaluateDirectoryCompleteness(
+        directoryInputFromProfileDto(profileDto)
+      );
+      directoryStatus = directoryStatusForOptIn(
+        d.memberDirectoryRequested,
+        completeness.complete
+      );
+      directoryMissingFields = directoryMissingLabels(completeness.missing);
+
+      const dirWrite = await applyMemberDirectoryStatus({
+        memberstackId: member.id,
+        status: directoryStatus,
+      });
+
+      console.error(
+        JSON.stringify({
+          event: "member_directory_status",
+          memberstackId: member.id,
+          airtableRecordId: profileDto.airtableRecordId,
+          requested: d.memberDirectoryRequested,
+          status: directoryStatus,
+          missing: completeness.missing,
+          shadowed: dirWrite.shadowed,
+        })
+      );
+    }
+
     return withCors(
       NextResponse.json({
         success: true,
         shadowed: result.shadowed,
-        profile: await recordToProfileDtoResolved(result.record),
+        profile: profileDto,
+        directoryStatus,
+        directoryMissingFields,
         memberstackCustomFieldsSynced: msSync.ok,
         ...(msSync.ok
           ? {}

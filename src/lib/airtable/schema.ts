@@ -103,6 +103,9 @@ export const MEMBERS_CANONICAL_FIELDS = [
   "Professional Headline",
   "Profile Bio",
   "Other industry",
+  "Profile photo",
+  "Member directory status",
+  "Member directory invite seen",
 ] as const;
 
 export type MembersCanonicalField = (typeof MEMBERS_CANONICAL_FIELDS)[number];
@@ -191,6 +194,9 @@ export const MEMBERS_WRITABLE_FIELDS = [
   "Professional Headline",
   "Profile Bio",
   "Other industry",
+  "Profile photo",
+  "Member directory status",
+  "Member directory invite seen",
 ] as const;
 
 const MEMBERS_WRITABLE_SET = new Set<string>(MEMBERS_WRITABLE_FIELDS);

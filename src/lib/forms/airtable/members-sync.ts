@@ -55,6 +55,26 @@ function fieldStr(fields: Record<string, unknown>, key: string): string {
   return String(v).trim();
 }
 
+/** Extract public URLs from an Airtable attachment field value. */
+function photoUrlsFromField(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const urls: string[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const url = (item as { url?: unknown }).url;
+    if (typeof url === "string" && url.trim()) urls.push(url.trim());
+  }
+  return urls;
+}
+
+/** Airtable checkboxes may be boolean, "true"/"1", or absent. */
+function isTruthyField(raw: unknown): boolean {
+  if (raw == null) return false;
+  if (typeof raw === "boolean") return raw;
+  const s = String(raw).trim().toLowerCase();
+  return s === "true" || s === "1" || s === "yes" || s === "checked";
+}
+
 function escapeFormula(value: string): string {
   return value.replace(/'/g, "\\'");
 }
@@ -886,6 +906,49 @@ export async function updateMemberProfile(
   return { record: updated, shadowed: false };
 }
 
+/**
+ * Set the member's "Member directory status" after a profile save that
+ * included a directory opt-in/out. Writes only the status field.
+ */
+export async function applyMemberDirectoryStatus(
+  input: {
+    memberstackId: string;
+    status: string;
+  },
+  airtable: AirtableClient = getFormsAirtableClient()
+): Promise<{ status: string; shadowed: boolean }> {
+  const existing = requireUnique(
+    await findMemberByMemberstackId(input.memberstackId, airtable),
+    "Memberstack ID"
+  );
+  if (!existing) return { status: input.status, shadowed: false };
+  if (!canWriteAirtableFromForms()) {
+    return { status: input.status, shadowed: true };
+  }
+  try {
+    await writeMembers(
+      airtable,
+      "update",
+      { [MEMBER_FIELDS.memberDirectoryStatus]: input.status },
+      existing.id
+    );
+    return { status: input.status, shadowed: false };
+  } catch (e) {
+    const schema = toAirtableSchemaError(MEMBERS_TABLE, e);
+    if (schema) {
+      throw new FormsError("AIRTABLE_VALIDATION_FAILED", schema.message, {
+        status: 422,
+        details: { field: schema.field },
+      });
+    }
+    throw new FormsError(
+      "AIRTABLE_WRITE_FAILED",
+      e instanceof Error ? e.message : "Directory status write failed",
+      { status: 502, retryable: true }
+    );
+  }
+}
+
 function isMakeShadowMode(): boolean {
   const s = (process.env.MAKE_SHADOW_MODE || "").trim().toLowerCase();
   return s === "true" || s === "1" || s === "yes" || s === "on";
@@ -1179,6 +1242,8 @@ export function recordToProfileDto(record: AirtableRecord) {
     }
   }
 
+  const photoUrls = photoUrlsFromField(f[MEMBER_FIELDS.profilePhoto]);
+
   return {
     airtableRecordId: record.id,
     name: fieldStr(f, MEMBER_FIELDS.name),
@@ -1223,6 +1288,11 @@ export function recordToProfileDto(record: AirtableRecord) {
     connectionType: fieldStr(f, MEMBER_FIELDS.connectionType),
     topicsToDiscuss: fieldStr(f, MEMBER_FIELDS.topicsToDiscuss),
     availability,
+    profilePhoto: photoUrls,
+    memberDirectoryStatus: fieldStr(f, MEMBER_FIELDS.memberDirectoryStatus),
+    memberDirectoryInviteSeen: isTruthyField(f[MEMBER_FIELDS.memberDirectoryInviteSeen]),
+    recurringIntroStatus: fieldStr(f, MEMBER_FIELDS.recurringIntroStatus),
+    recurringPauseUntil: fieldStr(f, MEMBER_FIELDS.recurringPauseUntil),
   };
 }
 

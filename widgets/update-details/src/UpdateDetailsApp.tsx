@@ -56,6 +56,11 @@ import {
   ADDABLE_SOCIAL_PLATFORMS,
   isSocialPlatform,
 } from "../../shared/profile-urls";
+import {
+  computeMissingDirectoryFields,
+  missingDirectoryLabels,
+  scrollToDirectoryField,
+} from "../../shared/directory";
 
 const passwordSchema = z
   .object({
@@ -232,6 +237,17 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const [socialError, setSocialError] = useState("");
   const [webError, setWebError] = useState("");
   const [addingSocialPlatform, setAddingSocialPlatform] = useState(false);
+  const [directoryEnabled, setDirectoryEnabled] = useState(false);
+  const [directoryRequested, setDirectoryRequested] = useState(false);
+  const [directoryStatus, setDirectoryStatus] = useState("");
+  const [directoryMissing, setDirectoryMissing] = useState<string[]>([]);
+  const [showDirectoryInvite, setShowDirectoryInvite] = useState(false);
+  const [inviteSaving, setInviteSaving] = useState(false);
+  const [introAvailable, setIntroAvailable] = useState(true);
+  const [introTouched, setIntroTouched] = useState(false);
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState("");
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [photoError, setPhotoError] = useState("");
   const mountedRef = useRef(true);
   /** Server-derived mid-signup state (blank/COMPLETE = established). Never forced. */
   const midSignupRef = useRef(false);
@@ -525,6 +541,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         setMembershipPriceId(
           String((cfg as { membershipPriceId?: string }).membershipPriceId || "")
         );
+        const cfgFlags = (cfg as { flags?: { directoryEnabled?: boolean } }).flags || {};
+        setDirectoryEnabled(Boolean(cfgFlags.directoryEnabled));
         const p = (profileRes.profile || {}) as Record<string, unknown>;
         const status = (statusRes || {}) as {
           exists?: boolean;
@@ -595,6 +613,45 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           setSocialLinksErrors(
             (p.socialLinks as SocialLink[]).map(() => "")
           );
+        }
+
+        // Member Directory + photo + intro availability state from profile.
+        const photoUrls = Array.isArray(p.profilePhoto)
+          ? (p.profilePhoto as string[])
+          : [];
+        setProfilePhotoUrl(photoUrls[0] || "");
+        const storedDirStatus = String(p.memberDirectoryStatus || "").trim();
+        setDirectoryStatus(storedDirStatus);
+        const alreadyInDirectory = /^active$/i.test(storedDirStatus);
+        const optedIn = alreadyInDirectory || /^incomplete$/i.test(storedDirStatus);
+        setDirectoryRequested(optedIn);
+        const missingNow = computeMissingDirectoryFields({
+          profilePhotoUrls: photoUrls,
+          firstName: String(p.firstName || ""),
+          lastName: String(p.lastName || ""),
+          professionalHeadline: String(p.professionalHeadline || ""),
+          profileBio: String(p.profileBio || ""),
+          businessName: String(p.businessName || ""),
+          cityCode: String(p.cityCode || ""),
+          city: String(p.city || ""),
+          primaryIndustry: String(p.primaryIndustry || ""),
+          businessWebsite: String(p.businessWebsite || ""),
+          socialLinks: Array.isArray(p.socialLinks) ? (p.socialLinks as SocialLink[]) : [],
+        });
+        setDirectoryMissing(missingDirectoryLabels(missingNow));
+
+        const introStatus = String(p.recurringIntroStatus || "").trim().toLowerCase();
+        setIntroAvailable(introStatus !== "excluded");
+
+        // First directory invitation: show when feature on, not yet seen, not
+        // already opted in, and only for established members (not mid-signup).
+        if (
+          cfgFlags.directoryEnabled &&
+          p.memberDirectoryInviteSeen !== true &&
+          !optedIn &&
+          !midSignup
+        ) {
+          setShowDirectoryInvite(true);
         }
 
         refreshLocation.reset({
@@ -1183,6 +1240,119 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     });
   };
 
+  const track = (eventType: string, extra?: Record<string, unknown>) => {
+    void api(props.apiBase, "/api/onboarding/analytics", {
+      method: "POST",
+      token: token || undefined,
+      body: JSON.stringify({ eventType, ...(extra || {}) }),
+    }).catch(() => undefined);
+  };
+
+  const onPhotoUpload = async (file: File) => {
+    if (!token || photoUploading) return;
+    setPhotoUploading(true);
+    setPhotoError("");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`${props.apiBase}/api/member/profile-photo`, {
+        method: "POST",
+        headers: { "X-Memberstack-Token": token },
+        body: fd,
+      });
+      const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) {
+        throw new Error(
+          typeof json.message === "string" ? json.message : "Photo upload failed"
+        );
+      }
+      const url = typeof json.url === "string" ? json.url : "";
+      setProfilePhotoUrl(url);
+      track("PROFILE_PHOTO_UPLOADED");
+      setSaveStatus("dirty");
+      // Recompute directory missing after photo change.
+      setDirectoryMissing(
+        missingDirectoryLabels(
+          computeMissingDirectoryFields({
+            profilePhotoUrls: url ? [url] : [],
+            firstName: form.getValues("firstName") || "",
+            lastName: form.getValues("lastName") || "",
+            professionalHeadline: form.getValues("professionalHeadline") || "",
+            profileBio: form.getValues("profileBio") || "",
+            businessName: form.getValues("businessName") || "",
+            cityCode: form.getValues("cityCode") || "",
+            city: "",
+            primaryIndustry: form.getValues("primaryIndustry") || "",
+            businessWebsite: form.getValues("businessWebsite") || "",
+            socialLinks,
+          })
+        )
+      );
+    } catch (e) {
+      setPhotoError(e instanceof Error ? e.message : "Photo upload failed");
+    } finally {
+      setPhotoUploading(false);
+    }
+  };
+
+  const onPhotoRemove = async () => {
+    if (!token) return;
+    try {
+      await fetch(`${props.apiBase}/api/member/profile-photo`, {
+        method: "DELETE",
+        headers: { "X-Memberstack-Token": token },
+      });
+      setProfilePhotoUrl("");
+      setSaveStatus("dirty");
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const dismissDirectoryInvite = async (optIn: boolean) => {
+    if (!token || inviteSaving) return;
+    setInviteSaving(true);
+    try {
+      if (optIn) {
+        const missing = computeMissingDirectoryFields({
+          profilePhotoUrls: profilePhotoUrl ? [profilePhotoUrl] : [],
+          firstName: form.getValues("firstName") || "",
+          lastName: form.getValues("lastName") || "",
+          professionalHeadline: form.getValues("professionalHeadline") || "",
+          profileBio: form.getValues("profileBio") || "",
+          businessName: form.getValues("businessName") || "",
+          cityCode: form.getValues("cityCode") || "",
+          city: "",
+          primaryIndustry: form.getValues("primaryIndustry") || "",
+          businessWebsite: form.getValues("businessWebsite") || "",
+          socialLinks,
+        });
+        setDirectoryRequested(true);
+        setDirectoryMissing(missingDirectoryLabels(missing));
+        setDirectoryStatus(missing.length > 0 ? "Incomplete" : "Active");
+        track("DIRECTORY_OPT_IN");
+        await patchProfile({
+          memberDirectoryRequested: true,
+          memberDirectoryInviteSeen: true,
+        });
+        if (missing.length > 0) {
+          const first = missing[0];
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => scrollToDirectoryField(first));
+          });
+        }
+      } else {
+        await patchProfile({ memberDirectoryInviteSeen: true });
+      }
+      track("DIRECTORY_INVITE_SEEN");
+    } catch {
+      /* ignore */
+    } finally {
+      setShowDirectoryInvite(false);
+      setInviteSaving(false);
+    }
+  };
+
   /** Parse Zod fieldErrors or structured fields from server response into RHF + social errors. */
   const applyServerFieldErrors = (e: unknown) => {
     const err = e as WidgetApiError;
@@ -1669,6 +1839,24 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     setError(null);
     setOk(null);
     setWebError("");
+
+    const dirInput = {
+      profilePhotoUrls: profilePhotoUrl ? [profilePhotoUrl] : [],
+      firstName: values.firstName || "",
+      lastName: values.lastName || "",
+      professionalHeadline: values.professionalHeadline || "",
+      profileBio: values.profileBio || "",
+      businessName: values.businessName || "",
+      cityCode: values.cityCode || "",
+      city: "",
+      primaryIndustry: values.primaryIndustry || "",
+      businessWebsite: values.businessWebsite || "",
+      socialLinks,
+    };
+    const missingKeys = computeMissingDirectoryFields(dirInput);
+    const directoryIncomplete =
+      directoryEnabled && directoryRequested && missingKeys.length > 0;
+
     try {
       await api(props.apiBase, "/api/member/email", {
         method: "POST",
@@ -1708,6 +1896,12 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           socialLinks: socialLinks.length > 0
             ? socialLinks.map((l) => ({ platform: l.platform, url: l.url }))
             : [],
+          ...(directoryEnabled
+            ? {
+                memberDirectoryRequested: directoryRequested,
+                ...(introTouched ? { introAvailable } : {}),
+              }
+            : {}),
         }),
       });
       const p = (res.profile || {}) as Record<string, unknown>;
@@ -1756,8 +1950,39 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         setSocialLinks(socialLinks);
       }
       setPreviousCityUnavailable(Boolean(p.previousCityUnavailable));
-      setOk("Your profile is up to date and ready for stronger introductions.");
+
+      if (directoryEnabled) {
+        if (typeof res.directoryStatus === "string") {
+          setDirectoryStatus(res.directoryStatus);
+        }
+        if (Array.isArray(res.directoryMissingFields)) {
+          setDirectoryMissing(res.directoryMissingFields as string[]);
+        } else {
+          setDirectoryMissing(missingDirectoryLabels(missingKeys));
+        }
+      }
+
       setSaveStatus("saved");
+
+      if (directoryIncomplete) {
+        const first = missingKeys[0];
+        if (first) {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => scrollToDirectoryField(first));
+          });
+        }
+        setOk(
+          first === "photo"
+            ? "Profile photo is required to join the Member Directory."
+            : "Your profile isn't ready for the directory yet. Please complete the highlighted information."
+        );
+        track("DIRECTORY_INCOMPLETE", { missing: missingKeys });
+      } else {
+        setOk("Your profile is up to date and ready for stronger introductions.");
+        if (directoryEnabled && directoryRequested) {
+          track("DIRECTORY_ACTIVATED");
+        }
+      }
     } catch (e) {
       if (!applyServerFieldErrors(e)) {
         setError(e instanceof Error ? e.message : "Save failed");
@@ -2584,6 +2809,45 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               noValidate
             >
               <p className="wlth-section-title">Personal</p>
+              {directoryEnabled && (
+                <div className="wlth-field" id="upd-photo">
+                  <label htmlFor="upd-photo-input">Profile photo</label>
+                  {profilePhotoUrl ? (
+                    <div className="wlth-photo-preview">
+                      <img src={profilePhotoUrl} alt="Profile" />
+                      <button
+                        type="button"
+                        className="wlth-btn-secondary"
+                        onClick={() => void onPhotoRemove()}
+                      >
+                        Remove photo
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="wlth-muted">
+                      Optional. A profile photo is required if you want to appear in the WLTH
+                      WLKS Member Directory.
+                    </p>
+                  )}
+                  <input
+                    id="upd-photo-input"
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    disabled={photoUploading}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void onPhotoUpload(f);
+                      e.target.value = "";
+                    }}
+                  />
+                  {photoUploading && <p className="wlth-muted">Uploading…</p>}
+                  {photoError && (
+                    <div className="wlth-banner-error" role="alert">
+                      {photoError}
+                    </div>
+                  )}
+                </div>
+              )}
               <div className="wlth-grid-2">
                 <div className="wlth-field">
                   <label htmlFor="fn">First name</label>
@@ -2763,7 +3027,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 <FieldError message={form.formState.errors.topicsToDiscuss?.message} />
               </div>
 
-              <p className="wlth-section-title">Links</p>
+              <p className="wlth-section-title" id="wlth-links-section">Links</p>
               <p className="wlth-muted">Add your social profiles and links so members can connect.</p>
               {socialError && (
                 <div className="wlth-banner-error" role="alert" style={{ marginBottom: 12 }}>
@@ -2854,6 +3118,87 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                     Cancel
                   </button>
                 </div>
+              )}
+
+              {directoryEnabled && (
+                <>
+                  <p className="wlth-section-title">Member Directory</p>
+                  <label className="wlth-intention__check">
+                    <input
+                      type="checkbox"
+                      checked={directoryRequested}
+                      onChange={(e) => {
+                        const next = e.target.checked;
+                        setDirectoryRequested(next);
+                        const missing = computeMissingDirectoryFields({
+                          profilePhotoUrls: profilePhotoUrl ? [profilePhotoUrl] : [],
+                          firstName: form.getValues("firstName") || "",
+                          lastName: form.getValues("lastName") || "",
+                          professionalHeadline: form.getValues("professionalHeadline") || "",
+                          profileBio: form.getValues("profileBio") || "",
+                          businessName: form.getValues("businessName") || "",
+                          cityCode: form.getValues("cityCode") || "",
+                          city: "",
+                          primaryIndustry: form.getValues("primaryIndustry") || "",
+                          businessWebsite: form.getValues("businessWebsite") || "",
+                          socialLinks,
+                        });
+                        setDirectoryMissing(missingDirectoryLabels(missing));
+                        setDirectoryStatus(
+                          next ? (missing.length > 0 ? "Incomplete" : "Active") : "Not in directory"
+                        );
+                        setSaveStatus("dirty");
+                        track(next ? "DIRECTORY_OPT_IN" : "DIRECTORY_OPT_OUT");
+                      }}
+                    />
+                    <span>I want to be part of the WLTH WLKS Member Directory</span>
+                  </label>
+
+                  {/^active$/i.test(directoryStatus) && (
+                    <p className="wlth-directory-status wlth-directory-status--active">
+                      🟢 You&apos;re currently in the Member Directory
+                    </p>
+                  )}
+                  {/^incomplete$/i.test(directoryStatus) && (
+                    <p className="wlth-directory-status wlth-directory-status--incomplete">
+                      🟠 Your profile is incomplete. Complete the missing information below to
+                      join the directory.
+                    </p>
+                  )}
+                  {(!directoryStatus || /^not in directory$/i.test(directoryStatus)) && (
+                    <p className="wlth-directory-status">
+                      ⚪ You&apos;re not currently in the Member Directory
+                    </p>
+                  )}
+
+                  {directoryRequested && directoryMissing.length > 0 && (
+                    <div className="wlth-banner-error" role="status">
+                      <strong>Missing:</strong> {directoryMissing.join(", ")}
+                    </div>
+                  )}
+
+                  <p className="wlth-section-title" style={{ marginTop: 24 }}>
+                    Monthly Introductions
+                  </p>
+                  <label className="wlth-intention__check">
+                    <input
+                      type="checkbox"
+                      checked={introAvailable}
+                      onChange={(e) => {
+                        const next = e.target.checked;
+                        setIntroAvailable(next);
+                        setIntroTouched(true);
+                        setSaveStatus("dirty");
+                        track(next ? "INTRO_AVAILABILITY_ON" : "INTRO_AVAILABILITY_OFF");
+                      }}
+                    />
+                    <span>I&apos;m available for the upcoming introductions on the 1st of the month</span>
+                  </label>
+                  <p className="wlth-muted">
+                    Turn this on or off depending on your availability for the coming month, so
+                    we can match you with members who are available to connect and go for a walk.
+                  </p>
+                </>
               )}
 
               <div className="wlth-sticky-save">
@@ -2993,6 +3338,47 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         )}
 
       </div>
+
+      {directoryEnabled && showDirectoryInvite && (
+        <div className="wlth-invite-overlay" role="dialog" aria-modal="true">
+          <div className="wlth-invite">
+            <h3>We&apos;re launching the WLTH WLKS Member Directory 🎉</h3>
+            <p className="wlth-muted">
+              Connect with amazing women entrepreneurs from around the world and let other
+              members discover you and your business.
+            </p>
+            <p className="wlth-muted" style={{ marginBottom: 12 }}>
+              If you join, other members will see: your profile photo, first and last name,
+              headline, bio, business name, location, industry, LinkedIn, website and social
+              profiles.
+            </p>
+            <label className="wlth-intention__check">
+              <input
+                type="checkbox"
+                onChange={(e) => setDirectoryRequested(e.target.checked)}
+              />
+              <span>I want to be part of the WLTH WLKS Member Directory</span>
+            </label>
+            <div className="wlth-actions" style={{ marginTop: 16 }}>
+              <button
+                type="button"
+                className="wlth-btn-primary"
+                disabled={inviteSaving}
+                onClick={() => void dismissDirectoryInvite(true)}
+              >
+                {inviteSaving ? "Saving…" : "Join Directory"}
+              </button>
+              <button
+                type="button"
+                className="wlth-btn-secondary"
+                onClick={() => void dismissDirectoryInvite(false)}
+              >
+                Not right now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

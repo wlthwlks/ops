@@ -25,6 +25,7 @@ export async function GET(request: Request) {
         signupEnabled: flags.newSignupWidgetEnabled,
         updateDetailsEnabled: flags.newUpdateDetailsWidgetEnabled,
         analyticsEnabled: flags.newFormAnalyticsEnabled,
+        directoryEnabled: flags.memberDirectoryEnabled,
       },
     }),
     request

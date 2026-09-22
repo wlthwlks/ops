@@ -246,7 +246,11 @@ export function SignupApp(props: { apiBase: string }) {
     membershipPriceId: string;
     homeUrl: string;
   } | null>(null);
+  const [directoryEnabled, setDirectoryEnabled] = useState(false);
   const [token, setToken] = useState<string | null>(null);
+  const [signupPhotoUrl, setSignupPhotoUrl] = useState("");
+  const [signupPhotoUploading, setSignupPhotoUploading] = useState(false);
+  const [signupPhotoError, setSignupPhotoError] = useState("");
   const [communityOk, setCommunityOk] = useState(false);
   const [communityError, setCommunityError] = useState<string | undefined>();
   const [termsOk, setTermsOk] = useState(false);
@@ -592,6 +596,8 @@ export function SignupApp(props: { apiBase: string }) {
           api(props.apiBase, "/api/reference-data/onboarding"),
         ]);
         setConfig(cfg as { membershipPriceId: string; homeUrl: string });
+        const cfgFlags = (cfg as { flags?: { directoryEnabled?: boolean } }).flags || {};
+        setDirectoryEnabled(Boolean(cfgFlags.directoryEnabled));
         const rd = ref as unknown as RefData;
         setRefData(rd);
 
@@ -788,6 +794,30 @@ export function SignupApp(props: { apiBase: string }) {
       token,
       body: JSON.stringify({ stage, data }),
     });
+  };
+
+  const onSignupPhotoUpload = async (file: File) => {
+    if (!token || signupPhotoUploading) return;
+    setSignupPhotoUploading(true);
+    setSignupPhotoError("");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`${props.apiBase}/api/member/profile-photo`, {
+        method: "POST",
+        headers: { "X-Memberstack-Token": token },
+        body: fd,
+      });
+      const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) {
+        throw new Error(typeof json.message === "string" ? json.message : "Photo upload failed");
+      }
+      setSignupPhotoUrl(typeof json.url === "string" ? json.url : "");
+    } catch (e) {
+      setSignupPhotoError(e instanceof Error ? e.message : "Photo upload failed");
+    } finally {
+      setSignupPhotoUploading(false);
+    }
   };
 
   const onAccount = accountForm.handleSubmit(
@@ -1843,6 +1873,37 @@ export function SignupApp(props: { apiBase: string }) {
               register={connectionForm.register("connectionType") as never}
               error={connectionForm.formState.errors.connectionType?.message as string}
             />
+            {directoryEnabled && (
+              <div className="wlth-field" style={{ marginTop: 8 }}>
+                <label htmlFor="signup-photo-input">Profile photo (optional)</label>
+                <p className="wlth-muted">
+                  A profile photo is required if you want to appear in the WLTH WLKS Member
+                  Directory.
+                </p>
+                {signupPhotoUrl && (
+                  <div className="wlth-photo-preview">
+                    <img src={signupPhotoUrl} alt="Profile" />
+                  </div>
+                )}
+                <input
+                  id="signup-photo-input"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  disabled={signupPhotoUploading}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void onSignupPhotoUpload(f);
+                    e.target.value = "";
+                  }}
+                />
+                {signupPhotoUploading && <p className="wlth-muted">Uploading…</p>}
+                {signupPhotoError && (
+                  <div className="wlth-banner-error" role="alert">
+                    {signupPhotoError}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="wlth-actions">
               <button type="submit" className="wlth-btn-primary" disabled={busy}>
                 Finish

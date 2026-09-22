@@ -1061,3 +1061,56 @@
   margin-bottom: 18px;
   flex-wrap: wrap;
 }
+
+/* —— Profile photo —— */
+.wlth-widget .wlth-photo-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0;
+}
+.wlth-widget .wlth-photo-preview img {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 1px solid var(--wlth-border-strong);
+}
+
+/* —— Member Directory status —— */
+.wlth-widget .wlth-directory-status {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 8px 0;
+}
+.wlth-widget .wlth-directory-status--active {
+  color: oklch(0.72 0.16 152);
+}
+.wlth-widget .wlth-directory-status--incomplete {
+  color: oklch(0.78 0.16 65);
+}
+
+/* —— Directory invitation modal —— */
+.wlth-widget .wlth-invite-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.7);
+}
+.wlth-widget .wlth-invite {
+  width: 100%;
+  max-width: 520px;
+  background: var(--wlth-surface);
+  border: 1px solid var(--wlth-border-strong);
+  border-radius: var(--wlth-radius);
+  padding: 24px;
+}
+.wlth-widget .wlth-invite h3 {
+  margin: 0 0 12px;
+  font-size: 20px;
+  line-height: 1.3;
+}

@@ -21,6 +21,7 @@ export function getFormFeatureFlags() {
     makeShadowMode: flag("MAKE_SHADOW_MODE"),
     billingAlertsToSlackEnabled: flag("BILLING_ALERTS_TO_SLACK_ENABLED"),
     serviceAccessPolicyV2Enabled: flag("SERVICE_ACCESS_POLICY_V2_ENABLED"),
+    memberDirectoryEnabled: flag("MEMBER_DIRECTORY_ENABLED"),
   } as const;
 }
 

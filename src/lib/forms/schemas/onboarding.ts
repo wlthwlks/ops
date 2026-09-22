@@ -275,6 +275,12 @@ export const updateProfileSchema = withPhoneValidation(
       connectionType: z.enum(connectionCodes).optional(),
       topicsToDiscuss: z.string().trim().max(1000).optional(),
       hobbies: z.string().trim().max(1000).optional(),
+      /** Member Directory opt-in (checked = want to appear in the directory). */
+      memberDirectoryRequested: z.boolean().optional(),
+      /** Monthly introductions availability (checked = Active, unchecked = Excluded). */
+      introAvailable: z.boolean().optional(),
+      /** First directory invitation seen/dismissed. */
+      memberDirectoryInviteSeen: z.boolean().optional(),
     })
     .superRefine(otherIndustryRefine),
   { required: false }
