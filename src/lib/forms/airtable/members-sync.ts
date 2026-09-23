@@ -1248,6 +1248,7 @@ export function recordToProfileDto(record: AirtableRecord) {
   const photoUrls = profilePhotoUrl
     ? [profilePhotoUrl]
     : photoUrlsFromField(f[MEMBER_FIELDS.profilePhoto]);
+  const profilePhotoThumb = fieldStr(f, MEMBER_FIELDS.profilePhotoThumbUrl);
 
   return {
     airtableRecordId: record.id,
@@ -1294,6 +1295,7 @@ export function recordToProfileDto(record: AirtableRecord) {
     topicsToDiscuss: fieldStr(f, MEMBER_FIELDS.topicsToDiscuss),
     availability,
     profilePhoto: photoUrls,
+    profilePhotoThumb,
     memberDirectoryStatus: fieldStr(f, MEMBER_FIELDS.memberDirectoryStatus),
     memberDirectoryInviteSeen: isTruthyField(f[MEMBER_FIELDS.memberDirectoryInviteSeen]),
     recurringIntroStatus: fieldStr(f, MEMBER_FIELDS.recurringIntroStatus),

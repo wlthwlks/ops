@@ -20,33 +20,51 @@ import { recordIntegrationError } from "@/lib/forms/webhooks/store";
 export const runtime = "nodejs";
 
 const MAX_BYTES = 4 * 1024 * 1024; // 4MB (client optimizes to ~2MB; this is the hard guard)
-const ALLOWED_TYPES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
+const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-/** Read the member's current profile-photo blob URL (blank if none). */
-async function readCurrentPhotoUrl(memberstackId: string): Promise<string> {
+function extForType(contentType: string): string {
+  if (contentType === "image/png") return "png";
+  if (contentType === "image/webp") return "webp";
+  return "jpg";
+}
+
+function validateImageFile(
+  file: File
+): { ok: true; contentType: string; ext: string } | { ok: false; message: string } {
+  const contentType = (file.type || "").toLowerCase();
+  if (!ALLOWED_TYPES.has(contentType)) {
+    return { ok: false, message: "Please upload a JPG, PNG or WebP image." };
+  }
+  if (file.size > MAX_BYTES) {
+    return { ok: false, message: "Please choose an image under 4MB." };
+  }
+  return { ok: true, contentType, ext: extForType(contentType) };
+}
+
+/** Read the member's current full + thumbnail blob URLs (blank if none). */
+async function readCurrentPhotoUrls(
+  memberstackId: string
+): Promise<{ full: string; thumb: string }> {
   const rows = await findMemberByMemberstackId(memberstackId);
-  const v = rows[0]?.fields?.[MEMBER_FIELDS.profilePhotoUrl];
-  return typeof v === "string" ? v.trim() : "";
+  const f = rows[0]?.fields ?? {};
+  const full =
+    typeof f[MEMBER_FIELDS.profilePhotoUrl] === "string"
+      ? (f[MEMBER_FIELDS.profilePhotoUrl] as string).trim()
+      : "";
+  const thumb =
+    typeof f[MEMBER_FIELDS.profilePhotoThumbUrl] === "string"
+      ? (f[MEMBER_FIELDS.profilePhotoThumbUrl] as string).trim()
+      : "";
+  return { full, thumb };
 }
 
 /** Best-effort blob deletion — never throws, never blocks the response. */
-async function deleteBlobBestEffort(
-  url: string,
-  memberstackId: string
-): Promise<void> {
+async function deleteBlobBestEffort(url: string, memberstackId: string): Promise<void> {
   if (!url) return;
   try {
     await del(url);
     console.error(
-      JSON.stringify({
-        event: "profile_photo_blob_deleted",
-        memberstackId,
-        url,
-      })
+      JSON.stringify({ event: "profile_photo_blob_deleted", memberstackId, url })
     );
   } catch (e) {
     console.error(
@@ -65,8 +83,9 @@ export async function OPTIONS(request: Request) {
 }
 
 /**
- * Upload a member profile photo to Vercel Blob and write the public URL to
- * the Airtable `Profile photo` attachment field.
+ * Upload a member's profile photo (full + thumbnail) to Vercel Blob and write
+ * the public URLs to the `Profile photo URL` and `Profile photo thumbnail URL`
+ * fields. Old blobs are deleted best-effort.
  */
 export async function POST(request: Request) {
   try {
@@ -77,11 +96,7 @@ export async function POST(request: Request) {
     if (!flags.memberDirectoryEnabled) {
       return withCors(
         NextResponse.json(
-          {
-            success: false,
-            code: "FLAG_DISABLED",
-            message: "MEMBER_DIRECTORY_ENABLED is false",
-          },
+          { success: false, code: "FLAG_DISABLED", message: "MEMBER_DIRECTORY_ENABLED is false" },
           { status: 503 }
         ),
         request
@@ -94,8 +109,10 @@ export async function POST(request: Request) {
     );
 
     const form = await request.formData();
-    const file = form.get("file");
-    if (!(file instanceof File)) {
+    const fullFile = form.get("full");
+    const thumbFile = form.get("thumb");
+
+    if (!(fullFile instanceof File)) {
       return withCors(
         NextResponse.json(
           { success: false, code: "PROFILE_VALIDATION_FAILED", message: "No photo file provided" },
@@ -105,59 +122,81 @@ export async function POST(request: Request) {
       );
     }
 
-    const contentType = (file.type || "").toLowerCase();
-    if (!ALLOWED_TYPES.has(contentType)) {
+    const fullValidation = validateImageFile(fullFile);
+    if (!fullValidation.ok) {
       return withCors(
         NextResponse.json(
-          {
-            success: false,
-            code: "PROFILE_VALIDATION_FAILED",
-            message: "Please upload a JPG, PNG or WebP image.",
-          },
-          { status: 400 }
-        ),
-        request
-      );
-    }
-    if (file.size > MAX_BYTES) {
-      return withCors(
-        NextResponse.json(
-          {
-            success: false,
-            code: "PROFILE_VALIDATION_FAILED",
-            message: "Please choose an image under 4MB.",
-          },
+          { success: false, code: "PROFILE_VALIDATION_FAILED", message: fullValidation.message },
           { status: 400 }
         ),
         request
       );
     }
 
-    const bytes = Buffer.from(await file.arrayBuffer());
-    const ext = contentType === "image/png" ? "png" : contentType === "image/webp" ? "webp" : "jpg";
+    // Thumbnail is optional: when omitted, the full image serves both roles
+    // (tiny source images reuse a single blob).
+    let thumbValidation: { ok: true; contentType: string; ext: string } | null = null;
+    if (thumbFile !== null) {
+      if (!(thumbFile instanceof File)) {
+        return withCors(
+          NextResponse.json(
+            { success: false, code: "PROFILE_VALIDATION_FAILED", message: "Invalid thumbnail file" },
+            { status: 400 }
+          ),
+          request
+        );
+      }
+      const tv = validateImageFile(thumbFile);
+      if (!tv.ok) {
+        return withCors(
+          NextResponse.json(
+            { success: false, code: "PROFILE_VALIDATION_FAILED", message: tv.message },
+            { status: 400 }
+          ),
+          request
+        );
+      }
+      thumbValidation = tv;
+    }
 
-    // Read the previous blob URL so we can delete it after the new photo is saved.
-    const oldUrl = await readCurrentPhotoUrl(member.id);
+    const old = await readCurrentPhotoUrls(member.id);
 
-    const blob = await put(`profile-photos/${member.id}.${ext}`, bytes, {
+    const fullBytes = Buffer.from(await fullFile.arrayBuffer());
+    const fullBlob = await put(`profile-photos/${member.id}.${fullValidation.ext}`, fullBytes, {
       access: "public",
-      contentType,
+      contentType: fullValidation.contentType,
       addRandomSuffix: true,
     });
+
+    let thumbUrl = fullBlob.url;
+    if (thumbFile instanceof File && thumbValidation) {
+      const thumbBytes = Buffer.from(await thumbFile.arrayBuffer());
+      const thumbBlob = await put(
+        `profile-photos/${member.id}-thumb.${thumbValidation.ext}`,
+        thumbBytes,
+        {
+          access: "public",
+          contentType: thumbValidation.contentType,
+          addRandomSuffix: true,
+        }
+      );
+      thumbUrl = thumbBlob.url;
+    }
 
     const result = await updateMemberProfile({
       memberstackId: member.id,
       patch: {
-        [MEMBER_FIELDS.profilePhotoUrl]: blob.url,
-        [MEMBER_FIELDS.profilePhoto]: [
-          { url: blob.url, filename: file.name || `photo.${ext}` },
-        ],
+        [MEMBER_FIELDS.profilePhotoUrl]: fullBlob.url,
+        [MEMBER_FIELDS.profilePhotoThumbUrl]: thumbUrl,
       },
     });
 
-    // Best-effort cleanup of the previous blob (never blocks the response).
-    if (oldUrl && oldUrl !== blob.url) {
-      await deleteBlobBestEffort(oldUrl, member.id);
+    // Best-effort cleanup of the previous blobs (never blocks the response).
+    const newUrls = new Set([fullBlob.url, thumbUrl]);
+    for (const oldUrl of [old.full, old.thumb]) {
+      if (oldUrl && !newUrls.has(oldUrl)) {
+        await deleteBlobBestEffort(oldUrl, member.id);
+      }
     }
 
     console.error(
@@ -165,10 +204,11 @@ export async function POST(request: Request) {
         event: "profile_photo_uploaded",
         memberstackId: member.id,
         airtableRecordId: result.record?.id ?? null,
-        url: blob.url,
-        previousUrl: oldUrl || null,
-        bytes: file.size,
-        contentType,
+        fullUrl: fullBlob.url,
+        thumbUrl,
+        previous: { full: old.full || null, thumb: old.thumb || null },
+        bytes: fullFile.size,
+        contentType: fullValidation.contentType,
         shadowed: result.shadowed,
       })
     );
@@ -176,7 +216,8 @@ export async function POST(request: Request) {
     return withCors(
       NextResponse.json({
         success: true,
-        url: blob.url,
+        fullUrl: fullBlob.url,
+        thumbUrl,
         profile: await recordToProfileDtoResolved(result.record),
       }),
       request
@@ -214,7 +255,7 @@ export async function POST(request: Request) {
 }
 
 /**
- * Remove the member's profile photo (clear the Airtable attachment).
+ * Remove the member's profile photo (clear both URL fields + delete blobs).
  */
 export async function DELETE(request: Request) {
   try {
@@ -237,18 +278,21 @@ export async function DELETE(request: Request) {
       request
     );
 
-    const oldUrl = await readCurrentPhotoUrl(member.id);
+    const old = await readCurrentPhotoUrls(member.id);
 
     const result = await updateMemberProfile({
       memberstackId: member.id,
       patch: {
         [MEMBER_FIELDS.profilePhotoUrl]: "",
-        [MEMBER_FIELDS.profilePhoto]: [],
+        [MEMBER_FIELDS.profilePhotoThumbUrl]: "",
       },
     });
 
-    // Best-effort cleanup of the previous blob (never blocks the response).
-    await deleteBlobBestEffort(oldUrl, member.id);
+    // Best-effort cleanup of both previous blobs (never blocks the response).
+    await deleteBlobBestEffort(old.full, member.id);
+    if (old.thumb && old.thumb !== old.full) {
+      await deleteBlobBestEffort(old.thumb, member.id);
+    }
 
     // Removing a required photo demotes an Active directory member to
     // Incomplete so the stored status never claims a photo is present.
@@ -269,7 +313,8 @@ export async function DELETE(request: Request) {
         event: "profile_photo_removed",
         memberstackId: member.id,
         airtableRecordId: result.record?.id ?? null,
-        url: oldUrl || null,
+        url: old.full || null,
+        thumbUrl: old.thumb || null,
         directoryStatus: directoryStatus ?? storedStatus,
       })
     );

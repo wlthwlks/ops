@@ -16,14 +16,15 @@ const ESM = ts.transpileModule(SOURCE, {
 
 const B64 = Buffer.from(ESM, "utf8").toString("base64");
 
-test("optimizeImageFile converts a large PNG to webp under 2MB", async ({ page }) => {
+test("optimizeImageVariants returns distinct full + thumb webp for a large image", async ({
+  page,
+}) => {
   await page.goto("about:blank");
 
   const result = await page.evaluate(async (b64) => {
-    const dataUrl = "data:text/javascript;base64," + b64;
-    const mod = await import(dataUrl);
-    const { optimizeImageFile } = mod as {
-      optimizeImageFile: (f: File) => Promise<File>;
+    const mod = await import("data:text/javascript;base64," + b64);
+    const { optimizeImageVariants } = mod as {
+      optimizeImageVariants: (f: File) => Promise<{ full: File; thumb: File; same: boolean }>;
     };
 
     const canvas = document.createElement("canvas");
@@ -41,17 +42,50 @@ test("optimizeImageFile converts a large PNG to webp under 2MB", async ({ page }
       d[i + 3] = 255;
     }
     ctx.putImageData(imageData, 0, 0);
-
-    const pngBlob: Blob = await new Promise((res) =>
-      canvas.toBlob((b) => res(b!), "image/png")
-    );
+    const pngBlob: Blob = await new Promise((res) => canvas.toBlob((b) => res(b!), "image/png"));
     const file = new File([pngBlob], "photo.png", { type: "image/png" });
 
-    const out = await optimizeImageFile(file);
-    return { type: out.type, size: out.size, name: out.name };
+    const v = await optimizeImageVariants(file);
+    return {
+      fullType: v.full.type,
+      fullSize: v.full.size,
+      thumbType: v.thumb.type,
+      thumbSize: v.thumb.size,
+      same: v.same,
+    };
   }, B64);
 
+  expect(result.fullType).toBe("image/webp");
+  expect(result.thumbType).toBe("image/webp");
+  expect(result.same).toBe(false);
+  expect(result.fullSize).toBeLessThanOrEqual(2 * 1024 * 1024);
+  expect(result.thumbSize).toBeLessThanOrEqual(2 * 1024 * 1024);
+  expect(result.thumbSize).toBeLessThan(result.fullSize);
+});
+
+test("optimizeImageVariants reuses a single blob for a tiny image", async ({ page }) => {
+  await page.goto("about:blank");
+
+  const result = await page.evaluate(async (b64) => {
+    const mod = await import("data:text/javascript;base64," + b64);
+    const { optimizeImageVariants } = mod as {
+      optimizeImageVariants: (f: File) => Promise<{ full: File; thumb: File; same: boolean }>;
+    };
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 200;
+    canvas.height = 200;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#3a6";
+    ctx.fillRect(0, 0, 200, 200);
+    const pngBlob: Blob = await new Promise((res) => canvas.toBlob((b) => res(b!), "image/png"));
+    const file = new File([pngBlob], "tiny.png", { type: "image/png" });
+
+    const v = await optimizeImageVariants(file);
+    return { same: v.same, equal: v.full === v.thumb, type: v.full.type };
+  }, B64);
+
+  expect(result.same).toBe(true);
+  expect(result.equal).toBe(true);
   expect(result.type).toBe("image/webp");
-  expect(result.size).toBeLessThanOrEqual(2 * 1024 * 1024);
-  expect(result.name).toMatch(/\.webp$/);
 });

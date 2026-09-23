@@ -126,6 +126,8 @@ export const MEMBER_FIELDS = {
   profilePhoto: "Profile photo",
   /** URL text — the public Vercel Blob URL (source of truth + blob lifecycle). */
   profilePhotoUrl: "Profile photo URL",
+  /** URL text — thumbnail variant for directory grids. */
+  profilePhotoThumbUrl: "Profile photo thumbnail URL",
   /** Single select — "Not in directory" | "Incomplete" | "Active". */
   memberDirectoryStatus: "Member directory status",
   /** Checkbox — first directory invitation has been shown/dismissed. */

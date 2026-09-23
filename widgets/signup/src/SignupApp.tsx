@@ -61,7 +61,7 @@ import {
   displayUrl,
   normalizeSocialUrl,
 } from "../../shared/profile-urls";
-import { optimizeImageFile } from "../../shared/image-optimize";
+import { optimizeImageVariants } from "../../shared/image-optimize";
 
 export { runOutboundCheckout } from "../../shared/checkout-outbound";
 
@@ -803,9 +803,10 @@ export function SignupApp(props: { apiBase: string }) {
     setSignupPhotoUploading(true);
     setSignupPhotoError("");
     try {
-      const optimized = await optimizeImageFile(file);
+      const variants = await optimizeImageVariants(file);
       const fd = new FormData();
-      fd.append("file", optimized);
+      fd.append("full", variants.full);
+      if (!variants.same) fd.append("thumb", variants.thumb);
       const res = await fetch(`${props.apiBase}/api/member/profile-photo`, {
         method: "POST",
         headers: { "X-Memberstack-Token": token },
@@ -815,7 +816,7 @@ export function SignupApp(props: { apiBase: string }) {
       if (!res.ok) {
         throw new Error(typeof json.message === "string" ? json.message : "Photo upload failed");
       }
-      setSignupPhotoUrl(typeof json.url === "string" ? json.url : "");
+      setSignupPhotoUrl(typeof json.fullUrl === "string" ? json.fullUrl : "");
     } catch (e) {
       setSignupPhotoError(e instanceof Error ? e.message : "Photo upload failed");
     } finally {

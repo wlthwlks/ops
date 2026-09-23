@@ -105,6 +105,7 @@ export const MEMBERS_CANONICAL_FIELDS = [
   "Other industry",
   "Profile photo",
   "Profile photo URL",
+  "Profile photo thumbnail URL",
   "Member directory status",
   "Member directory invite seen",
 ] as const;
@@ -197,6 +198,7 @@ export const MEMBERS_WRITABLE_FIELDS = [
   "Other industry",
   "Profile photo",
   "Profile photo URL",
+  "Profile photo thumbnail URL",
   "Member directory status",
   "Member directory invite seen",
 ] as const;

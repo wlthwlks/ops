@@ -61,7 +61,7 @@ import {
   missingDirectoryLabels,
   scrollToDirectoryField,
 } from "../../shared/directory";
-import { optimizeImageFile } from "../../shared/image-optimize";
+import { optimizeImageVariants } from "../../shared/image-optimize";
 
 const passwordSchema = z
   .object({
@@ -1285,9 +1285,10 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     setPhotoError("");
     setPhotoNotice("");
     try {
-      const optimized = await optimizeImageFile(file);
+      const variants = await optimizeImageVariants(file);
       const fd = new FormData();
-      fd.append("file", optimized);
+      fd.append("full", variants.full);
+      if (!variants.same) fd.append("thumb", variants.thumb);
       const res = await fetch(`${props.apiBase}/api/member/profile-photo`, {
         method: "POST",
         headers: { "X-Memberstack-Token": token },
@@ -1299,7 +1300,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           typeof json.message === "string" ? json.message : "Photo upload failed"
         );
       }
-      const url = typeof json.url === "string" ? json.url : "";
+      const url = typeof json.fullUrl === "string" ? json.fullUrl : "";
       setProfilePhotoUrl(url);
       track("PROFILE_PHOTO_UPLOADED");
       setSaveStatus("dirty");
