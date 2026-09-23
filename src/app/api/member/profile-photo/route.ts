@@ -225,6 +225,7 @@ export async function DELETE(request: Request) {
     return withCors(
       NextResponse.json({
         success: true,
+        directoryStatus: directoryStatus ?? storedStatus,
         profile,
       }),
       request
