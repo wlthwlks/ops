@@ -1090,6 +1090,17 @@
   color: oklch(0.78 0.16 65);
 }
 
+.wlth-widget .wlth-directory-missing {
+  font-size: 13px;
+  line-height: 1.5;
+  color: oklch(0.78 0.16 65);
+  background: oklch(0.78 0.16 65 / 0.1);
+  border: 1px solid oklch(0.78 0.16 65 / 0.28);
+  border-radius: var(--wlth-radius-sm);
+  padding: 8px 12px;
+  margin: 8px 0;
+}
+
 /* —— Directory invitation modal —— */
 .wlth-widget .wlth-invite-overlay {
   position: fixed;

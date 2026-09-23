@@ -35,6 +35,7 @@
     "billing:backfill-pauses:local": "npx tsx scripts/backfill-billing-pauses.ts --env-file=.env.local",
     "klaviyo:sync-members": "npx tsx scripts/sync-klaviyo-members.ts",
     "members:export-xlsx": "npx tsx scripts/export-members-xlsx.ts",
+    "members:export-churned": "npx tsx scripts/export-churned-members.ts",
     "airtable:export-small-cities": "npx tsx scripts/export-small-cities.ts",
     "airtable:export-migration": "npx tsx scripts/export-airtable-migration.ts",
     "widgets:build": "WIDGET=signup vite build --config widgets/vite.config.ts && WIDGET=update-details vite build --config widgets/vite.config.ts && WIDGET=getting-started vite build --config widgets/vite.config.ts",

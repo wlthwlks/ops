@@ -240,14 +240,16 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const [directoryEnabled, setDirectoryEnabled] = useState(false);
   const [directoryRequested, setDirectoryRequested] = useState(false);
   const [directoryStatus, setDirectoryStatus] = useState("");
-  const [directoryMissing, setDirectoryMissing] = useState<string[]>([]);
   const [showDirectoryInvite, setShowDirectoryInvite] = useState(false);
   const [inviteSaving, setInviteSaving] = useState(false);
   const [introAvailable, setIntroAvailable] = useState(true);
   const [introTouched, setIntroTouched] = useState(false);
   const [profilePhotoUrl, setProfilePhotoUrl] = useState("");
   const [photoUploading, setPhotoUploading] = useState(false);
+  const [photoRemoving, setPhotoRemoving] = useState(false);
   const [photoError, setPhotoError] = useState("");
+  const [photoNotice, setPhotoNotice] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const mountedRef = useRef(true);
   /** Server-derived mid-signup state (blank/COMPLETE = established). Never forced. */
   const midSignupRef = useRef(false);
@@ -339,6 +341,48 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const expertiseOffered = form.watch("expertiseOffered") || [];
   // const availability = form.watch("availability") || []; // Availability UI hidden
   const isDirty = form.formState.isDirty;
+
+  const dirFirstName = form.watch("firstName") || "";
+  const dirLastName = form.watch("lastName") || "";
+  const dirHeadline = form.watch("professionalHeadline") || "";
+  const dirBio = form.watch("profileBio") || "";
+  const dirBusinessName = form.watch("businessName") || "";
+  const dirCityCode = form.watch("cityCode") || "";
+  const dirIndustry = form.watch("primaryIndustry") || "";
+  const dirWebsite = form.watch("businessWebsite") || "";
+
+  const directoryMissingKeys = useMemo(
+    () =>
+      computeMissingDirectoryFields({
+        profilePhotoUrls: profilePhotoUrl ? [profilePhotoUrl] : [],
+        firstName: dirFirstName,
+        lastName: dirLastName,
+        professionalHeadline: dirHeadline,
+        profileBio: dirBio,
+        businessName: dirBusinessName,
+        cityCode: dirCityCode,
+        city: "",
+        primaryIndustry: dirIndustry,
+        businessWebsite: dirWebsite,
+        socialLinks,
+      }),
+    [
+      dirFirstName,
+      dirLastName,
+      dirHeadline,
+      dirBio,
+      dirBusinessName,
+      dirCityCode,
+      dirIndustry,
+      dirWebsite,
+      socialLinks,
+      profilePhotoUrl,
+    ]
+  );
+  const directoryMissing = useMemo(
+    () => missingDirectoryLabels(directoryMissingKeys),
+    [directoryMissingKeys]
+  );
 
   const rCountry = refreshLocation.watch("countryCode");
   const rPhonePrefix = refreshLocation.watch("phonePrefix") || "";
@@ -625,20 +669,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         const alreadyInDirectory = /^active$/i.test(storedDirStatus);
         const optedIn = alreadyInDirectory || /^incomplete$/i.test(storedDirStatus);
         setDirectoryRequested(optedIn);
-        const missingNow = computeMissingDirectoryFields({
-          profilePhotoUrls: photoUrls,
-          firstName: String(p.firstName || ""),
-          lastName: String(p.lastName || ""),
-          professionalHeadline: String(p.professionalHeadline || ""),
-          profileBio: String(p.profileBio || ""),
-          businessName: String(p.businessName || ""),
-          cityCode: String(p.cityCode || ""),
-          city: String(p.city || ""),
-          primaryIndustry: String(p.primaryIndustry || ""),
-          businessWebsite: String(p.businessWebsite || ""),
-          socialLinks: Array.isArray(p.socialLinks) ? (p.socialLinks as SocialLink[]) : [],
-        });
-        setDirectoryMissing(missingDirectoryLabels(missingNow));
 
         const introStatus = String(p.recurringIntroStatus || "").trim().toLowerCase();
         setIntroAvailable(introStatus !== "excluded");
@@ -1270,24 +1300,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       setProfilePhotoUrl(url);
       track("PROFILE_PHOTO_UPLOADED");
       setSaveStatus("dirty");
-      // Recompute directory missing after photo change.
-      setDirectoryMissing(
-        missingDirectoryLabels(
-          computeMissingDirectoryFields({
-            profilePhotoUrls: url ? [url] : [],
-            firstName: form.getValues("firstName") || "",
-            lastName: form.getValues("lastName") || "",
-            professionalHeadline: form.getValues("professionalHeadline") || "",
-            profileBio: form.getValues("profileBio") || "",
-            businessName: form.getValues("businessName") || "",
-            cityCode: form.getValues("cityCode") || "",
-            city: "",
-            primaryIndustry: form.getValues("primaryIndustry") || "",
-            businessWebsite: form.getValues("businessWebsite") || "",
-            socialLinks,
-          })
-        )
-      );
     } catch (e) {
       setPhotoError(e instanceof Error ? e.message : "Photo upload failed");
     } finally {
@@ -1328,13 +1340,13 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
           socialLinks,
         });
         setDirectoryRequested(true);
-        setDirectoryMissing(missingDirectoryLabels(missing));
-        setDirectoryStatus(missing.length > 0 ? "Incomplete" : "Active");
         track("DIRECTORY_OPT_IN");
-        await patchProfile({
+        const res = await patchProfile({
           memberDirectoryRequested: true,
           memberDirectoryInviteSeen: true,
         });
+        const dirStatus = (res as Record<string, unknown>).directoryStatus;
+        if (typeof dirStatus === "string") setDirectoryStatus(dirStatus);
         if (missing.length > 0) {
           const first = missing[0];
           requestAnimationFrame(() => {
@@ -1954,11 +1966,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       if (directoryEnabled) {
         if (typeof res.directoryStatus === "string") {
           setDirectoryStatus(res.directoryStatus);
-        }
-        if (Array.isArray(res.directoryMissingFields)) {
-          setDirectoryMissing(res.directoryMissingFields as string[]);
-        } else {
-          setDirectoryMissing(missingDirectoryLabels(missingKeys));
         }
       }
 
@@ -3128,27 +3135,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                       type="checkbox"
                       checked={directoryRequested}
                       onChange={(e) => {
-                        const next = e.target.checked;
-                        setDirectoryRequested(next);
-                        const missing = computeMissingDirectoryFields({
-                          profilePhotoUrls: profilePhotoUrl ? [profilePhotoUrl] : [],
-                          firstName: form.getValues("firstName") || "",
-                          lastName: form.getValues("lastName") || "",
-                          professionalHeadline: form.getValues("professionalHeadline") || "",
-                          profileBio: form.getValues("profileBio") || "",
-                          businessName: form.getValues("businessName") || "",
-                          cityCode: form.getValues("cityCode") || "",
-                          city: "",
-                          primaryIndustry: form.getValues("primaryIndustry") || "",
-                          businessWebsite: form.getValues("businessWebsite") || "",
-                          socialLinks,
-                        });
-                        setDirectoryMissing(missingDirectoryLabels(missing));
-                        setDirectoryStatus(
-                          next ? (missing.length > 0 ? "Incomplete" : "Active") : "Not in directory"
-                        );
+                        setDirectoryRequested(e.target.checked);
                         setSaveStatus("dirty");
-                        track(next ? "DIRECTORY_OPT_IN" : "DIRECTORY_OPT_OUT");
+                        track(e.target.checked ? "DIRECTORY_OPT_IN" : "DIRECTORY_OPT_OUT");
                       }}
                     />
                     <span>I want to be part of the WLTH WLKS Member Directory</span>
@@ -3172,8 +3161,8 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                   )}
 
                   {directoryRequested && directoryMissing.length > 0 && (
-                    <div className="wlth-banner-error" role="status">
-                      <strong>Missing:</strong> {directoryMissing.join(", ")}
+                    <div className="wlth-directory-missing" role="status">
+                      Complete to join the directory: {directoryMissing.join(", ")}.
                     </div>
                   )}
 
