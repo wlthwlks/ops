@@ -1282,6 +1282,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     if (!token || photoUploading) return;
     setPhotoUploading(true);
     setPhotoError("");
+    setPhotoNotice("");
     try {
       const fd = new FormData();
       fd.append("file", file);
@@ -1308,16 +1309,41 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   };
 
   const onPhotoRemove = async () => {
-    if (!token) return;
+    if (!token || photoRemoving) return;
+    const wasActive = /^active$/i.test(directoryStatus);
+    setPhotoRemoving(true);
+    setPhotoError("");
+    setPhotoNotice("");
     try {
-      await fetch(`${props.apiBase}/api/member/profile-photo`, {
+      const res = await fetch(`${props.apiBase}/api/member/profile-photo`, {
         method: "DELETE",
         headers: { "X-Memberstack-Token": token },
       });
+      const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) {
+        throw new Error(
+          typeof json.message === "string" ? json.message : "Could not remove photo"
+        );
+      }
       setProfilePhotoUrl("");
+      const status =
+        typeof json.directoryStatus === "string"
+          ? json.directoryStatus
+          : ((json.profile as Record<string, unknown> | undefined)?.memberDirectoryStatus as
+              | string
+              | undefined);
+      if (typeof status === "string") setDirectoryStatus(status);
+      if (wasActive) {
+        setPhotoNotice(
+          "You need a profile photo to stay in the Member Directory."
+        );
+      }
+      track("PROFILE_PHOTO_REMOVED");
       setSaveStatus("dirty");
-    } catch {
-      /* ignore */
+    } catch (e) {
+      setPhotoError(e instanceof Error ? e.message : "Could not remove photo");
+    } finally {
+      setPhotoRemoving(false);
     }
   };
 
@@ -2817,41 +2843,81 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
             >
               <p className="wlth-section-title">Personal</p>
               {directoryEnabled && (
-                <div className="wlth-field" id="upd-photo">
+                <div className="wlth-field wlth-photo" id="upd-photo">
                   <label htmlFor="upd-photo-input">Profile photo</label>
-                  {profilePhotoUrl ? (
-                    <div className="wlth-photo-preview">
-                      <img src={profilePhotoUrl} alt="Profile" />
+                  <div className="wlth-photo-row">
+                    {profilePhotoUrl ? (
+                      <div
+                        className={`wlth-photo-preview${photoUploading ? " is-uploading" : ""}`}
+                      >
+                        <img src={profilePhotoUrl} alt="Profile" />
+                        {photoUploading && (
+                          <div className="wlth-photo-preview__overlay">
+                            <span className="wlth-spinner" aria-hidden="true" />
+                          </div>
+                        )}
+                      </div>
+                    ) : photoUploading ? (
+                      <div className="wlth-photo-placeholder is-uploading">
+                        <span className="wlth-spinner" aria-hidden="true" />
+                      </div>
+                    ) : (
+                      <div className="wlth-photo-placeholder">No photo</div>
+                    )}
+                    <div className="wlth-photo-actions">
                       <button
                         type="button"
                         className="wlth-btn-secondary"
-                        onClick={() => void onPhotoRemove()}
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={photoUploading || photoRemoving}
                       >
-                        Remove photo
+                        {photoUploading
+                          ? "Uploading…"
+                          : profilePhotoUrl
+                            ? "Change photo"
+                            : "Upload photo"}
                       </button>
+                      {profilePhotoUrl && (
+                        <button
+                          type="button"
+                          className="wlth-btn-secondary"
+                          onClick={() => void onPhotoRemove()}
+                          disabled={photoUploading || photoRemoving}
+                        >
+                          {photoRemoving ? "Removing…" : "Remove photo"}
+                        </button>
+                      )}
                     </div>
-                  ) : (
-                    <p className="wlth-muted">
-                      Optional. A profile photo is required if you want to appear in the WLTH
-                      WLKS Member Directory.
-                    </p>
-                  )}
+                  </div>
                   <input
+                    ref={fileInputRef}
                     id="upd-photo-input"
                     type="file"
                     accept="image/jpeg,image/png,image/webp"
-                    disabled={photoUploading}
+                    hidden
+                    disabled={photoUploading || photoRemoving}
                     onChange={(e) => {
                       const f = e.target.files?.[0];
                       if (f) void onPhotoUpload(f);
                       e.target.value = "";
                     }}
                   />
-                  {photoUploading && <p className="wlth-muted">Uploading…</p>}
+                  {photoUploading && <p className="wlth-muted">Uploading photo…</p>}
                   {photoError && (
                     <div className="wlth-banner-error" role="alert">
                       {photoError}
                     </div>
+                  )}
+                  {photoNotice && (
+                    <div className="wlth-photo-notice" role="status">
+                      {photoNotice}
+                    </div>
+                  )}
+                  {!profilePhotoUrl && !photoUploading && (
+                    <p className="wlth-muted">
+                      Optional. A profile photo is required if you want to appear in the WLTH
+                      WLKS Member Directory.
+                    </p>
                   )}
                 </div>
               )}

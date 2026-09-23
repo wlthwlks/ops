@@ -251,6 +251,7 @@ export function SignupApp(props: { apiBase: string }) {
   const [signupPhotoUrl, setSignupPhotoUrl] = useState("");
   const [signupPhotoUploading, setSignupPhotoUploading] = useState(false);
   const [signupPhotoError, setSignupPhotoError] = useState("");
+  const signupPhotoInputRef = useRef<HTMLInputElement>(null);
   const [communityOk, setCommunityOk] = useState(false);
   const [communityError, setCommunityError] = useState<string | undefined>();
   const [termsOk, setTermsOk] = useState(false);
@@ -1874,21 +1875,46 @@ export function SignupApp(props: { apiBase: string }) {
               error={connectionForm.formState.errors.connectionType?.message as string}
             />
             {directoryEnabled && (
-              <div className="wlth-field" style={{ marginTop: 8 }}>
+              <div className="wlth-field wlth-photo" style={{ marginTop: 8 }}>
                 <label htmlFor="signup-photo-input">Profile photo (optional)</label>
-                <p className="wlth-muted">
-                  A profile photo is required if you want to appear in the WLTH WLKS Member
-                  Directory.
-                </p>
-                {signupPhotoUrl && (
-                  <div className="wlth-photo-preview">
-                    <img src={signupPhotoUrl} alt="Profile" />
+                <div className="wlth-photo-row">
+                  {signupPhotoUrl ? (
+                    <div className={`wlth-photo-preview${signupPhotoUploading ? " is-uploading" : ""}`}>
+                      <img src={signupPhotoUrl} alt="Profile" />
+                      {signupPhotoUploading && (
+                        <div className="wlth-photo-preview__overlay">
+                          <span className="wlth-spinner" aria-hidden="true" />
+                        </div>
+                      )}
+                    </div>
+                  ) : signupPhotoUploading ? (
+                    <div className="wlth-photo-placeholder is-uploading">
+                      <span className="wlth-spinner" aria-hidden="true" />
+                    </div>
+                  ) : (
+                    <div className="wlth-photo-placeholder">No photo</div>
+                  )}
+                  <div className="wlth-photo-actions">
+                    <button
+                      type="button"
+                      className="wlth-btn-secondary"
+                      onClick={() => signupPhotoInputRef.current?.click()}
+                      disabled={signupPhotoUploading}
+                    >
+                      {signupPhotoUploading
+                        ? "Uploading…"
+                        : signupPhotoUrl
+                          ? "Change photo"
+                          : "Upload photo"}
+                    </button>
                   </div>
-                )}
+                </div>
                 <input
+                  ref={signupPhotoInputRef}
                   id="signup-photo-input"
                   type="file"
                   accept="image/jpeg,image/png,image/webp"
+                  hidden
                   disabled={signupPhotoUploading}
                   onChange={(e) => {
                     const f = e.target.files?.[0];
@@ -1896,11 +1922,17 @@ export function SignupApp(props: { apiBase: string }) {
                     e.target.value = "";
                   }}
                 />
-                {signupPhotoUploading && <p className="wlth-muted">Uploading…</p>}
+                {signupPhotoUploading && <p className="wlth-muted">Uploading photo…</p>}
                 {signupPhotoError && (
                   <div className="wlth-banner-error" role="alert">
                     {signupPhotoError}
                   </div>
+                )}
+                {!signupPhotoUrl && !signupPhotoUploading && (
+                  <p className="wlth-muted">
+                    A profile photo is required if you want to appear in the WLTH WLKS Member
+                    Directory.
+                  </p>
                 )}
               </div>
             )}

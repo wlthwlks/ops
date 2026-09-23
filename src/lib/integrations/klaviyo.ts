@@ -38,6 +38,12 @@ export interface KlaviyoProfileInput {
   properties?: Record<string, string>;
 }
 
+/** Email-marketing subscription state returned by Klaviyo's profiles endpoint. */
+export interface KlaviyoSubscriptionState {
+  consent: string;
+  suppressed: boolean;
+}
+
 export class KlaviyoApiError extends Error {
   readonly status: number;
   readonly body: string;
@@ -273,12 +279,110 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
     return mutateListMembership("DELETE", listId, profileIds);
   }
 
+  /**
+   * Full read of the profiles currently in a list (paginated), indexed by
+   * normalized email. Read-only — does not touch consent or membership.
+   */
+  async function listProfilesInList(listId: string): Promise<Set<string>> {
+    const emails = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const cursorParam = cursor
+        ? `?page[cursor]=${encodeURIComponent(cursor)}`
+        : "";
+      const res = await request(
+        "GET",
+        `/lists/${encodeURIComponent(listId)}/relationships/profiles/${cursorParam}`
+      );
+      const body = res.data as {
+        data?: Array<{ attributes?: { email?: string } }>;
+        links?: { next?: string | null };
+      };
+      for (const item of body.data ?? []) {
+        const email = (item.attributes?.email ?? "").trim().toLowerCase();
+        if (email) emails.add(email);
+      }
+      const nextUrl = body.links?.next;
+      cursor = nextUrl
+        ? new URLSearchParams(nextUrl.split("?")[1] ?? "").get("page[cursor]") ?? undefined
+        : undefined;
+    } while (cursor);
+    return emails;
+  }
+
+  /**
+   * Resolve email-marketing subscription state for a set of emails (chunked
+   * any-filter, paginated). Read-only.
+   */
+  async function listProfileSubscriptionStates(
+    emails: string[]
+  ): Promise<Map<string, KlaviyoSubscriptionState>> {
+    const map = new Map<string, KlaviyoSubscriptionState>();
+    const unique = [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))];
+    if (unique.length === 0) return map;
+
+    for (let i = 0; i < unique.length; i += EMAIL_FILTER_CHUNK) {
+      const chunk = unique.slice(i, i + EMAIL_FILTER_CHUNK);
+      const list = chunk.map((e) => JSON.stringify(e)).join(",");
+      const filter = encodeURIComponent(`any(email,[${list}])`);
+
+      let cursor: string | undefined;
+      do {
+        const cursorParam = cursor
+          ? `&page[cursor]=${encodeURIComponent(cursor)}`
+          : "";
+        const res = await request(
+          "GET",
+          `/profiles/?filter=${filter}&fields[profile]=email&additional-fields[profile]=subscriptions${cursorParam}`
+        );
+        const body = res.data as {
+          data?: Array<{
+            attributes?: {
+              email?: string;
+              subscriptions?: {
+                email?: {
+                  marketing?: {
+                    consent?: string;
+                    suppressions?: unknown[];
+                    list_suppressions?: unknown[];
+                  };
+                };
+              };
+            };
+          }>;
+          links?: { next?: string | null };
+        };
+        for (const item of body.data ?? []) {
+          const email = (item.attributes?.email ?? "").trim().toLowerCase();
+          if (!email) continue;
+          const marketing = item.attributes?.subscriptions?.email?.marketing;
+          const consent = (marketing?.consent ?? "").trim();
+          const suppressions = [
+            ...(marketing?.suppressions ?? []),
+            ...(marketing?.list_suppressions ?? []),
+          ];
+          map.set(email, {
+            consent,
+            suppressed: consent === "SUPPRESSED" || suppressions.length > 0,
+          });
+        }
+        const nextUrl = body.links?.next;
+        cursor = nextUrl
+          ? new URLSearchParams(nextUrl.split("?")[1] ?? "").get("page[cursor]") ?? undefined
+          : undefined;
+      } while (cursor);
+    }
+    return map;
+  }
+
   return {
     importProfiles,
     waitForImportJobs,
     listProfileIdsByEmails,
     addProfilesToList,
     removeProfilesFromList,
+    listProfilesInList,
+    listProfileSubscriptionStates,
   };
 }
 

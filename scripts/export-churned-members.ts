@@ -13,17 +13,24 @@
  * (fallback: unique email). Customers with no matching Airtable record are
  * skipped. No writes are made to Airtable, Stripe, or Klaviyo.
  *
- * Columns: Email, Name, Country, City, Zipcode, Date joined.
+ * Columns: Email, Name, Country, City, Zipcode, Date joined, Subscription.
  * Country is resolved through MEMBERS "City relation" → ALL CITIES → COUNTRIES.
+ * Subscription is read live from Klaviyo's churned list: "true" for profiles in
+ * the list, otherwise "suppressed" / "unsubscribed" / "not found".
  *
- * Requires: AIRTABLE_GET_DATA_TOKEN, AIRTABLE_BASE_ID, STRIPE_SECRET_KEY
- * (plus the billing-catalog price configuration).
+ * Requires: AIRTABLE_GET_DATA_TOKEN, AIRTABLE_BASE_ID, STRIPE_SECRET_KEY,
+ * KLAVIYO_PRIVATE_API_KEY, KLAVIYO_CHURNED_LIST_ID (plus the billing-catalog
+ * price configuration).
  */
 import * as dotenv from "dotenv";
 import { mkdirSync } from "fs";
 import { dirname } from "path";
 import ExcelJS from "exceljs";
 import { createAirtableClient } from "../src/lib/integrations/airtable";
+import {
+  createKlaviyoClient,
+  type KlaviyoClient,
+} from "../src/lib/integrations/klaviyo";
 import {
   getStripeClient,
   getStripeNativeMembershipPriceIds,
@@ -172,6 +179,7 @@ type ChurnedRow = {
   city: string;
   zip: string;
   dateJoined: string;
+  subscription: string;
 };
 
 function resolveRow(
@@ -198,7 +206,44 @@ function resolveRow(
     city,
     zip: entry.zip,
     dateJoined: formatDateJoined(entry.dateJoined),
+    subscription: "",
   };
+}
+
+/**
+ * Classify each email against Klaviyo's churned list:
+ *   "true"         → profile is a member of the churned list
+ *   "suppressed"   → profile exists but globally suppressed (or has suppressions)
+ *   "unsubscribed" → profile exists but globally unsubscribed
+ *   "not found"    → no Klaviyo profile for the email
+ */
+async function resolveSubscriptionStatuses(
+  emails: string[],
+  klaviyo: KlaviyoClient,
+  churnedListId: string
+): Promise<Map<string, string>> {
+  const normalized = emails.map((e) => (e || "").trim().toLowerCase());
+  const statuses = new Map<string, string>();
+
+  const inList = await klaviyo.listProfilesInList(churnedListId);
+  const notInList = normalized.filter((e) => e && !inList.has(e));
+  const states = await klaviyo.listProfileSubscriptionStates(notInList);
+
+  for (const email of normalized) {
+    if (!email) {
+      statuses.set(email, "not found");
+    } else if (inList.has(email)) {
+      statuses.set(email, "true");
+    } else {
+      const state = states.get(email);
+      if (!state) statuses.set(email, "not found");
+      else if (state.suppressed) statuses.set(email, "suppressed");
+      else if (state.consent === "UNSUBSCRIBED") statuses.set(email, "unsubscribed");
+      else statuses.set(email, "not found");
+    }
+  }
+
+  return statuses;
 }
 
 function requireEnv(name: string): string {
@@ -214,6 +259,7 @@ const COLUMNS: Array<{ header: string; width: number }> = [
   { header: "City", width: 20 },
   { header: "Zipcode", width: 12 },
   { header: "Date joined", width: 14 },
+  { header: "Subscription", width: 16 },
 ];
 
 async function main() {
@@ -286,6 +332,26 @@ async function main() {
   console.log("=== Export summary ===");
   console.log(`  churned rows: ${rows.length} (skipped no Airtable match: ${skippedNoMatch})`);
 
+  const klaviyo = createKlaviyoClient({
+    apiKey: requireEnv("KLAVIYO_PRIVATE_API_KEY"),
+    revision: (process.env.KLAVIYO_API_REVISION || "").trim() || undefined,
+  });
+  console.log("\nFetching Klaviyo churned-list membership + subscription states…");
+  const statuses = await resolveSubscriptionStatuses(
+    rows.map((r) => r.email),
+    klaviyo,
+    requireEnv("KLAVIYO_CHURNED_LIST_ID")
+  );
+  for (const row of rows) {
+    row.subscription = statuses.get((row.email || "").trim().toLowerCase()) ?? "not found";
+  }
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    counts.set(row.subscription, (counts.get(row.subscription) ?? 0) + 1);
+  }
+  console.log("  status breakdown:",
+    [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(", "));
+
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Churned");
 
@@ -304,6 +370,7 @@ async function main() {
       City: row.city || null,
       Zipcode: row.zip || null,
       "Date joined": row.dateJoined || null,
+      Subscription: row.subscription || null,
     });
   }
 

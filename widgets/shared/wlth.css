@@ -1063,11 +1063,18 @@
 }
 
 /* —— Profile photo —— */
+.wlth-widget .wlth-photo-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 8px 0;
+  flex-wrap: wrap;
+}
 .wlth-widget .wlth-photo-preview {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 8px 0;
 }
 .wlth-widget .wlth-photo-preview img {
   width: 96px;
@@ -1075,6 +1082,53 @@
   object-fit: cover;
   border-radius: 50%;
   border: 1px solid var(--wlth-border-strong);
+}
+.wlth-widget .wlth-photo-preview.is-uploading img {
+  opacity: 0.4;
+}
+.wlth-widget .wlth-photo-preview__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.wlth-widget .wlth-photo-placeholder {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  border: 1px dashed var(--wlth-border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wlth-text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+.wlth-widget .wlth-photo-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wlth-widget .wlth-spinner {
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid oklch(1 0 0 / 15%);
+  border-top-color: var(--wlth-button);
+  animation: wlth-loader-spin 0.75s linear infinite;
+}
+.wlth-widget .wlth-photo-notice {
+  font-size: 13px;
+  line-height: 1.5;
+  color: oklch(0.78 0.16 65);
+  background: oklch(0.78 0.16 65 / 0.1);
+  border: 1px solid oklch(0.78 0.16 65 / 0.28);
+  border-radius: var(--wlth-radius-sm);
+  padding: 8px 12px;
+  margin: 8px 0;
 }
 
 /* —— Member Directory status —— */
