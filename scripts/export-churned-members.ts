@@ -66,9 +66,11 @@ const MEMBER_EXPORT_FIELDS = [
 export function parseExportArgs(argv: string[]): {
   limit?: number;
   output: string;
+  subscribedOnly: boolean;
 } {
   let limit: number | undefined;
   let output = DEFAULT_OUTPUT;
+  let subscribedOnly = false;
 
   for (const arg of argv) {
     if (arg.startsWith("--limit=")) {
@@ -80,13 +82,16 @@ export function parseExportArgs(argv: string[]): {
     } else if (arg.startsWith("--output=")) {
       output = arg.slice("--output=".length).trim();
       if (!output) throw new Error("--output requires a path");
+    } else if (arg === "--subscribed-only") {
+      subscribedOnly = true;
     } else if (arg === "--help" || arg === "-h") {
       console.log(
         [
-          "Usage: npm run members:export-churned -- [--limit=N] [--output=PATH]",
+          "Usage: npm run members:export-churned -- [--limit=N] [--output=PATH] [--subscribed-only]",
           "",
-          "  --limit=N     cap the Stripe churn census listing at N customers (sanity runs)",
-          `  --output=PATH output file (default ${DEFAULT_OUTPUT})`,
+          "  --limit=N         cap the Stripe churn census listing at N customers (sanity runs)",
+          `  --output=PATH     output file (default ${DEFAULT_OUTPUT})`,
+          "  --subscribed-only keep only rows whose Subscription is true (in the Klaviyo list)",
         ].join("\n")
       );
       process.exit(0);
@@ -95,7 +100,7 @@ export function parseExportArgs(argv: string[]): {
     }
   }
 
-  return { limit, output };
+  return { limit, output, subscribedOnly };
 }
 
 function fieldStr(fields: Record<string, unknown>, key: string): string {
@@ -273,6 +278,7 @@ async function main() {
 
   console.log("Churned-members export: READ-ONLY (no writes)");
   if (args.limit) console.log(`Census limit per Stripe listing: ${args.limit}`);
+  if (args.subscribedOnly) console.log("Filter: --subscribed-only (true rows only)");
   console.log("");
 
   let allow: Set<string>;
@@ -352,6 +358,13 @@ async function main() {
   console.log("  status breakdown:",
     [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}`).join(", "));
 
+  const exportRows = args.subscribedOnly
+    ? rows.filter((r) => r.subscription === "true")
+    : rows;
+  if (args.subscribedOnly) {
+    console.log(`  (writing only "true" rows: ${exportRows.length})`);
+  }
+
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet("Churned");
 
@@ -362,7 +375,7 @@ async function main() {
   }));
   sheet.getRow(1).font = { bold: true };
 
-  for (const row of rows) {
+  for (const row of exportRows) {
     sheet.addRow({
       Email: row.email || null,
       Name: row.name || null,
@@ -382,7 +395,7 @@ async function main() {
 
   mkdirSync(dirname(args.output), { recursive: true });
   await workbook.xlsx.writeFile(args.output);
-  console.log(`\nXLSX written: ${args.output} (sheet: Churned, ${rows.length} rows)`);
+  console.log(`\nXLSX written: ${args.output} (sheet: Churned, ${exportRows.length} rows)`);
 }
 
 const isMain =

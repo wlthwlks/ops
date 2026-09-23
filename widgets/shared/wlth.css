@@ -1155,6 +1155,23 @@
   margin: 8px 0;
 }
 
+/* Transient highlight when scrolling to a missing directory field. */
+.wlth-widget .wlth-dir-flash {
+  animation: wlth-dir-flash 1.4s ease-in-out 2;
+}
+@keyframes wlth-dir-flash {
+  0%,
+  100% {
+    border-color: var(--wlth-border);
+    box-shadow: none;
+  }
+  40%,
+  60% {
+    border-color: oklch(0.78 0.16 65);
+    box-shadow: 0 0 0 3px oklch(0.78 0.16 65 / 22%);
+  }
+}
+
 /* —— Directory invitation modal —— */
 .wlth-widget .wlth-invite-overlay {
   position: fixed;

@@ -85,23 +85,30 @@ export function missingDirectoryLabels(missing: DirectoryFieldKey[]): string[] {
   return missing.map((k) => DIRECTORY_FIELD_LABELS[k]);
 }
 
-/** Scroll to and highlight the first missing directory field. */
+/** Scroll to and briefly highlight the first missing directory field. */
 export function scrollToDirectoryField(key: DirectoryFieldKey): void {
   const id = DIRECTORY_FIELD_TARGETS[key];
   const el = id ? document.getElementById(id) : null;
-  if (el) {
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
-    if (el instanceof HTMLElement) {
+  if (!el) return;
+
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  if (el instanceof HTMLElement) {
+    try {
+      el.focus({ preventScroll: true });
+    } catch {
       try {
-        el.focus({ preventScroll: true });
+        el.focus();
       } catch {
-        try {
-          el.focus();
-        } catch {
-          /* ignore */
-        }
+        /* ignore */
       }
     }
-    el.setAttribute("aria-invalid", "true");
   }
+
+  // Transient highlight — auto-clears. Never sets aria-invalid, which would
+  // leave a persistent red border on fields that are only "missing for the
+  // directory" (not actually invalid input).
+  el.classList.remove("wlth-dir-flash");
+  void (el as HTMLElement).offsetWidth; // force reflow so the animation restarts
+  el.classList.add("wlth-dir-flash");
+  window.setTimeout(() => el.classList.remove("wlth-dir-flash"), 3200);
 }
