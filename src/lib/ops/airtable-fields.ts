@@ -124,6 +124,8 @@ export const MEMBER_FIELDS = {
   emailSuppressionActive: "Email suppression active",
   /** Attachment — profile photo shown in the member directory. */
   profilePhoto: "Profile photo",
+  /** URL text — the public Vercel Blob URL (source of truth + blob lifecycle). */
+  profilePhotoUrl: "Profile photo URL",
   /** Single select — "Not in directory" | "Incomplete" | "Active". */
   memberDirectoryStatus: "Member directory status",
   /** Checkbox — first directory invitation has been shown/dismissed. */

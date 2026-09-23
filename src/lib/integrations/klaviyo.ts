@@ -288,11 +288,11 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
     let cursor: string | undefined;
     do {
       const cursorParam = cursor
-        ? `?page[cursor]=${encodeURIComponent(cursor)}`
+        ? `&page[cursor]=${encodeURIComponent(cursor)}`
         : "";
       const res = await request(
         "GET",
-        `/lists/${encodeURIComponent(listId)}/relationships/profiles/${cursorParam}`
+        `/lists/${encodeURIComponent(listId)}/profiles/?fields[profile]=email&page[size]=100${cursorParam}`
       );
       const body = res.data as {
         data?: Array<{ attributes?: { email?: string } }>;
@@ -343,7 +343,7 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
                 email?: {
                   marketing?: {
                     consent?: string;
-                    suppressions?: unknown[];
+                    suppression?: unknown[];
                     list_suppressions?: unknown[];
                   };
                 };
@@ -358,7 +358,7 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
           const marketing = item.attributes?.subscriptions?.email?.marketing;
           const consent = (marketing?.consent ?? "").trim();
           const suppressions = [
-            ...(marketing?.suppressions ?? []),
+            ...(marketing?.suppression ?? []),
             ...(marketing?.list_suppressions ?? []),
           ];
           map.set(email, {

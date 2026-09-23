@@ -1242,7 +1242,12 @@ export function recordToProfileDto(record: AirtableRecord) {
     }
   }
 
-  const photoUrls = photoUrlsFromField(f[MEMBER_FIELDS.profilePhoto]);
+  // Source of truth is the "Profile photo URL" field (the stable public Vercel
+  // Blob URL). Fall back to the attachment for legacy rows that only have it.
+  const profilePhotoUrl = fieldStr(f, MEMBER_FIELDS.profilePhotoUrl);
+  const photoUrls = profilePhotoUrl
+    ? [profilePhotoUrl]
+    : photoUrlsFromField(f[MEMBER_FIELDS.profilePhoto]);
 
   return {
     airtableRecordId: record.id,

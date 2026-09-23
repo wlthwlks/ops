@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { put } from "@vercel/blob";
+import { put, del } from "@vercel/blob";
 import { optionsCors, withCors } from "@/lib/forms/cors";
 import {
   extractMemberstackToken,
@@ -9,6 +9,7 @@ import {
   recordToProfileDtoResolved,
   updateMemberProfile,
   applyMemberDirectoryStatus,
+  findMemberByMemberstackId,
 } from "@/lib/forms/airtable/members-sync";
 import { MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
 import { FormsError } from "@/lib/forms/errors";
@@ -24,6 +25,40 @@ const ALLOWED_TYPES = new Set([
   "image/png",
   "image/webp",
 ]);
+
+/** Read the member's current profile-photo blob URL (blank if none). */
+async function readCurrentPhotoUrl(memberstackId: string): Promise<string> {
+  const rows = await findMemberByMemberstackId(memberstackId);
+  const v = rows[0]?.fields?.[MEMBER_FIELDS.profilePhotoUrl];
+  return typeof v === "string" ? v.trim() : "";
+}
+
+/** Best-effort blob deletion — never throws, never blocks the response. */
+async function deleteBlobBestEffort(
+  url: string,
+  memberstackId: string
+): Promise<void> {
+  if (!url) return;
+  try {
+    await del(url);
+    console.error(
+      JSON.stringify({
+        event: "profile_photo_blob_deleted",
+        memberstackId,
+        url,
+      })
+    );
+  } catch (e) {
+    console.error(
+      JSON.stringify({
+        event: "profile_photo_blob_delete_failed",
+        memberstackId,
+        url,
+        error: e instanceof Error ? e.message : String(e),
+      })
+    );
+  }
+}
 
 export async function OPTIONS(request: Request) {
   return optionsCors(request);
@@ -100,6 +135,10 @@ export async function POST(request: Request) {
 
     const bytes = Buffer.from(await file.arrayBuffer());
     const ext = contentType === "image/png" ? "png" : contentType === "image/webp" ? "webp" : "jpg";
+
+    // Read the previous blob URL so we can delete it after the new photo is saved.
+    const oldUrl = await readCurrentPhotoUrl(member.id);
+
     const blob = await put(`profile-photos/${member.id}.${ext}`, bytes, {
       access: "public",
       contentType,
@@ -109,11 +148,17 @@ export async function POST(request: Request) {
     const result = await updateMemberProfile({
       memberstackId: member.id,
       patch: {
+        [MEMBER_FIELDS.profilePhotoUrl]: blob.url,
         [MEMBER_FIELDS.profilePhoto]: [
           { url: blob.url, filename: file.name || `photo.${ext}` },
         ],
       },
     });
+
+    // Best-effort cleanup of the previous blob (never blocks the response).
+    if (oldUrl && oldUrl !== blob.url) {
+      await deleteBlobBestEffort(oldUrl, member.id);
+    }
 
     console.error(
       JSON.stringify({
@@ -121,6 +166,7 @@ export async function POST(request: Request) {
         memberstackId: member.id,
         airtableRecordId: result.record?.id ?? null,
         url: blob.url,
+        previousUrl: oldUrl || null,
         bytes: file.size,
         contentType,
         shadowed: result.shadowed,
@@ -191,10 +237,18 @@ export async function DELETE(request: Request) {
       request
     );
 
+    const oldUrl = await readCurrentPhotoUrl(member.id);
+
     const result = await updateMemberProfile({
       memberstackId: member.id,
-      patch: { [MEMBER_FIELDS.profilePhoto]: [] },
+      patch: {
+        [MEMBER_FIELDS.profilePhotoUrl]: "",
+        [MEMBER_FIELDS.profilePhoto]: [],
+      },
     });
+
+    // Best-effort cleanup of the previous blob (never blocks the response).
+    await deleteBlobBestEffort(oldUrl, member.id);
 
     // Removing a required photo demotes an Active directory member to
     // Incomplete so the stored status never claims a photo is present.
@@ -215,6 +269,7 @@ export async function DELETE(request: Request) {
         event: "profile_photo_removed",
         memberstackId: member.id,
         airtableRecordId: result.record?.id ?? null,
+        url: oldUrl || null,
         directoryStatus: directoryStatus ?? storedStatus,
       })
     );
