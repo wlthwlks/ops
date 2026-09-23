@@ -97,7 +97,13 @@ export default defineConfig({
             plugins: [removeCssLayers, prefixwrap("#wlth-getting-started-root")],
           },
         }
-      : undefined,
+      : widget === "member-directory"
+        ? {
+            postcss: {
+              plugins: [removeCssLayers, prefixwrap("#wlth-member-directory-root")],
+            },
+          }
+        : undefined,
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
   },
@@ -111,14 +117,18 @@ export default defineConfig({
           ? "WlthSignup"
           : widget === "update-details"
             ? "WlthUpdateDetails"
-            : "WlthGettingStarted",
+            : widget === "member-directory"
+              ? "WlthMemberDirectory"
+              : "WlthGettingStarted",
       formats: ["iife"],
       fileName: () =>
         widget === "signup"
           ? "signup.js"
           : widget === "update-details"
             ? "update-details.js"
-            : "getting-started.js",
+            : widget === "member-directory"
+              ? "member-directory.js"
+              : "getting-started.js",
     },
     rollupOptions: {
       output: {
@@ -129,7 +139,9 @@ export default defineConfig({
               ? "signup.css"
               : widget === "update-details"
                 ? "update-details.css"
-                : "getting-started.css";
+                : widget === "member-directory"
+                  ? "member-directory.css"
+                  : "getting-started.css";
           }
           return "assets/[name]-[hash][extname]";
         },

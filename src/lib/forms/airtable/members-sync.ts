@@ -1296,6 +1296,7 @@ export function recordToProfileDto(record: AirtableRecord) {
     availability,
     profilePhoto: photoUrls,
     profilePhotoThumb,
+    dateJoined: fieldStr(f, MEMBER_FIELDS.dateJoined),
     memberDirectoryStatus: fieldStr(f, MEMBER_FIELDS.memberDirectoryStatus),
     memberDirectoryInviteSeen: isTruthyField(f[MEMBER_FIELDS.memberDirectoryInviteSeen]),
     recurringIntroStatus: fieldStr(f, MEMBER_FIELDS.recurringIntroStatus),

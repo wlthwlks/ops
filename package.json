@@ -38,10 +38,11 @@
     "members:export-churned": "npx tsx scripts/export-churned-members.ts",
     "airtable:export-small-cities": "npx tsx scripts/export-small-cities.ts",
     "airtable:export-migration": "npx tsx scripts/export-airtable-migration.ts",
-    "widgets:build": "WIDGET=signup vite build --config widgets/vite.config.ts && WIDGET=update-details vite build --config widgets/vite.config.ts && WIDGET=getting-started vite build --config widgets/vite.config.ts",
+    "widgets:build": "WIDGET=signup vite build --config widgets/vite.config.ts && WIDGET=update-details vite build --config widgets/vite.config.ts && WIDGET=getting-started vite build --config widgets/vite.config.ts && WIDGET=member-directory vite build --config widgets/vite.config.ts",
     "widgets:build:signup": "WIDGET=signup vite build --config widgets/vite.config.ts",
     "widgets:build:update": "WIDGET=update-details vite build --config widgets/vite.config.ts",
     "widgets:build:getting-started": "WIDGET=getting-started vite build --config widgets/vite.config.ts",
+    "widgets:build:directory": "WIDGET=member-directory vite build --config widgets/vite.config.ts",
     "forms:city-alias-dry-run": "npx tsx scripts/report-city-alias-dry-run.ts",
     "security:check-files": "tsx scripts/check-sensitive-files.ts",
     "test:e2e": "playwright test"

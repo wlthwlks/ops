@@ -16,6 +16,7 @@ const isPublicRoute = createRouteMatcher([
   // Public APIs used by the Webflow widgets
   "/api/onboarding(.*)",
   "/api/member(.*)",
+  "/api/directory(.*)",
   "/api/reference-data(.*)",
   "/api/forms(.*)",
 ]);
