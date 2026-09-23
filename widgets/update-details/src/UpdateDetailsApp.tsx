@@ -61,6 +61,7 @@ import {
   missingDirectoryLabels,
   scrollToDirectoryField,
 } from "../../shared/directory";
+import { optimizeImageFile } from "../../shared/image-optimize";
 
 const passwordSchema = z
   .object({
@@ -1284,8 +1285,9 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     setPhotoError("");
     setPhotoNotice("");
     try {
+      const optimized = await optimizeImageFile(file);
       const fd = new FormData();
-      fd.append("file", file);
+      fd.append("file", optimized);
       const res = await fetch(`${props.apiBase}/api/member/profile-photo`, {
         method: "POST",
         headers: { "X-Memberstack-Token": token },

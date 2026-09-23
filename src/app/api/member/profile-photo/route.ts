@@ -19,7 +19,7 @@ import { recordIntegrationError } from "@/lib/forms/webhooks/store";
 
 export const runtime = "nodejs";
 
-const MAX_BYTES = 5 * 1024 * 1024; // 5MB
+const MAX_BYTES = 4 * 1024 * 1024; // 4MB (client optimizes to ~2MB; this is the hard guard)
 const ALLOWED_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -125,7 +125,7 @@ export async function POST(request: Request) {
           {
             success: false,
             code: "PROFILE_VALIDATION_FAILED",
-            message: "Please choose an image under 5MB.",
+            message: "Please choose an image under 4MB.",
           },
           { status: 400 }
         ),

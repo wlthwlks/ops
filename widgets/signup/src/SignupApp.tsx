@@ -61,6 +61,7 @@ import {
   displayUrl,
   normalizeSocialUrl,
 } from "../../shared/profile-urls";
+import { optimizeImageFile } from "../../shared/image-optimize";
 
 export { runOutboundCheckout } from "../../shared/checkout-outbound";
 
@@ -802,8 +803,9 @@ export function SignupApp(props: { apiBase: string }) {
     setSignupPhotoUploading(true);
     setSignupPhotoError("");
     try {
+      const optimized = await optimizeImageFile(file);
       const fd = new FormData();
-      fd.append("file", file);
+      fd.append("file", optimized);
       const res = await fetch(`${props.apiBase}/api/member/profile-photo`, {
         method: "POST",
         headers: { "X-Memberstack-Token": token },
