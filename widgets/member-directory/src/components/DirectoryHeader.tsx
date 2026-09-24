@@ -1,14 +1,18 @@
-import type { Member, Viewer } from "../lib/directory";
+import type { Viewer } from "../lib/directory";
 
 type DirectoryHeaderProps = {
-  members: Member[];
+  total: number;
+  cityCount: number;
+  fieldCount: number;
   viewer: Viewer | null;
 };
 
-export function DirectoryHeader({ members, viewer }: DirectoryHeaderProps) {
-  const cityCount = new Set(members.map((m) => m.city).filter(Boolean)).size;
-  const fieldCount = new Set(members.map((m) => m.field).filter(Boolean)).size;
-
+export function DirectoryHeader({
+  total,
+  cityCount,
+  fieldCount,
+  viewer,
+}: DirectoryHeaderProps) {
   return (
     <section className="mx-auto w-full min-w-0 max-w-6xl px-5 pb-10 pt-20 sm:px-8 sm:pb-14 sm:pt-24">
       <p className="animate-fade-up text-[11px] font-semibold uppercase tracking-brand text-primary">
@@ -34,7 +38,7 @@ export function DirectoryHeader({ members, viewer }: DirectoryHeaderProps) {
         style={{ animationDelay: "0.18s" }}
       >
         {[
-          { label: "Members", value: members.length },
+          { label: "Members", value: total },
           { label: "Cities", value: cityCount },
           { label: "Fields", value: fieldCount },
         ].map((stat) => (

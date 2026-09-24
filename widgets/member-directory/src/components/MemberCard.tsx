@@ -19,6 +19,7 @@ export function MemberCard({ member, onSelect }: MemberCardProps) {
         <img
           src={member.photo}
           alt={`${member.name}${member.role ? `, ${member.role}` : ""}`}
+          loading="lazy"
           className="size-14 shrink-0 rounded-full object-cover"
         />
         <div className="min-w-0 flex-1">
