@@ -1994,11 +1994,11 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
             requestAnimationFrame(() => scrollToDirectoryField(first));
           });
         }
-        setOk(
-          first === "photo"
-            ? "Profile photo is required to join the Member Directory."
-            : "Your profile isn't ready for the directory yet. Please complete the highlighted information."
-        );
+        if (first !== "photo") {
+          setOk(
+            "Your profile isn't ready for the directory yet. Please complete the highlighted information."
+          );
+        }
         track("DIRECTORY_INCOMPLETE", { missing: missingKeys });
       } else {
         setOk("Your profile is up to date and ready for stronger introductions.");
