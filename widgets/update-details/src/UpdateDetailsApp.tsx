@@ -62,6 +62,7 @@ import {
   scrollToDirectoryField,
 } from "../../shared/directory";
 import { optimizeImageVariants } from "../../shared/image-optimize";
+import { DirectoryJoinModal } from "../../shared/DirectoryJoinModal";
 
 const passwordSchema = z
   .object({
@@ -175,6 +176,44 @@ function memberIdFromToken(token: string): string {
   return "";
 }
 
+function buildDefaultsFromProfile(p: Record<string, unknown>): ProfileForm {
+  const cityUnavailable = Boolean(p.previousCityUnavailable);
+  const countryCodeDefault = String(p.countryCode || "");
+  const phonePrefixDefault = String(p.phonePrefix || "");
+  return {
+    firstName: String(p.firstName || ""),
+    lastName: String(p.lastName || ""),
+    age: String(p.age || ""),
+    email: String(p.email || ""),
+    phone: String(p.phone || ""),
+    phonePrefix: phonePrefixDefault,
+    countryIso2: "",
+    postCode: String(p.postCode || ""),
+    countryCode: countryCodeDefault,
+    cityCode: cityUnavailable ? "" : String(p.cityCode || ""),
+    availability: Array.isArray(p.availability) ? (p.availability as string[]) : [],
+    professionalHeadline: String(p.professionalHeadline || ""),
+    profileBio: String(p.profileBio || ""),
+    businessName: String(p.businessName || ""),
+    businessWebsite: String(p.businessWebsite || ""),
+    primaryIndustry: String(p.primaryIndustry || ""),
+    otherIndustry: String(p.otherIndustry || ""),
+    businessStage: String(p.businessStage || ""),
+    annualRevenue: String(p.annualRevenue || ""),
+    businessDescription: String(p.businessDescription || ""),
+    ninetyDayGoal: String(p.ninetyDayGoal || ""),
+    helpWanted: Array.isArray(p.helpWanted) ? (p.helpWanted as string[]) : [],
+    helpWantedContext: String(p.helpWantedContext || ""),
+    expertiseOffered: Array.isArray(p.expertiseOffered)
+      ? (p.expertiseOffered as string[])
+      : [],
+    expertiseContext: String(p.expertiseContext || ""),
+    connectionType: String(p.connectionType || ""),
+    topicsToDiscuss: String(p.topicsToDiscuss || ""),
+    socialLinks: Array.isArray(p.socialLinks) ? (p.socialLinks as SocialLink[]) : [],
+  };
+}
+
 export function UpdateDetailsApp(props: { apiBase: string }) {
   const [token, setToken] = useState<string | null>(null);
   const [memberId, setMemberId] = useState("");
@@ -242,7 +281,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const [directoryRequested, setDirectoryRequested] = useState(false);
   const [directoryStatus, setDirectoryStatus] = useState("");
   const [showDirectoryInvite, setShowDirectoryInvite] = useState(false);
-  const [inviteSaving, setInviteSaving] = useState(false);
   const [introAvailable, setIntroAvailable] = useState(true);
   const [introTouched, setIntroTouched] = useState(false);
   const [profilePhotoUrl, setProfilePhotoUrl] = useState("");
@@ -616,41 +654,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         setPreviousCityUnavailable(cityUnavailable);
         setPreviousCityLabel(String(p.previousCityLabel || p.city || ""));
 
-        const countryCodeDefault = String(p.countryCode || "");
-        const phonePrefixDefault = String(p.phonePrefix || "");
-        const defaults: ProfileForm = {
-          firstName: String(p.firstName || ""),
-          lastName: String(p.lastName || ""),
-          age: String(p.age || ""),
-          email: String(p.email || ""),
-          phone: String(p.phone || ""),
-          phonePrefix: phonePrefixDefault,
-          countryIso2: "",
-          postCode: String(p.postCode || ""),
-          countryCode: countryCodeDefault,
-          cityCode: cityUnavailable ? "" : String(p.cityCode || ""),
-          availability: Array.isArray(p.availability) ? (p.availability as string[]) : [],
-          professionalHeadline: String(p.professionalHeadline || ""),
-          profileBio: String(p.profileBio || ""),
-          businessName: String(p.businessName || ""),
-          businessWebsite: String(p.businessWebsite || ""),
-          primaryIndustry: String(p.primaryIndustry || ""),
-          otherIndustry: String(p.otherIndustry || ""),
-          businessStage: String(p.businessStage || ""),
-          annualRevenue: String(p.annualRevenue || ""),
-          businessDescription: String(p.businessDescription || ""),
-          ninetyDayGoal: String(p.ninetyDayGoal || ""),
-          helpWanted: Array.isArray(p.helpWanted) ? (p.helpWanted as string[]) : [],
-          helpWantedContext: String(p.helpWantedContext || ""),
-          expertiseOffered: Array.isArray(p.expertiseOffered)
-            ? (p.expertiseOffered as string[])
-            : [],
-          expertiseContext: String(p.expertiseContext || ""),
-          connectionType: String(p.connectionType || ""),
-          topicsToDiscuss: String(p.topicsToDiscuss || ""),
-          socialLinks:
-            Array.isArray(p.socialLinks) ? (p.socialLinks as SocialLink[]) : [],
-        };
+        const defaults = buildDefaultsFromProfile(p);
         form.reset(defaults);
 
         if (Array.isArray(p.socialLinks) && p.socialLinks.length > 0) {
@@ -1350,47 +1354,30 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
     }
   };
 
-  const dismissDirectoryInvite = async (optIn: boolean) => {
-    if (!token || inviteSaving) return;
-    setInviteSaving(true);
+  const reloadProfileAfterJoin = async () => {
+    if (!token) return;
     try {
-      if (optIn) {
-        const missing = computeMissingDirectoryFields({
-          profilePhotoUrls: profilePhotoUrl ? [profilePhotoUrl] : [],
-          firstName: form.getValues("firstName") || "",
-          lastName: form.getValues("lastName") || "",
-          professionalHeadline: form.getValues("professionalHeadline") || "",
-          profileBio: form.getValues("profileBio") || "",
-          businessName: form.getValues("businessName") || "",
-          cityCode: form.getValues("cityCode") || "",
-          city: "",
-          primaryIndustry: form.getValues("primaryIndustry") || "",
-          businessWebsite: form.getValues("businessWebsite") || "",
-          socialLinks,
-        });
-        setDirectoryRequested(true);
-        track("DIRECTORY_OPT_IN");
-        const res = await patchProfile({
-          memberDirectoryRequested: true,
-          memberDirectoryInviteSeen: true,
-        });
-        const dirStatus = (res as Record<string, unknown>).directoryStatus;
-        if (typeof dirStatus === "string") setDirectoryStatus(dirStatus);
-        if (missing.length > 0) {
-          const first = missing[0];
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => scrollToDirectoryField(first));
-          });
-        }
-      } else {
-        await patchProfile({ memberDirectoryInviteSeen: true });
+      const profileRes = await api(props.apiBase, "/api/member/profile", { token });
+      const p = (profileRes.profile || {}) as Record<string, unknown>;
+      const cityUnavailable = Boolean(p.previousCityUnavailable);
+      setPreviousCityUnavailable(cityUnavailable);
+      setPreviousCityLabel(String(p.previousCityLabel || p.city || ""));
+      form.reset(buildDefaultsFromProfile(p));
+      if (Array.isArray(p.socialLinks) && p.socialLinks.length > 0) {
+        setSocialLinks(p.socialLinks as SocialLink[]);
+        setSocialLinksErrors((p.socialLinks as SocialLink[]).map(() => ""));
       }
-      track("DIRECTORY_INVITE_SEEN");
+      const photoUrls = Array.isArray(p.profilePhoto)
+        ? (p.profilePhoto as string[])
+        : [];
+      setProfilePhotoUrl(photoUrls[0] || "");
+      setDirectoryStatus(String(p.memberDirectoryStatus || "").trim());
+      setDirectoryRequested(true);
+      const introStatus = String(p.recurringIntroStatus || "").trim().toLowerCase();
+      setIntroAvailable(introStatus !== "excluded");
+      setSaveStatus("saved");
     } catch {
       /* ignore */
-    } finally {
-      setShowDirectoryInvite(false);
-      setInviteSaving(false);
     }
   };
 
@@ -3398,44 +3385,16 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       </div>
 
       {directoryEnabled && showDirectoryInvite && (
-        <div className="wlth-invite-overlay" role="dialog" aria-modal="true">
-          <div className="wlth-invite">
-            <h3>We&apos;re launching the WLTH WLKS Member Directory 🎉</h3>
-            <p className="wlth-muted">
-              Connect with amazing women entrepreneurs from around the world and let other
-              members discover you and your business.
-            </p>
-            <p className="wlth-muted" style={{ marginBottom: 12 }}>
-              If you join, other members will see: your profile photo, first and last name,
-              headline, bio, business name, location, industry, LinkedIn, website and social
-              profiles.
-            </p>
-            <label className="wlth-intention__check">
-              <input
-                type="checkbox"
-                onChange={(e) => setDirectoryRequested(e.target.checked)}
-              />
-              <span>I want to be part of the WLTH WLKS Member Directory</span>
-            </label>
-            <div className="wlth-actions" style={{ marginTop: 16 }}>
-              <button
-                type="button"
-                className="wlth-btn-primary"
-                disabled={inviteSaving}
-                onClick={() => void dismissDirectoryInvite(true)}
-              >
-                {inviteSaving ? "Saving…" : "Join Directory"}
-              </button>
-              <button
-                type="button"
-                className="wlth-btn-secondary"
-                onClick={() => void dismissDirectoryInvite(false)}
-              >
-                Not right now
-              </button>
-            </div>
-          </div>
-        </div>
+        <DirectoryJoinModal
+          apiBase={props.apiBase}
+          token={token}
+          missingKeys={directoryMissingKeys}
+          onJoined={() => {
+            setShowDirectoryInvite(false);
+            void reloadProfileAfterJoin();
+          }}
+          onDismiss={() => setShowDirectoryInvite(false)}
+        />
       )}
     </div>
   );
