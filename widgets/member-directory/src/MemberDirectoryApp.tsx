@@ -4,6 +4,8 @@ import {
   logMemberstackDiagnostics,
   tryResolveSessionAccessToken,
 } from "../../shared/memberstack-auth";
+import { DirectoryJoinModal } from "../../shared/DirectoryJoinModal";
+import type { DirectoryFieldKey } from "../../shared/directory";
 import { DirectoryHeader } from "./components/DirectoryHeader";
 import { DirectoryClient } from "./components/DirectoryClient";
 import type { DirectoryPage, DirectoryView, Member, Viewer } from "./lib/directory";
@@ -11,13 +13,18 @@ import type { DirectoryPage, DirectoryView, Member, Viewer } from "./lib/directo
 type Props = {
   apiBase: string;
   allowAnonymous?: boolean;
+  gettingStartedUrl: string;
 };
 
 type Gate = "loading" | "ready" | "logged_out" | "error";
 
 const PAGE_SIZE = 12;
 
-export function MemberDirectoryApp({ apiBase, allowAnonymous }: Props) {
+export function MemberDirectoryApp({
+  apiBase,
+  allowAnonymous,
+  gettingStartedUrl,
+}: Props) {
   const [gate, setGate] = useState<Gate>("loading");
   const [error, setError] = useState<string | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -99,15 +106,23 @@ export function MemberDirectoryApp({ apiBase, allowAnonymous }: Props) {
     );
   }
 
-  return <DirectoryExplorer apiBase={apiBase} token={token} />;
+  return (
+    <DirectoryExplorer
+      apiBase={apiBase}
+      token={token}
+      gettingStartedUrl={gettingStartedUrl}
+    />
+  );
 }
 
 function DirectoryExplorer({
   apiBase,
   token,
+  gettingStartedUrl,
 }: {
   apiBase: string;
   token: string | null;
+  gettingStartedUrl: string;
 }) {
   const [query, setQuery] = useState("");
   const [view, setView] = useState<DirectoryView>("recommended");
@@ -121,6 +136,12 @@ function DirectoryExplorer({
   const [cities, setCities] = useState<string[]>([]);
   const [fields, setFields] = useState<Array<{ code: string; label: string }>>([]);
   const [page, setPage] = useState(1);
+
+  const [accessDenied, setAccessDenied] = useState(false);
+  const [noRecord, setNoRecord] = useState(false);
+  const [missingFields, setMissingFields] = useState<DirectoryFieldKey[]>([]);
+  const [checked, setChecked] = useState(false);
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -146,7 +167,7 @@ function DirectoryExplorer({
     [apiBase, token, query, city, field, view]
   );
 
-  // Fetch page 1 whenever the filters change (or on mount).
+  // Fetch page 1 whenever the filters change, on mount, or after a join.
   useEffect(() => {
     const generation = ++generationRef.current;
     let cancelled = false;
@@ -157,13 +178,17 @@ function DirectoryExplorer({
       try {
         const res = await fetchDirectoryPage(1);
         if (cancelled || generation !== generationRef.current) return;
-        setMembers(res.members);
+        setAccessDenied(Boolean(res.accessDenied));
+        setNoRecord(Boolean(res.noRecord));
+        setMissingFields(res.missingFields || []);
+        setMembers(res.members || []);
         setViewer(res.viewer);
-        setTotal(res.total);
-        setTotalPages(res.totalPages);
-        setCities(res.cities);
-        setFields(res.fields);
+        setTotal(res.total || 0);
+        setTotalPages(res.totalPages || 1);
+        setCities(res.cities || []);
+        setFields(res.fields || []);
         setPage(1);
+        setChecked(true);
       } catch (e) {
         if (!cancelled && generation === generationRef.current) {
           setError(e instanceof Error ? e.message : "Could not load the directory");
@@ -178,7 +203,14 @@ function DirectoryExplorer({
     return () => {
       cancelled = true;
     };
-  }, [fetchDirectoryPage]);
+  }, [fetchDirectoryPage, refreshNonce]);
+
+  // A member with a Memberstack account but no Airtable record must re-log in.
+  useEffect(() => {
+    if (noRecord) {
+      window.location.replace("/");
+    }
+  }, [noRecord]);
 
   const loadMore = useCallback(async () => {
     if (loadingMore) return;
@@ -196,6 +228,39 @@ function DirectoryExplorer({
       if (generation === generationRef.current) setLoadingMore(false);
     }
   }, [loadingMore, page, fetchDirectoryPage]);
+
+  if (noRecord) {
+    return <main className="min-h-dvh overflow-x-hidden" />;
+  }
+
+  if (accessDenied || !checked) {
+    return (
+      <main className="min-h-dvh overflow-x-hidden">
+        {accessDenied && checked && (
+          <DirectoryJoinModal
+            apiBase={apiBase}
+            token={token}
+            missingKeys={missingFields}
+            title="Unlock the Member Directory"
+            description="The Member Directory is a two-way street — you get to discover the community, and the community gets to discover you. Join now so other founders can find you too."
+            secondaryLabel="Back to Getting Started"
+            onJoined={() => setRefreshNonce((n) => n + 1)}
+            onDismiss={() => window.location.assign(gettingStartedUrl)}
+          />
+        )}
+        {!checked && (
+          <div className="flex min-h-dvh flex-col items-center justify-center gap-4 px-5 text-center">
+            <p className="text-[11px] font-semibold uppercase tracking-brand text-primary">
+              WLTH WLKS
+            </p>
+            <p className="text-[15px] font-light text-foreground">
+              Loading the directory…
+            </p>
+          </div>
+        )}
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-dvh overflow-x-hidden">

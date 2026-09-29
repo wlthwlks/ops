@@ -39,7 +39,7 @@ Use the shared helper exposed by the signup bundle as `window.WlthSignupFlow` (s
 ## Getting Started
 
 ```html
-<div id="wlth-getting-started-root" data-directory-url="https://women.wlthwlks.com/member-directory"></div>
+<div id="wlth-getting-started-root" data-api-base="https://ops.wlthwlks.com" data-directory-url="https://women.wlthwlks.com/member-directory"></div>
 <link rel="stylesheet" href="https://ops.wlthwlks.com/widgets/getting-started/v1/getting-started.css" />
 <script src="https://ops.wlthwlks.com/widgets/getting-started/v1/getting-started.js" defer></script>
 ```
@@ -48,13 +48,35 @@ Memberstack DOM script must be on the page (same as signup/update-details).
 
 | Attribute | Purpose | Required? |
 |---|---|---|
+| `data-api-base` | Base URL of the ops API | Yes (widgets fetch profile + directory status) |
 | `data-directory-url` | URL for Member Directory CTA button | Optional (defaults to `#`) |
 | `data-allow-anonymous` | Set to `true` to skip Memberstack gate (dev only) | Optional (defaults `false`) |
 
 Behaviour:
 - Resolves Memberstack session via shared `tryResolveSessionAccessToken`
 - Logged out → "Log in to view Getting Started" message
-- Authed → full Getting Started page
+- Authed → full Getting Started page (may show the Member Directory join popup)
+
+## Member Directory
+
+```html
+<div id="wlth-member-directory-root" data-api-base="https://ops.wlthwlks.com" data-getting-started-url="/getting-started"></div>
+<link rel="stylesheet" href="https://ops.wlthwlks.com/widgets/member-directory/v1/member-directory.css" />
+<script src="https://ops.wlthwlks.com/widgets/member-directory/v1/member-directory.js" defer></script>
+```
+
+Memberstack DOM script must be on the page (same as signup/update-details).
+
+| Attribute | Purpose | Required? |
+|---|---|---|
+| `data-api-base` | Base URL of the ops API | Yes |
+| `data-getting-started-url` | Destination for the "Back to Getting Started" button on the join gate | Optional (defaults `/getting-started`) |
+| `data-allow-anonymous` | Set to `true` to skip Memberstack gate (dev only) | Optional (defaults `false`) |
+
+Behaviour:
+- Members-only: logged-out visitors see "Members only".
+- Only members who are themselves in the directory (status `Active`) can browse it.
+- Otherwise the widget shows the "Unlock the Member Directory" join gate (checkbox + missing fields), and reloads the directory once they join.
 
 ## Staging
 

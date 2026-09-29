@@ -1,3 +1,5 @@
+import type { DirectoryFieldKey } from "../../../shared/directory";
+
 export type Member = {
   id: string;
   name: string;
@@ -46,4 +48,7 @@ export type DirectoryPage = {
   totalPages: number;
   cities: string[];
   fields: Array<{ code: string; label: string }>;
+  accessDenied: boolean;
+  noRecord: boolean;
+  missingFields: DirectoryFieldKey[];
 };

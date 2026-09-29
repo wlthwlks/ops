@@ -21,6 +21,10 @@ import {
 } from "@/lib/forms/reference-data";
 import type { AirtableRecord } from "@/lib/integrations/airtable";
 import { MEMBERS_TABLE, MEMBER_FIELDS } from "@/lib/ops/airtable-fields";
+import {
+  evaluateDirectoryCompleteness,
+  directoryInputFromProfileDto,
+} from "@/lib/forms/directory";
 
 export type DirectoryView =
   | "recommended"
@@ -84,6 +88,12 @@ export type DirectoryPage = {
   totalPages: number;
   cities: string[];
   fields: Array<{ code: string; label: string }>;
+  /** True when the viewer is not allowed to browse the directory. */
+  accessDenied: boolean;
+  /** True when the viewer has a Memberstack account but no Airtable record. */
+  noRecord: boolean;
+  /** Directory-required field keys the viewer still needs to complete. */
+  missingFields: string[];
 };
 
 export function directoryMemberToDto(record: AirtableRecord) {
@@ -237,12 +247,17 @@ type ViewerRaw = {
   primaryIndustry: string;
   otherIndustry: string;
   businessStage: string;
+  memberDirectoryStatus: string;
+  missingFields: string[];
 };
 
 async function resolveViewer(memberstackId: string): Promise<ViewerRaw | null> {
   const rows = await findMemberByMemberstackId(memberstackId);
   if (rows.length === 0) return null;
   const p = recordToProfileDto(rows[0]);
+  const completeness = evaluateDirectoryCompleteness(
+    directoryInputFromProfileDto(p)
+  );
   return {
     airtableRecordId: rows[0].id,
     name: [p.firstName, p.lastName].filter(Boolean).join(" ") || p.name || "",
@@ -250,6 +265,8 @@ async function resolveViewer(memberstackId: string): Promise<ViewerRaw | null> {
     primaryIndustry: p.primaryIndustry,
     otherIndustry: p.otherIndustry,
     businessStage: p.businessStage,
+    memberDirectoryStatus: String(p.memberDirectoryStatus || "").trim(),
+    missingFields: completeness.missing,
   };
 }
 
@@ -284,6 +301,50 @@ export async function listDirectoryMembersPage(
     resolveViewer(params.viewerMemberstackId),
   ]);
 
+  // Restrict access: only members who are themselves Active in the directory
+  // may browse it. No Airtable record → caller must re-authenticate.
+  if (!viewer) {
+    return {
+      members: [],
+      viewer: null,
+      total: 0,
+      page,
+      pageSize,
+      totalPages: 0,
+      cities: [],
+      fields: [],
+      accessDenied: true,
+      noRecord: true,
+      missingFields: [],
+    };
+  }
+
+  const viewerField = viewerFieldLabel(viewer, refs);
+  const viewerStage = refs.stageLabels.get(viewer.businessStage) || "";
+  const viewerDisplay: DirectoryViewer = {
+    name: viewer.name,
+    city: viewer.city,
+    field: viewerField,
+    stage: viewerStage,
+  };
+
+  const isActive = /^active$/i.test(viewer.memberDirectoryStatus);
+  if (!isActive) {
+    return {
+      members: [],
+      viewer: viewerDisplay,
+      total: 0,
+      page,
+      pageSize,
+      totalPages: 0,
+      cities: [],
+      fields: [],
+      accessDenied: true,
+      noRecord: false,
+      missingFields: viewer.missingFields,
+    };
+  }
+
   const all = rawRecords
     .map(directoryMemberToDto)
     .map((raw) => resolveMember(raw, refs));
@@ -304,9 +365,7 @@ export async function listDirectoryMembersPage(
     .map(([code, label]) => ({ code, label }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
-  const viewerCity = viewer?.city ?? "";
-  const viewerField = viewer ? viewerFieldLabel(viewer, refs) : "";
-  const viewerStage = viewer ? refs.stageLabels.get(viewer.businessStage) || "" : "";
+  const viewerCity = viewer.city;
 
   let filtered = all.filter((m) => {
     if (viewer && m.id === viewer.airtableRecordId) return false;
@@ -349,14 +408,15 @@ export async function listDirectoryMembersPage(
 
   return {
     members,
-    viewer: viewer
-      ? { name: viewer.name, city: viewer.city, field: viewerField, stage: viewerStage }
-      : null,
+    viewer: viewerDisplay,
     total,
     page,
     pageSize,
     totalPages,
     cities,
     fields,
+    accessDenied: false,
+    noRecord: false,
+    missingFields: [],
   };
 }

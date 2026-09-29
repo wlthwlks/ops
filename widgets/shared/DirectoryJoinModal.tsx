@@ -16,6 +16,10 @@ type Props = {
   missingKeys: DirectoryFieldKey[];
   onJoined: () => void;
   onDismiss: () => void;
+  title?: string;
+  description?: string;
+  /** Label for the secondary (dismiss) button. @default "Not right now" */
+  secondaryLabel?: string;
 };
 
 const FIELD_ORDER: DirectoryFieldKey[] = [
@@ -37,6 +41,9 @@ export function DirectoryJoinModal({
   missingKeys,
   onJoined,
   onDismiss,
+  title = "We're launching the WLTH WLKS Member Directory 🎉",
+  description = "Connect with amazing women entrepreneurs from around the world and let other members discover you and your business.",
+  secondaryLabel = "Not right now",
 }: Props) {
   const [checked, setChecked] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -189,11 +196,10 @@ export function DirectoryJoinModal({
     <div className="wldj-overlay" role="dialog" aria-modal="true">
       <div className="wldj-card">
         <h3 className="wldj-title">
-          We&apos;re launching the WLTH WLKS Member Directory 🎉
+          {title}
         </h3>
         <p className="wldj-muted">
-          Connect with amazing women entrepreneurs from around the world and let other
-          members discover you and your business.
+          {description}
         </p>
         <p className="wldj-muted">
           If you join, other members will see: your profile photo, first and last name,
@@ -389,7 +395,7 @@ export function DirectoryJoinModal({
             className="wldj-btn wldj-btn-secondary"
             onClick={() => void notNow()}
           >
-            Not right now
+            {secondaryLabel}
           </button>
         </div>
       </div>

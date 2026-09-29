@@ -8,8 +8,14 @@ function mount() {
   const apiBase = (el.dataset.apiBase || window.location.origin).replace(/\/$/, "");
   const allowAnonymous =
     (el.dataset.allowAnonymous || "").trim().toLowerCase() === "true";
+  const gettingStartedUrl =
+    (el.dataset.gettingStartedUrl || "/getting-started").trim() || "/getting-started";
   createRoot(el).render(
-    <MemberDirectoryApp apiBase={apiBase} allowAnonymous={allowAnonymous} />
+    <MemberDirectoryApp
+      apiBase={apiBase}
+      allowAnonymous={allowAnonymous}
+      gettingStartedUrl={gettingStartedUrl}
+    />
   );
 }
 
