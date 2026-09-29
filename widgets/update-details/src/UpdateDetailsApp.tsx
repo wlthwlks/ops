@@ -226,16 +226,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const [reactivating, setReactivating] = useState(false);
   const [refData, setRefData] = useState<RefData | null>(null);
   const [membershipPriceId, setMembershipPriceId] = useState("");
-  const [promoCode, setPromoCode] = useState("");
-  const [promoApplied, setPromoApplied] = useState<{
-    offerCode: string;
-    priceKey: string;
-    memberstackPriceId: string;
-    label: string | null;
-    description: string | null;
-  } | null>(null);
-  const [promoError, setPromoError] = useState<string | null>(null);
-  const [promoChecking, setPromoChecking] = useState(false);
   const [billing, setBilling] = useState<{
     membership: string;
     payment: string;
@@ -915,92 +905,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
   const needsReactivation = membershipDisplay.showBanner;
 
-  const applyPromoCode = async () => {
-    const code = promoCode.trim();
-    if (!code) {
-      setPromoApplied(null);
-      setPromoError("Enter a promo code.");
-      return;
-    }
-    setPromoChecking(true);
-    setPromoError(null);
-    setPromoApplied(null);
-    try {
-      const res = await api(props.apiBase, "/api/onboarding/billing-offer", {
-        method: "POST",
-        token: token || undefined,
-        body: JSON.stringify({ code }),
-      });
-      if (res.applied === true) {
-        setPromoApplied({
-          offerCode: String(res.offerCode || code),
-          priceKey: String(res.priceKey || ""),
-          memberstackPriceId: String(res.memberstackPriceId || ""),
-          label: typeof res.label === "string" ? res.label : null,
-          description: typeof res.description === "string" ? res.description : null,
-        });
-      } else {
-        setPromoError(
-          typeof res.message === "string"
-            ? res.message
-            : "This promo code is invalid or has expired."
-        );
-      }
-    } catch (e) {
-      setPromoError(
-        e instanceof Error && e.message
-          ? e.message
-          : "Could not validate promo code. Please try again."
-      );
-    } finally {
-      setPromoChecking(false);
-    }
-  };
-
-  const promoBlock = (
-    <div className="wlth-promo">
-      <label htmlFor="wlth-promo-code">
-        Have a trial code? Paste it here — it changes your price
-      </label>
-      <div className="wlth-promo-row">
-        <input
-          id="wlth-promo-code"
-          type="text"
-          autoComplete="off"
-          spellCheck={false}
-          placeholder="e.g. F87OFFER"
-          value={promoCode}
-          onChange={(e) => {
-            const v = e.target.value;
-            setPromoCode(v);
-            setPromoError(null);
-            if (
-              promoApplied &&
-              promoApplied.offerCode.toUpperCase() !== v.trim().toUpperCase()
-            ) {
-              setPromoApplied(null);
-            }
-          }}
-        />
-        <button
-          type="button"
-          className="wlth-btn-secondary"
-          disabled={promoChecking}
-          onClick={() => void applyPromoCode()}
-        >
-          {promoChecking ? "Checking…" : "Apply"}
-        </button>
-      </div>
-      {promoApplied && (
-        <p className="wlth-promo-ok">
-          <strong>{promoApplied.label || promoApplied.offerCode}</strong>
-          {promoApplied.description ? ` — ${promoApplied.description}` : ""}
-        </p>
-      )}
-      {promoError && <p className="wlth-promo-err">{promoError}</p>}
-    </div>
-  );
-
   const membershipBannerEl =
     billing && membershipDisplay.showBanner ? (
       <div className="wlth-reactivate" data-membership-state={membershipDisplay.kind}>
@@ -1043,7 +947,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
               Your paid access has expired. Subscribe again to restore full membership —
               you&apos;ll review the plan and price on Stripe before you&apos;re charged.
             </p>
-            {promoBlock}
             <div className="wlth-actions">
               <button
                 type="button"
@@ -1070,7 +973,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                 ? "Your payment needs attention but you still have access. Update your card below or try your payment again."
                 : "No worries — you can try your payment again. You'll review the plan and price on Stripe before you're charged."}
             </p>
-            {promoBlock}
             <div className="wlth-actions">
               <button
                 type="button"
@@ -1510,16 +1412,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
   const startRefreshCheckout = async () => {
     if (!token || refreshBusy) return;
     setError(null);
-    const typedCode = promoCode.trim();
-    if (typedCode && !promoApplied) {
-      setError(
-        promoError ||
-          "Enter a valid promo code or clear the promo field to continue with the standard price."
-      );
-      setRefreshBusy(false);
-      scrollDetailsToTop();
-      return;
-    }
     setRefreshBusy(true);
     scrollDetailsToTop();
     try {
@@ -1536,7 +1428,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
         };
       };
       if (
-        !(promoApplied?.memberstackPriceId || membershipPriceId) ||
+        !membershipPriceId ||
         !w.$memberstackDom?.purchasePlansWithCheckout
       ) {
         setError("Secure checkout is not available on this page right now.");
@@ -1545,7 +1437,7 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
       const base = window.location.origin + window.location.pathname;
       if (memberId) markAwaitingPostPaymentMatching(memberId);
       await w.$memberstackDom.purchasePlansWithCheckout({
-        priceId: promoApplied?.memberstackPriceId || membershipPriceId,
+        priceId: membershipPriceId,
         successUrl: `${base}?refresh_paid=1`,
         cancelUrl: `${base}?refresh_paid=0`,
       });
@@ -1590,17 +1482,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
 
   const reactivateFromRefreshPayment = async () => {
     if (!token || refreshBusy) return;
-    const typedCode = promoCode.trim();
-    if (typedCode) {
-      setError(
-        promoApplied
-          ? "Promo pricing is only available through secure checkout. Use Continue to secure checkout, or clear the promo code."
-          : promoError ||
-              "Enter a valid promo code or clear the promo field to continue with the standard price."
-      );
-      scrollDetailsToTop();
-      return;
-    }
     setError(null);
     setRefreshBusy(true);
     scrollDetailsToTop();
@@ -2637,7 +2518,6 @@ export function UpdateDetailsApp(props: { apiBase: string }) {
                       After payment you’ll shape the introductions that can move you forward.
                     </p>
                   </div>
-                  {promoBlock}
                   <div className="wlth-actions">
                     <button
                       type="button"

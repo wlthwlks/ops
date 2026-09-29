@@ -8,8 +8,12 @@ reactivation, Stripe entitlement/webhook qualification, and promo codes.
 
 - Module: `src/lib/billing/catalog.ts`
 - Config: `BILLING_CATALOG_JSON` env var (one JSON string per environment)
-- Endpoint: `POST /api/onboarding/billing-offer` (promo-code resolution)
 - Legacy fallback: the old env vars still work when `BILLING_CATALOG_JSON` is unset.
+
+> **Note:** the promo-code UI and the `POST /api/onboarding/billing-offer` endpoint
+> are currently removed/disabled. The catalog's offer machinery (`resolveOffer`,
+> `CatalogOffer`, `trialDays`) is retained so a future offer can be re-enabled by
+> wiring a new endpoint + UI back to `resolveOffer`.
 
 ## Catalog schema
 

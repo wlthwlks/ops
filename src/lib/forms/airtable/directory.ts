@@ -231,6 +231,7 @@ function resolveMember(raw: DirectoryMemberDto, refs: ResolvedRefs): DirectoryMe
 }
 
 type ViewerRaw = {
+  airtableRecordId: string;
   name: string;
   city: string;
   primaryIndustry: string;
@@ -243,6 +244,7 @@ async function resolveViewer(memberstackId: string): Promise<ViewerRaw | null> {
   if (rows.length === 0) return null;
   const p = recordToProfileDto(rows[0]);
   return {
+    airtableRecordId: rows[0].id,
     name: [p.firstName, p.lastName].filter(Boolean).join(" ") || p.name || "",
     city: p.city,
     primaryIndustry: p.primaryIndustry,
@@ -307,6 +309,7 @@ export async function listDirectoryMembersPage(
   const viewerStage = viewer ? refs.stageLabels.get(viewer.businessStage) || "" : "";
 
   let filtered = all.filter((m) => {
+    if (viewer && m.id === viewer.airtableRecordId) return false;
     if (view === "same-city" && m.city !== viewerCity) return false;
     if (view === "same-field" && m.field !== viewerField) return false;
     if (view === "same-stage" && m.stage !== viewerStage) return false;
