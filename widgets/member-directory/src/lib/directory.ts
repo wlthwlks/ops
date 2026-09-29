@@ -19,6 +19,7 @@ export type Member = {
   bio: string;
   website: string;
   linkedin: string;
+  businessDescription: string;
 };
 
 export type Viewer = {

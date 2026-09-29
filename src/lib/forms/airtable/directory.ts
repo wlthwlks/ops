@@ -55,6 +55,7 @@ export type DirectoryMember = {
   bio: string;
   website: string;
   linkedin: string;
+  businessDescription: string;
 };
 
 export type DirectoryViewer = {
@@ -111,6 +112,7 @@ export function directoryMemberToDto(record: AirtableRecord) {
     helpWantedContext: p.helpWantedContext,
     expertiseOffered: p.expertiseOffered,
     expertiseContext: p.expertiseContext,
+    businessDescription: p.businessDescription,
   };
 }
 
@@ -224,6 +226,7 @@ function resolveMember(raw: DirectoryMemberDto, refs: ResolvedRefs): DirectoryMe
     bio: raw.profileBio,
     website: raw.businessWebsite,
     linkedin,
+    businessDescription: raw.businessDescription,
   };
 }
 
@@ -315,7 +318,7 @@ export async function listDirectoryMembersPage(
     if (q) {
       const haystack = [
         m.name, m.email, m.role, m.company, m.city, m.country, m.field,
-        m.stage, m.bio, m.lookingFor, m.offering, m.openTo,
+        m.stage, m.bio, m.lookingFor, m.offering, m.openTo, m.businessDescription,
       ]
         .join(" ")
         .toLowerCase();

@@ -103,11 +103,10 @@ export function MemberDialog({ member, onClose }: MemberDialogProps) {
         </div>
 
         {/* Facts */}
-        <dl className="mt-7 grid grid-cols-2 gap-x-6 gap-y-5 border-y border-border/70 py-6 sm:grid-cols-4">
+        <dl className="mt-7 grid grid-cols-2 gap-x-6 gap-y-5 border-y border-border/70 py-6 sm:grid-cols-3">
           {[
             { icon: MapPin, label: "City", value: cityCountry || "—" },
-            { icon: Briefcase, label: "Field", value: member.field || "—" },
-            { icon: Briefcase, label: "Stage", value: member.stage || "—" },
+            { icon: Briefcase, label: "Industry", value: member.field || "—" },
             {
               icon: CalendarDays,
               label: "Member since",
@@ -136,37 +135,38 @@ export function MemberDialog({ member, onClose }: MemberDialogProps) {
           </p>
         </div>
 
-        {/* Open to */}
-        {member.openTo && (
-          <div className="mt-7">
-            <h3 className="text-[11px] font-semibold uppercase tracking-brand text-muted-foreground">
-              Open to
-            </h3>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <span className="rounded-full border border-border px-3 py-1 text-[12px] font-light text-foreground">
-                {member.openTo}
-              </span>
-            </div>
-          </div>
-        )}
+        {/* Expertise */}
+        <div className="mt-7">
+          <h3 className="text-[11px] font-semibold uppercase tracking-brand text-muted-foreground">
+            Expertise
+          </h3>
+          <p className="mt-3 text-pretty text-[15px] font-light leading-relaxed text-muted-foreground">
+            {member.offering || "—"}
+          </p>
+        </div>
 
-        <div className="mt-7 grid gap-6 border-t border-border/70 pt-6 sm:grid-cols-2">
-          <div>
-            <h3 className="text-[11px] font-semibold uppercase tracking-brand text-primary">
-              Looking for
-            </h3>
-            <p className="mt-2.5 text-pretty text-[14px] font-light leading-relaxed text-muted-foreground">
-              {member.lookingFor}
+        {/* Business */}
+        <div className="mt-7">
+          <h3 className="text-[11px] font-semibold uppercase tracking-brand text-muted-foreground">
+            Business
+          </h3>
+          {member.company && (
+            <p className="mt-3 text-[15px] font-medium text-foreground">
+              {member.company}
             </p>
-          </div>
-          <div>
-            <h3 className="text-[11px] font-semibold uppercase tracking-brand text-primary">
-              Happy to help with
-            </h3>
-            <p className="mt-2.5 text-pretty text-[14px] font-light leading-relaxed text-muted-foreground">
-              {member.offering}
-            </p>
-          </div>
+          )}
+          <p className="mt-2 text-pretty text-[15px] font-light leading-relaxed text-muted-foreground">
+            {member.businessDescription || "—"}
+          </p>
+        </div>
+
+        <div className="mt-7">
+          <h3 className="text-[11px] font-semibold uppercase tracking-brand text-primary">
+            Looking for
+          </h3>
+          <p className="mt-2.5 text-pretty text-[14px] font-light leading-relaxed text-muted-foreground">
+            {member.lookingFor}
+          </p>
         </div>
 
         {/* Links */}
