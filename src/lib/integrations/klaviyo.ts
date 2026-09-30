@@ -38,8 +38,6 @@ export interface KlaviyoProfileInput {
   properties?: Record<string, string>;
 }
 
-<<<<<<< Updated upstream
-=======
 /** Email-marketing subscription state returned by Klaviyo's profiles endpoint. */
 export interface KlaviyoSubscriptionState {
   consent: string;
@@ -56,7 +54,6 @@ export interface KlaviyoProfileAuditEntry {
   canReceiveEmailMarketing: boolean;
 }
 
->>>>>>> Stashed changes
 export class KlaviyoApiError extends Error {
   readonly status: number;
   readonly body: string;
@@ -293,8 +290,6 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
     return mutateListMembership("DELETE", listId, profileIds);
   }
 
-<<<<<<< Updated upstream
-=======
   /**
    * Full read of the profiles currently in a list (paginated), indexed by
    * normalized email. Read-only — does not touch consent or membership.
@@ -551,21 +546,17 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
     }
   }
 
->>>>>>> Stashed changes
   return {
     importProfiles,
     waitForImportJobs,
     listProfileIdsByEmails,
     addProfilesToList,
     removeProfilesFromList,
-<<<<<<< Updated upstream
-=======
     listProfilesInList,
     listProfileSubscriptionStates,
     listAllProfilesForAudit,
     suppressProfilesByEmail,
     waitForSuppressionJobs,
->>>>>>> Stashed changes
   };
 }
 
