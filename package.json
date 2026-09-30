@@ -34,6 +34,7 @@
     "billing:backfill-pauses": "npx tsx scripts/backfill-billing-pauses.ts",
     "billing:backfill-pauses:local": "npx tsx scripts/backfill-billing-pauses.ts --env-file=.env.local",
     "klaviyo:sync-members": "npx tsx scripts/sync-klaviyo-members.ts",
+    "klaviyo:audit-profiles": "npx tsx scripts/klaviyo-profile-audit.ts",
     "members:export-xlsx": "npx tsx scripts/export-members-xlsx.ts",
     "airtable:export-small-cities": "npx tsx scripts/export-small-cities.ts",
     "airtable:export-migration": "npx tsx scripts/export-airtable-migration.ts",

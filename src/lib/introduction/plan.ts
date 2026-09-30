@@ -38,6 +38,7 @@ import { resolveMemberGeo, type ResolvedGeo } from "./geo-cache";
 import { vectorIdsFor } from "./semantic-profile";
 import { DEFAULT_SEMANTIC_NAMESPACE } from "@/lib/ops/sync-intro-profiles";
 import {
+  scoreGroupMembers,
   scorePair,
   type PairScoreBreakdown,
   type ScorableMember,
@@ -45,6 +46,8 @@ import {
 import {
   PairScoreMatrix,
   buildGroups,
+  fillUnmatchedGuarantee,
+  groupFingerprint,
   type GroupingOptions,
 } from "./grouping";
 import { linkIdsFromField } from "@/lib/forms/reference-data/matching-options-catalog";
@@ -398,6 +401,8 @@ export interface IntroductionPreviewResult {
     unmatchedMembers: Array<{ key: string; email: string; reason: string }>;
     excluded: Array<{ key: string; email: string; reason: string }>;
     repeatedPairsBlocked: number;
+    reintroducedGroups: number;
+    reintroducedMembers: number;
     invalidEmails: number;
     missingPostcode: number;
     allowedPairs: number;
@@ -694,6 +699,8 @@ export async function runIntroductionPreview(
         unmatchedMembers: [],
         excluded,
         repeatedPairsBlocked: 0,
+        reintroducedGroups: 0,
+        reintroducedMembers: 0,
         invalidEmails,
         missingPostcode: eligible.filter((m) => !(m.postcode ?? "").trim()).length,
         allowedPairs: 0,
@@ -735,9 +742,50 @@ export async function runIntroductionPreview(
   const grouped = buildGroups(eligible, matrixResult.matrix, groupingOptions);
   deps.log(`Grouped: ${grouped.groups.length} group(s), ${grouped.unmatched.length} unmatched`);
 
+  // ─── Guarantee every member an introduction ───
+  // Relax the repeat/cooldown rule only for members who would otherwise get
+  // none, so everyone ends up with at least one introduction.
+  const relaxedMatrix = computePairMatrix(eligible, {
+    cycleDate,
+    constraints: effective.constraints,
+    weights: effective.weights,
+    pairHistory: { recentPairs: new Set<string>(), recentMemberEmails: new Set<string>() },
+    maxDistanceKm: effective.constraints.maxDistanceKm,
+  }).matrix;
+  const filled = fillUnmatchedGuarantee(
+    grouped.groups,
+    grouped.unmatched,
+    matrixResult.matrix,
+    relaxedMatrix,
+    groupingOptions.sizes
+  );
+  const finalGroups = filled.groups;
+  const reintroducedFingerprints = filled.reintroducedGroups;
+  if (grouped.unmatched.length > 0) {
+    deps.log(
+      `Guarantee fill: ${grouped.unmatched.length} unmatched member(s) placed (${reintroducedFingerprints.size} group(s) reintroduced)`
+    );
+  }
+
   // ─── Persist run / pair scores / groups ───
   const runId = crypto.randomUUID();
   const missingPostcode = eligible.filter((m) => !(m.postcode ?? "").trim()).length;
+
+  const memberByKey = new Map(eligible.map((m) => [m.key, m]));
+  const finalGroupScores = finalGroups.map((g) =>
+    scoreGroupMembers(
+      g
+        .map((m) => memberByKey.get(m.key))
+        .filter((m): m is PlanMember => Boolean(m)),
+      effective.weights,
+      { maxDistanceKm: effective.constraints.maxDistanceKm }
+    )
+  );
+  const finalGroupKeys = new Set(finalGroups.flat().map((m) => m.key));
+  const remainingUnmatched = eligible.filter((m) => !finalGroupKeys.has(m.key));
+  const reintroducedMembers = finalGroups
+    .filter((g) => reintroducedFingerprints.has(groupFingerprint(g)))
+    .reduce((acc, g) => acc + g.length, 0);
 
   const snapshot: PlanSnapshot = {
     seed,
@@ -766,8 +814,8 @@ export async function runIntroductionPreview(
     deliveryMode,
     snapshotJson: JSON.stringify(snapshot),
     createdByClerkUserId: options.createdBy ?? null,
-    totalGroups: grouped.groups.length,
-    summary: `${cityName ?? cityCode}: ${grouped.groups.length} groups, ${eligible.length} eligible (sizes ${effective.groupSizes.target}/${effective.groupSizes.min}/${effective.groupSizes.max}${effective.groupSizes.strict ? " strict" : ""})`,
+    totalGroups: finalGroups.length,
+    summary: `${cityName ?? cityCode}: ${finalGroups.length} groups, ${eligible.length} eligible (sizes ${effective.groupSizes.target}/${effective.groupSizes.min}/${effective.groupSizes.max}${effective.groupSizes.strict ? " strict" : ""})`,
   });
 
   const pairRows = matrixResult.matrix
@@ -787,15 +835,11 @@ export async function runIntroductionPreview(
   }
   deps.log(`Persisted ${pairRows.length} pair score row(s)`);
 
-  const groupScores = grouped.groupScores;
-  for (let index = 0; index < grouped.groups.length; index++) {
-    const groupMembers = grouped.groups[index];
-    const groupScore = groupScores[index] ?? { overall: 0, components: {} };
+  for (let index = 0; index < finalGroups.length; index++) {
+    const groupMembers = finalGroups[index];
+    const groupScore = finalGroupScores[index] ?? { overall: 0, components: {} };
     const groupId = crypto.randomUUID();
-    const fingerprint = groupMembers
-      .map((m) => m.key)
-      .sort()
-      .join("|");
+    const fingerprint = groupFingerprint(groupMembers);
     await db.insert(introductionGroups).values({
       id: groupId,
       runId,
@@ -810,6 +854,7 @@ export async function runIntroductionPreview(
       matchingProfileVersionId: effective.profileVersionId,
       cityCode,
       locked: false,
+      reintroduced: reintroducedFingerprints.has(fingerprint),
     });
     for (const member of groupMembers) {
       const registry = snapshot.members.find((m) => m.key === member.key);
@@ -823,7 +868,7 @@ export async function runIntroductionPreview(
       });
     }
   }
-  deps.log(`Persisted ${grouped.groups.length} group(s)`);
+  deps.log(`Persisted ${finalGroups.length} group(s)`);
 
   // Operator previews are throwaway tools: creating a new one for the same
   // city + cycle date replaces the previous one so abandoned previews never
@@ -836,14 +881,14 @@ export async function runIntroductionPreview(
     });
   }
 
-  const matchedMembers = grouped.groups.flat().map((m) => m.key);
+  const matchedMembers = finalGroups.flat().map((m) => m.key);
   const avgGroupScore =
-    groupScores.length > 0
-      ? groupScores.reduce((acc, s) => acc + s.overall, 0) / groupScores.length
+    finalGroupScores.length > 0
+      ? finalGroupScores.reduce((acc, s) => acc + s.overall, 0) / finalGroupScores.length
       : null;
   const minGroupScore =
-    groupScores.length > 0
-      ? Math.min(...groupScores.map((s) => s.overall))
+    finalGroupScores.length > 0
+      ? Math.min(...finalGroupScores.map((s) => s.overall))
       : null;
 
   return {
@@ -859,21 +904,23 @@ export async function runIntroductionPreview(
     report: {
       eligibleMembers: eligible.length,
       matchedMembers: matchedMembers.length,
-      groups: grouped.groups.length,
-      unmatched: grouped.unmatched.length,
-      unmatchedMembers: grouped.unmatched.map((u) => ({
-        key: u.key,
-        email: eligible.find((m) => m.key === u.key)?.email ?? "",
-        reason: u.reason,
+      groups: finalGroups.length,
+      unmatched: remainingUnmatched.length,
+      unmatchedMembers: remainingUnmatched.map((m) => ({
+        key: m.key,
+        email: m.email,
+        reason: "size_impossible",
       })),
       excluded,
       repeatedPairsBlocked: matrixResult.repeatedPairsBlocked,
+      reintroducedGroups: reintroducedFingerprints.size,
+      reintroducedMembers,
       invalidEmails,
       missingPostcode,
       allowedPairs: matrixResult.allowedPairs,
       avgGroupScore: avgGroupScore === null ? null : Math.round(avgGroupScore * 10000) / 10000,
       minGroupScore: minGroupScore === null ? null : Math.round(minGroupScore * 10000) / 10000,
-      renderedEmailCount: grouped.groups.length,
+      renderedEmailCount: finalGroups.length,
       recipientCount: matchedMembers.length,
       validationFailures,
       minEligibleMembers,
@@ -1187,6 +1234,7 @@ export async function getRunDetail(db: AppDb, runId: string) {
       status: group.status,
       cityName: group.cityName,
       overallScore: group.overallScore,
+      reintroduced: group.reintroduced,
       scoreBreakdown: group.scoreBreakdownJson ? JSON.parse(group.scoreBreakdownJson) : null,
       emailSubjectSnapshot: group.emailSubjectSnapshot,
       emailHtmlSnapshot: group.emailHtmlSnapshot,

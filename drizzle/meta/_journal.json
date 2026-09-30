@@ -85,6 +85,13 @@
       "when": 1787533606614,
       "tag": "0011_city_active_member_count",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790758777839,
+      "tag": "0012_old_magdalene",
+      "breakpoints": true
     }
   ]
 }

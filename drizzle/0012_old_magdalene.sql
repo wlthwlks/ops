@@ -1,0 +1,1 @@
+ALTER TABLE "introduction_groups" ADD COLUMN "reintroduced" boolean DEFAULT false NOT NULL;

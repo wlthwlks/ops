@@ -72,6 +72,8 @@ const basePreview = {
     unmatchedMembers: [],
     excluded: [],
     repeatedPairsBlocked: 0,
+    reintroducedGroups: 0,
+    reintroducedMembers: 0,
     invalidEmails: 0,
     missingPostcode: 0,
     allowedPairs: 6,

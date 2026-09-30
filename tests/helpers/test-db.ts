@@ -191,6 +191,7 @@ export async function createTestDb(options?: { matchmake?: boolean; introduction
         matching_profile_version_id TEXT,
         city_code TEXT,
         locked BOOLEAN NOT NULL DEFAULT FALSE,
+        reintroduced BOOLEAN NOT NULL DEFAULT FALSE,
         email_subject_snapshot TEXT,
         email_html_snapshot TEXT,
         claimed_at TIMESTAMPTZ

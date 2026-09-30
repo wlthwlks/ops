@@ -57,6 +57,7 @@ interface Member {
 interface GroupRow {
   id: string;
   locked: boolean;
+  reintroduced: boolean;
   overallScore: number | null;
   scoreBreakdown: Record<string, number> | null;
   members: Member[];
@@ -71,6 +72,7 @@ interface Report {
   unmatchedMemberDetails: Array<{ email: string; reason: string }>;
   groups: number;
   deliveries: number;
+  reintroducedGroups: number;
   duplicateMembers: string[];
   invalidEmails: string[];
   renderedEmails: number;
@@ -453,6 +455,7 @@ export default function CityRunsPage() {
                 <Flex vertical gap={8} style={{ width: "100%" }}>
                   <Space wrap>
                     {group.locked && <Tag color="purple">Locked</Tag>}
+                    {group.reintroduced && <Tag color="orange">Reintroduced</Tag>}
                     <Tag color="blue">Score {group.overallScore?.toFixed(1) ?? "—"}</Tag>
                     {Object.entries(group.scoreBreakdown ?? {}).map(([component, score]) => (
                       <Tag key={component}>

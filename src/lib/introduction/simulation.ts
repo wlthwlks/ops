@@ -89,6 +89,7 @@ export interface SimulationReport {
   safety: DeliveryModeSafety;
   groups: number;
   deliveries: number;
+  reintroducedGroups: number;
   eligibleMembers: number;
   matchedMembers: number;
   unmatchedMembers: number;
@@ -227,6 +228,7 @@ export async function buildSimulationReport(
     safety: deliveryModeSafety(run.deliveryMode),
     groups: groups.length,
     deliveries: deliveries.length,
+    reintroducedGroups: groups.filter((g) => g.reintroduced).length,
     eligibleMembers: snapshotMembers.length,
     matchedMembers: matchedKeys.size,
     unmatchedMembers: unmatched.length,
