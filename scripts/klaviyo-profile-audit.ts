@@ -3,6 +3,7 @@
  *
  *   npm run klaviyo:audit-profiles                        # audit only (no writes)
  *   npm run klaviyo:audit-profiles -- --apply             # audit, then suppress unused
+ *   npm run klaviyo:audit-profiles -- --apply-csv         # suppress from an existing CSV
  *   npm run klaviyo:audit-profiles -- --limit=1000        # sanity run (cap the scan)
  *   npm run klaviyo:audit-profiles -- --delay-ms=500      # override throttle between pages
  *   npm run klaviyo:audit-profiles -- --fresh             # ignore checkpoint, restart scan
@@ -43,7 +44,10 @@ import {
   writeFileSync,
 } from "fs";
 import { dirname } from "path";
-import { createKlaviyoClient } from "../src/lib/integrations/klaviyo";
+import {
+  createKlaviyoClient,
+  type KlaviyoClient,
+} from "../src/lib/integrations/klaviyo";
 
 dotenv.config();
 
@@ -97,19 +101,21 @@ function writeJsonAtomic(path: string, value: unknown): void {
 
 export function parseAuditArgs(argv: string[]): {
   apply: boolean;
+  applyCsv: boolean;
   fresh: boolean;
   limit?: number;
   delayMs: number;
   output: string;
 } {
   const apply = argv.includes("--apply");
+  const applyCsv = argv.includes("--apply-csv");
   const fresh = argv.includes("--fresh");
   let limit: number | undefined;
   let delayMs = DEFAULT_DELAY_MS;
   let output = DEFAULT_OUTPUT;
 
   for (const arg of argv) {
-    if (arg === "--apply" || arg === "--fresh") continue;
+    if (arg === "--apply" || arg === "--apply-csv" || arg === "--fresh") continue;
     if (arg.startsWith("--limit=")) {
       const n = parseInt(arg.slice("--limit=".length), 10);
       if (!Number.isFinite(n) || n <= 0) throw new Error(`Invalid --limit value: ${arg}`);
@@ -124,9 +130,10 @@ export function parseAuditArgs(argv: string[]): {
     } else if (arg === "--help" || arg === "-h") {
       console.log(
         [
-          "Usage: npm run klaviyo:audit-profiles -- [--apply] [--fresh] [--limit=N] [--delay-ms=N] [--output=PATH]",
+          "Usage: npm run klaviyo:audit-profiles -- [--apply] [--apply-csv] [--fresh] [--limit=N] [--delay-ms=N] [--output=PATH]",
           "",
           "  --apply       suppress unused + billable profiles after the audit",
+          "  --apply-csv   skip the scan and suppress straight from an existing CSV",
           "  --fresh       discard any checkpoint and restart the scan from the beginning",
           "  --limit=N     cap the profile scan at N profiles (sanity runs)",
           "  --delay-ms=N  throttle between paginated reads (default 1050, to respect 60/min)",
@@ -139,7 +146,7 @@ export function parseAuditArgs(argv: string[]): {
     }
   }
 
-  return { apply, fresh, limit, delayMs, output };
+  return { apply, applyCsv, fresh, limit, delayMs, output };
 }
 
 function classify(
@@ -168,6 +175,41 @@ function classify(
   ].join(",");
 }
 
+function readBillableEmailsFromCsv(output: string): string[] {
+  if (!existsSync(output)) {
+    throw new Error(
+      `CSV not found: ${output}. Run the audit first (npm run klaviyo:audit-profiles).`
+    );
+  }
+  return readFileSync(output, "utf8")
+    .split("\n")
+    .slice(1)
+    .filter((line) => line.trim())
+    .map((line) => line.split(","))
+    .filter((cols) => cols[4] === "true")
+    .map((cols) => cols[0]);
+}
+
+async function suppressUnusedBillable(
+  klaviyo: KlaviyoClient,
+  output: string
+): Promise<void> {
+  const emails = readBillableEmailsFromCsv(output);
+  if (emails.length === 0) {
+    console.log("\nNo unused billable profiles to suppress.");
+    return;
+  }
+
+  console.log(`\nSuppressing ${emails.length} unused + billable profiles...`);
+  const jobs = await klaviyo.suppressProfilesByEmail(emails, { delayMs: 200 });
+  console.log(`  suppression jobs submitted: ${jobs.calls} (${jobs.requested} emails)`);
+  if (jobs.skippedInvalid > 0) {
+    console.log(`  skipped invalid emails:    ${jobs.skippedInvalid}`);
+  }
+  await klaviyo.waitForSuppressionJobs(jobs.jobIds, { timeoutMs: 600_000, intervalMs: 10_000 });
+  console.log(`  done — ${jobs.requested} profiles suppressed (removed from billable count).`);
+}
+
 async function main() {
   let args: ReturnType<typeof parseAuditArgs>;
   try {
@@ -177,8 +219,20 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`Mode: ${args.apply ? "AUDIT + SUPPRESS" : "AUDIT ONLY (no writes)"}`);
+  console.log(
+    `Mode: ${args.applyCsv ? "SUPPRESS FROM CSV" : args.apply ? "AUDIT + SUPPRESS" : "AUDIT ONLY (no writes)"}`
+  );
   console.log(`Throttle: ${args.delayMs}ms/page  Limit: ${args.limit ?? "none"}  Fresh: ${args.fresh}\n`);
+
+  if (args.applyCsv) {
+    const apiKey = requireEnv("KLAVIYO_PRIVATE_API_KEY");
+    const klaviyo = createKlaviyoClient({
+      apiKey,
+      revision: (process.env.KLAVIYO_API_REVISION || "").trim() || undefined,
+    });
+    await suppressUnusedBillable(klaviyo, args.output);
+    return;
+  }
 
   let apiKey: string;
   let activeListId: string;
@@ -281,19 +335,7 @@ async function main() {
     return;
   }
 
-  const emails = readFileSync(args.output, "utf8")
-    .split("\n")
-    .slice(1)
-    .filter((line) => line.trim())
-    .map((line) => line.split(","))
-    .filter((cols) => cols[4] === "true")
-    .map((cols) => cols[0]);
-
-  console.log(`\nSuppressing ${emails.length} unused + billable profiles...`);
-  const jobs = await klaviyo.suppressProfilesByEmail(emails, { delayMs: 200 });
-  console.log(`  suppression jobs submitted: ${jobs.calls} (${jobs.requested} emails)`);
-  await klaviyo.waitForSuppressionJobs(jobs.jobIds);
-  console.log(`  done — ${jobs.requested} profiles suppressed (removed from billable count).`);
+  await suppressUnusedBillable(klaviyo, args.output);
 }
 
 const isMain =

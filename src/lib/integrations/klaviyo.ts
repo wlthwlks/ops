@@ -104,6 +104,13 @@ const EMAIL_FILTER_CHUNK = 100;
 const LIST_MUTATION_CHUNK = 1000;
 const SUPPRESSION_CHUNK = 100;
 
+/**
+ * Strict email shape for the bulk-suppression endpoint, which rejects
+ * malformed addresses (e.g. `#`/`*`/`&` in the local part, digit TLDs) with a
+ * 400 that aborts the whole batch.
+ */
+const SUPPRESSABLE_EMAIL_RE = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+
 type HttpMethod = "GET" | "POST" | "DELETE";
 
 export function createKlaviyoClient(config: KlaviyoConfig) {
@@ -519,13 +526,20 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
   async function suppressProfilesByEmail(
     emails: string[],
     options?: { delayMs?: number }
-  ): Promise<{ requested: number; calls: number; jobIds: string[] }> {
+  ): Promise<{
+    requested: number;
+    skippedInvalid: number;
+    calls: number;
+    jobIds: string[];
+  }> {
     const delayMs = options?.delayMs ?? 0;
     const unique = [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))];
+    const valid = unique.filter((e) => SUPPRESSABLE_EMAIL_RE.test(e));
+    const skippedInvalid = unique.length - valid.length;
     const jobIds: string[] = [];
     let calls = 0;
-    for (let i = 0; i < unique.length; i += SUPPRESSION_CHUNK) {
-      const chunk = unique.slice(i, i + SUPPRESSION_CHUNK);
+    for (let i = 0; i < valid.length; i += SUPPRESSION_CHUNK) {
+      const chunk = valid.slice(i, i + SUPPRESSION_CHUNK);
       const res = await request("POST", "/profile-suppression-bulk-create-jobs/", {
         data: {
           type: "profile-suppression-bulk-create-job",
@@ -549,9 +563,9 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
       }
       jobIds.push(jobId);
       calls++;
-      if (i + SUPPRESSION_CHUNK < unique.length && delayMs > 0) await sleep(delayMs);
+      if (i + SUPPRESSION_CHUNK < valid.length && delayMs > 0) await sleep(delayMs);
     }
-    return { requested: unique.length, calls, jobIds };
+    return { requested: valid.length, skippedInvalid, calls, jobIds };
   }
 
   /** Poll suppression jobs until all are complete. Throws on timeout/cancellation. */

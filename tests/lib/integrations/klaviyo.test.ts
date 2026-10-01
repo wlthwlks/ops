@@ -238,7 +238,23 @@ describe("KlaviyoClient", () => {
       { type: "profile", attributes: { email: "a@x.com" } },
       { type: "profile", attributes: { email: "b@x.com" } },
     ]);
-    expect(result).toEqual({ requested: 2, calls: 1, jobIds: ["sj1"] });
+    expect(result).toEqual({ requested: 2, skippedInvalid: 0, calls: 1, jobIds: ["sj1"] });
+  });
+
+  it("suppressProfilesByEmail skips malformed email addresses", async () => {
+    mockFetch.mockImplementation(() => jsonResponse(202, { data: { id: "sj1", attributes: { status: "queued" } } }));
+    const result = await client.suppressProfilesByEmail([
+      "a@x.com",
+      "bad#addr@x.com",
+      "s***@gmail.com",
+      "typo@gmail.com08",
+    ]);
+    expect(result.requested).toBe(1);
+    expect(result.skippedInvalid).toBe(3);
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.data.attributes.profiles.data).toEqual([
+      { type: "profile", attributes: { email: "a@x.com" } },
+    ]);
   });
 
   it("suppressProfilesByEmail chunks at 100 emails and dedupes", async () => {
