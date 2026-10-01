@@ -8,12 +8,13 @@ import { DirectoryJoinModal } from "../../shared/DirectoryJoinModal";
 import type { DirectoryFieldKey } from "../../shared/directory";
 import { DirectoryHeader } from "./components/DirectoryHeader";
 import { DirectoryClient } from "./components/DirectoryClient";
-import type { DirectoryPage, DirectoryView, Member, Viewer } from "./lib/directory";
+import type { DirectoryPage, DirectoryAccessReason, DirectoryView, Member, Viewer } from "./lib/directory";
 
 type Props = {
   apiBase: string;
   allowAnonymous?: boolean;
   gettingStartedUrl: string;
+  updateDetailsUrl: string;
 };
 
 type Gate = "loading" | "ready" | "logged_out" | "error";
@@ -24,6 +25,7 @@ export function MemberDirectoryApp({
   apiBase,
   allowAnonymous,
   gettingStartedUrl,
+  updateDetailsUrl,
 }: Props) {
   const [gate, setGate] = useState<Gate>("loading");
   const [error, setError] = useState<string | null>(null);
@@ -111,6 +113,7 @@ export function MemberDirectoryApp({
       apiBase={apiBase}
       token={token}
       gettingStartedUrl={gettingStartedUrl}
+      updateDetailsUrl={updateDetailsUrl}
     />
   );
 }
@@ -119,10 +122,12 @@ function DirectoryExplorer({
   apiBase,
   token,
   gettingStartedUrl,
+  updateDetailsUrl,
 }: {
   apiBase: string;
   token: string | null;
   gettingStartedUrl: string;
+  updateDetailsUrl: string;
 }) {
   const [query, setQuery] = useState("");
   const [view, setView] = useState<DirectoryView>("recommended");
@@ -137,9 +142,9 @@ function DirectoryExplorer({
   const [fields, setFields] = useState<Array<{ code: string; label: string }>>([]);
   const [page, setPage] = useState(1);
 
-  const [accessDenied, setAccessDenied] = useState(false);
   const [noRecord, setNoRecord] = useState(false);
   const [missingFields, setMissingFields] = useState<DirectoryFieldKey[]>([]);
+  const [reason, setReason] = useState<DirectoryAccessReason>("ok");
   const [checked, setChecked] = useState(false);
   const [refreshNonce, setRefreshNonce] = useState(0);
 
@@ -178,9 +183,9 @@ function DirectoryExplorer({
       try {
         const res = await fetchDirectoryPage(1);
         if (cancelled || generation !== generationRef.current) return;
-        setAccessDenied(Boolean(res.accessDenied));
         setNoRecord(Boolean(res.noRecord));
         setMissingFields(res.missingFields || []);
+        setReason(res.reason || "ok");
         setMembers(res.members || []);
         setViewer(res.viewer);
         setTotal(res.total || 0);
@@ -233,31 +238,59 @@ function DirectoryExplorer({
     return <main className="min-h-dvh overflow-x-hidden" />;
   }
 
-  if (accessDenied || !checked) {
+  if (!checked) {
     return (
       <main className="min-h-dvh overflow-x-hidden">
-        {accessDenied && checked && (
-          <DirectoryJoinModal
-            apiBase={apiBase}
-            token={token}
-            missingKeys={missingFields}
-            title="Unlock the Member Directory"
-            description="The Member Directory is a two-way street — you get to discover the community, and the community gets to discover you. Join now so other founders can find you too."
-            secondaryLabel="Back to Getting Started"
-            onJoined={() => setRefreshNonce((n) => n + 1)}
-            onDismiss={() => window.location.assign(gettingStartedUrl)}
-          />
-        )}
-        {!checked && (
-          <div className="flex min-h-dvh flex-col items-center justify-center gap-4 px-5 text-center">
-            <p className="text-[11px] font-semibold uppercase tracking-brand text-primary">
-              WLTH WLKS
-            </p>
-            <p className="text-[15px] font-light text-foreground">
-              Loading the directory…
-            </p>
-          </div>
-        )}
+        <div className="flex min-h-dvh flex-col items-center justify-center gap-4 px-5 text-center">
+          <p className="text-[11px] font-semibold uppercase tracking-brand text-primary">
+            WLTH WLKS
+          </p>
+          <p className="text-[15px] font-light text-foreground">
+            Loading the directory…
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  if (reason === "not_active_member") {
+    return (
+      <main className="min-h-dvh overflow-x-hidden">
+        <section className="mx-auto flex min-h-dvh max-w-2xl flex-col items-center justify-center px-5 text-center">
+          <p className="text-[11px] font-semibold uppercase tracking-brand text-primary">
+            WLTH WLKS
+          </p>
+          <h1 className="mt-4 text-balance text-3xl font-bold uppercase leading-[1.05] tracking-tight text-foreground sm:text-4xl">
+            Reactivate your membership
+          </h1>
+          <p className="mt-4 max-w-md text-pretty text-[15px] font-light leading-relaxed text-muted-foreground">
+            Your membership isn&apos;t active right now. Reactivate it to browse the Member
+            Directory.
+          </p>
+          <a
+            href={updateDetailsUrl}
+            className="mt-8 rounded-full bg-primary px-8 py-3 text-[13px] font-semibold uppercase tracking-brand text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            Reactivate membership
+          </a>
+        </section>
+      </main>
+    );
+  }
+
+  if (reason === "not_opted_in") {
+    return (
+      <main className="min-h-dvh overflow-x-hidden">
+        <DirectoryJoinModal
+          apiBase={apiBase}
+          token={token}
+          missingKeys={missingFields}
+          title="Unlock the Member Directory"
+          description="The Member Directory is a two-way street — you get to discover the community, and the community gets to discover you. Join now so other founders can find you too."
+          secondaryLabel="Back to Getting Started"
+          onJoined={() => setRefreshNonce((n) => n + 1)}
+          onDismiss={() => window.location.assign(gettingStartedUrl)}
+        />
       </main>
     );
   }

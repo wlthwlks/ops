@@ -39,6 +39,12 @@ export type DirectoryView =
   | "new"
   | "all";
 
+export type DirectoryAccessReason =
+  | "ok"
+  | "no_record"
+  | "not_active_member"
+  | "not_opted_in";
+
 export type DirectoryPage = {
   members: Member[];
   viewer: Viewer | null;
@@ -51,4 +57,5 @@ export type DirectoryPage = {
   accessDenied: boolean;
   noRecord: boolean;
   missingFields: DirectoryFieldKey[];
+  reason: DirectoryAccessReason;
 };

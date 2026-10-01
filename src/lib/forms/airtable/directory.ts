@@ -79,6 +79,12 @@ export type DirectoryPageParams = {
   viewerMemberstackId: string;
 };
 
+export type DirectoryAccessReason =
+  | "ok"
+  | "no_record"
+  | "not_active_member"
+  | "not_opted_in";
+
 export type DirectoryPage = {
   members: DirectoryMember[];
   viewer: DirectoryViewer | null;
@@ -94,6 +100,7 @@ export type DirectoryPage = {
   noRecord: boolean;
   /** Directory-required field keys the viewer still needs to complete. */
   missingFields: string[];
+  reason: DirectoryAccessReason;
 };
 
 export function directoryMemberToDto(record: AirtableRecord) {
@@ -248,6 +255,8 @@ type ViewerRaw = {
   otherIndustry: string;
   businessStage: string;
   memberDirectoryStatus: string;
+  membership: string;
+  payment: string;
   missingFields: string[];
 };
 
@@ -266,6 +275,8 @@ async function resolveViewer(memberstackId: string): Promise<ViewerRaw | null> {
     otherIndustry: p.otherIndustry,
     businessStage: p.businessStage,
     memberDirectoryStatus: String(p.memberDirectoryStatus || "").trim(),
+    membership: String(p.membership || "").trim(),
+    payment: String(p.payment || "").trim(),
     missingFields: completeness.missing,
   };
 }
@@ -316,6 +327,7 @@ export async function listDirectoryMembersPage(
       accessDenied: true,
       noRecord: true,
       missingFields: [],
+      reason: "no_record",
     };
   }
 
@@ -328,8 +340,29 @@ export async function listDirectoryMembersPage(
     stage: viewerStage,
   };
 
-  const isActive = /^active$/i.test(viewer.memberDirectoryStatus);
-  if (!isActive) {
+  const isActiveMember =
+    viewer.membership.toLowerCase() === "active" &&
+    viewer.payment.toLowerCase() === "paid";
+
+  if (!isActiveMember) {
+    return {
+      members: [],
+      viewer: viewerDisplay,
+      total: 0,
+      page,
+      pageSize,
+      totalPages: 0,
+      cities: [],
+      fields: [],
+      accessDenied: true,
+      noRecord: false,
+      missingFields: [],
+      reason: "not_active_member",
+    };
+  }
+
+  const isOptedIn = /^active$/i.test(viewer.memberDirectoryStatus);
+  if (!isOptedIn) {
     return {
       members: [],
       viewer: viewerDisplay,
@@ -342,6 +375,7 @@ export async function listDirectoryMembersPage(
       accessDenied: true,
       noRecord: false,
       missingFields: viewer.missingFields,
+      reason: "not_opted_in",
     };
   }
 
@@ -418,5 +452,6 @@ export async function listDirectoryMembersPage(
     accessDenied: false,
     noRecord: false,
     missingFields: [],
+    reason: "ok",
   };
 }

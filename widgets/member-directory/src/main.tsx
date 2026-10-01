@@ -10,11 +10,14 @@ function mount() {
     (el.dataset.allowAnonymous || "").trim().toLowerCase() === "true";
   const gettingStartedUrl =
     (el.dataset.gettingStartedUrl || "/getting-started").trim() || "/getting-started";
+  const updateDetailsUrl =
+    (el.dataset.updateDetailsUrl || "/update-details").trim() || "/update-details";
   createRoot(el).render(
     <MemberDirectoryApp
       apiBase={apiBase}
       allowAnonymous={allowAnonymous}
       gettingStartedUrl={gettingStartedUrl}
+      updateDetailsUrl={updateDetailsUrl}
     />
   );
 }
