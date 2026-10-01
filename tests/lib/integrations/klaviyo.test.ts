@@ -202,6 +202,18 @@ describe("KlaviyoClient", () => {
     expect(result.calls).toBe(1);
   });
 
+  it("retries on transient network errors (ECONNRESET)", async () => {
+    mockFetch
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockImplementation(() => jsonResponse(200, { data: [], links: { next: null } }));
+
+    const promise = client.listProfilesInList("list_a");
+    await vi.advanceTimersByTimeAsync(1000);
+    const emails = await promise;
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(emails.size).toBe(0);
+  });
+
   it("throws KlaviyoApiError on 4xx with body", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
@@ -212,5 +224,105 @@ describe("KlaviyoClient", () => {
     } as unknown as Response);
     await expect(client.addProfilesToList("bad", ["prof_1"])).rejects.toThrow(KlaviyoApiError);
     await expect(client.addProfilesToList("bad", ["prof_1"])).rejects.toThrow("bad list id");
+  });
+
+  it("suppressProfilesByEmail sends the suppression job payload with emails", async () => {
+    mockFetch.mockImplementation(() => jsonResponse(202, { data: { id: "sj1", attributes: { status: "queued" } } }));
+    const result = await client.suppressProfilesByEmail(["a@x.com", "b@x.com"]);
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(String(url)).toBe("https://a.klaviyo.test/api/profile-suppression-bulk-create-jobs/");
+    expect(init.method).toBe("POST");
+    const body = JSON.parse(init.body);
+    expect(body.data.type).toBe("profile-suppression-bulk-create-job");
+    expect(body.data.attributes.profiles.data).toEqual([
+      { type: "profile", attributes: { email: "a@x.com" } },
+      { type: "profile", attributes: { email: "b@x.com" } },
+    ]);
+    expect(result).toEqual({ requested: 2, calls: 1, jobIds: ["sj1"] });
+  });
+
+  it("suppressProfilesByEmail chunks at 100 emails and dedupes", async () => {
+    mockFetch.mockImplementation(() => jsonResponse(202, { data: { id: "sj1", attributes: { status: "queued" } } }));
+    const emails = Array.from({ length: 100 }, (_, i) => `p${i}@x.com`).concat(["p0@x.com"]);
+    const result = await client.suppressProfilesByEmail(emails);
+    expect(result.requested).toBe(100);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.data.attributes.profiles.data).toHaveLength(100);
+  });
+
+  it("listAllProfilesForAudit parses subscription state and follows pagination", async () => {
+    mockFetch
+      .mockImplementationOnce(() =>
+        jsonResponse(200, {
+          data: [
+            {
+              type: "profile",
+              attributes: {
+                email: "sub@x.com",
+                subscriptions: {
+                  email: { marketing: { consent: "SUBSCRIBED", can_receive_email_marketing: true, suppression: [], list_suppressions: [] } },
+                },
+              },
+            },
+            {
+              type: "profile",
+              attributes: {
+                email: "sup@x.com",
+                subscriptions: {
+                  email: { marketing: { consent: "SUPPRESSED", can_receive_email_marketing: false, suppression: [{ reason: "USER_SUPPRESSED" }], list_suppressions: [] } },
+                },
+              },
+            },
+          ],
+          links: { next: "https://a.klaviyo.test/api/profiles/?page%5Bcursor%5D=next_cur" },
+        })
+      )
+      .mockImplementationOnce(() =>
+        jsonResponse(200, {
+          data: [
+            {
+              type: "profile",
+              attributes: {
+                email: "unsub@x.com",
+                subscriptions: {
+                  email: { marketing: { consent: "UNSUBSCRIBED", can_receive_email_marketing: false, suppression: [], list_suppressions: [] } },
+                },
+              },
+            },
+          ],
+          links: { next: null },
+        })
+      );
+
+    const entries = await client.listAllProfilesForAudit();
+    expect(entries).toHaveLength(3);
+    expect(entries[0]).toEqual({ email: "sub@x.com", consent: "SUBSCRIBED", suppressed: false, canReceiveEmailMarketing: true });
+    expect(entries[1].suppressed).toBe(true);
+    expect(entries[1].canReceiveEmailMarketing).toBe(false);
+    expect(entries[2]).toEqual({ email: "unsub@x.com", consent: "UNSUBSCRIBED", suppressed: false, canReceiveEmailMarketing: false });
+
+    const firstUrl = String(mockFetch.mock.calls[0][0]);
+    expect(firstUrl).toContain("additional-fields[profile]=subscriptions");
+    expect(String(mockFetch.mock.calls[1][0])).toContain("page[cursor]=next_cur");
+  });
+
+  it("listAllProfilesForAudit retries a page that returns an empty body", async () => {
+    mockFetch
+      .mockImplementationOnce(() => emptyResponse(200))
+      .mockImplementationOnce(() => jsonResponse(200, { data: [], links: { next: null } }));
+
+    const promise = client.listAllProfilesForAudit();
+    await vi.advanceTimersByTimeAsync(1000);
+    const entries = await promise;
+    expect(entries).toEqual([]);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("listAllProfilesForAudit starts from a startCursor", async () => {
+    mockFetch.mockImplementation(() => jsonResponse(200, { data: [], links: { next: null } }));
+    await client.listAllProfilesForAudit({ startCursor: "cur_123" });
+    const [url] = mockFetch.mock.calls[0];
+    expect(String(url)).toContain("page[cursor]=cur_123");
   });
 });

@@ -44,6 +44,36 @@ export interface KlaviyoSubscriptionState {
   suppressed: boolean;
 }
 
+/** One profile's email-marketing state, for the profile-audit scan. */
+export interface KlaviyoProfileAuditEntry {
+  email: string;
+  consent: string;
+  /** True when the profile is suppressed from email marketing (not billable). */
+  suppressed: boolean;
+  /** Klaviyo's own flag: can this profile currently receive marketing email. */
+  canReceiveEmailMarketing: boolean;
+}
+
+/** A single page of the profiles scan (with subscriptions additional-fields). */
+interface KlaviyoAuditPage {
+  data?: Array<{
+    attributes?: {
+      email?: string;
+      subscriptions?: {
+        email?: {
+          marketing?: {
+            consent?: string;
+            can_receive_email_marketing?: boolean;
+            suppression?: unknown[];
+            list_suppressions?: unknown[];
+          };
+        };
+      };
+    };
+  }>;
+  links?: { next?: string | null };
+}
+
 export class KlaviyoApiError extends Error {
   readonly status: number;
   readonly body: string;
@@ -72,6 +102,7 @@ function sleep(ms: number): Promise<void> {
 const PROFILE_IMPORT_CHUNK = 5000;
 const EMAIL_FILTER_CHUNK = 100;
 const LIST_MUTATION_CHUNK = 1000;
+const SUPPRESSION_CHUNK = 100;
 
 type HttpMethod = "GET" | "POST" | "DELETE";
 
@@ -88,16 +119,27 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
   ): Promise<{ status: number; data: unknown }> {
     const url = `${baseUrl}${path}`;
 
-    const res = await fetch(url, {
-      method,
-      headers: {
-        Authorization: `Klaviyo-API-Key ${config.apiKey}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        revision,
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method,
+        headers: {
+          Authorization: `Klaviyo-API-Key ${config.apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          revision,
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (err) {
+      // Transient transport errors (ECONNRESET, fetch failed, socket drops) are
+      // common on long scans — retry with backoff like we do for 429/5xx.
+      if (attempt < maxRetries) {
+        await sleep(Math.min(1000 * Math.pow(2, attempt), 60_000));
+        return request(method, path, body, attempt + 1);
+      }
+      throw err;
+    }
 
     if ((res.status === 429 || res.status >= 500) && attempt < maxRetries) {
       const retryAfter = parseInt(res.headers.get("Retry-After") || "", 10);
@@ -283,7 +325,11 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
    * Full read of the profiles currently in a list (paginated), indexed by
    * normalized email. Read-only — does not touch consent or membership.
    */
-  async function listProfilesInList(listId: string): Promise<Set<string>> {
+  async function listProfilesInList(
+    listId: string,
+    options?: { delayMs?: number }
+  ): Promise<Set<string>> {
+    const delayMs = options?.delayMs ?? 0;
     const emails = new Set<string>();
     let cursor: string | undefined;
     do {
@@ -306,6 +352,7 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
       cursor = nextUrl
         ? new URLSearchParams(nextUrl.split("?")[1] ?? "").get("page[cursor]") ?? undefined
         : undefined;
+      if (cursor && delayMs > 0) await sleep(delayMs);
     } while (cursor);
     return emails;
   }
@@ -375,6 +422,172 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
     return map;
   }
 
+  /**
+   * Full paginated scan of every profile's email-marketing state, ordered by
+   * Klaviyo's default cursor. Read-only — does not touch consent or membership.
+   *
+   * The profiles list endpoint is heavily rate-limited (burst 3/s, steady
+   * 60/min), so the caller can pass `delayMs` to stay under the steady limit.
+   */
+  async function listAllProfilesForAudit(options?: {
+    delayMs?: number;
+    limit?: number;
+    startCursor?: string;
+    onPage?: (
+      entries: KlaviyoProfileAuditEntry[],
+      page: number,
+      nextCursor: string | null
+    ) => void;
+  }): Promise<KlaviyoProfileAuditEntry[]> {
+    const delayMs = options?.delayMs ?? 0;
+    const limit = options?.limit;
+    const entries: KlaviyoProfileAuditEntry[] = [];
+    let cursor = options?.startCursor;
+    let page = 0;
+    do {
+      const cursorParam = cursor
+        ? `&page[cursor]=${encodeURIComponent(cursor)}`
+        : "";
+
+      // Klaviyo occasionally returns a 200 with an empty/null body mid-scan
+      // (transient server glitch under sustained load). Retry such pages a few
+      // times before giving up — a page with a real `data` array (even empty)
+      // is never retried.
+      let body: KlaviyoAuditPage | null = null;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        const res = await request(
+          "GET",
+          `/profiles/?page[size]=100&fields[profile]=email&additional-fields[profile]=subscriptions${cursorParam}`
+        );
+        const parsed = (res.data ?? {}) as KlaviyoAuditPage;
+        if (Array.isArray(parsed.data)) {
+          body = parsed;
+          break;
+        }
+        if (attempt < maxRetries - 1) {
+          await sleep(Math.min(1000 * Math.pow(2, attempt), 60_000));
+        }
+      }
+      if (!body) {
+        throw new KlaviyoApiError(
+          200,
+          "OK",
+          `Profiles scan returned an empty body after ${maxRetries} attempts (cursor=${cursor ?? "start"})`
+        );
+      }
+
+      const pageEntries: KlaviyoProfileAuditEntry[] = [];
+      for (const item of body.data ?? []) {
+        const email = (item.attributes?.email ?? "").trim().toLowerCase();
+        if (!email) continue;
+        const marketing = item.attributes?.subscriptions?.email?.marketing;
+        const consent = (marketing?.consent ?? "").trim();
+        const suppressions = [
+          ...(marketing?.suppression ?? []),
+          ...(marketing?.list_suppressions ?? []),
+        ];
+        pageEntries.push({
+          email,
+          consent,
+          suppressed: consent === "SUPPRESSED" || suppressions.length > 0,
+          canReceiveEmailMarketing: marketing?.can_receive_email_marketing === true,
+        });
+      }
+      entries.push(...pageEntries);
+      page++;
+      const nextUrl = body.links?.next;
+      cursor = nextUrl
+        ? new URLSearchParams(nextUrl.split("?")[1] ?? "").get("page[cursor]") ?? undefined
+        : undefined;
+      options?.onPage?.(pageEntries, page, cursor ?? null);
+      if (limit !== undefined && entries.length >= limit) break;
+      if (cursor && delayMs > 0) await sleep(delayMs);
+    } while (cursor);
+    if (limit !== undefined) entries.length = Math.min(entries.length, limit);
+    return entries;
+  }
+
+  /**
+   * Bulk-suppress profiles from email marketing by email address. Suppression
+   * is global (removes the profile from Klaviyo's active/billable count) and
+   * does NOT delete the profile or its history.
+   *
+   * Klaviyo caps this endpoint at 100 emails per request and, if an email is
+   * not found, it will CREATE and immediately suppress a new profile — so only
+   * pass emails already known to exist.
+   */
+  async function suppressProfilesByEmail(
+    emails: string[],
+    options?: { delayMs?: number }
+  ): Promise<{ requested: number; calls: number; jobIds: string[] }> {
+    const delayMs = options?.delayMs ?? 0;
+    const unique = [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))];
+    const jobIds: string[] = [];
+    let calls = 0;
+    for (let i = 0; i < unique.length; i += SUPPRESSION_CHUNK) {
+      const chunk = unique.slice(i, i + SUPPRESSION_CHUNK);
+      const res = await request("POST", "/profile-suppression-bulk-create-jobs/", {
+        data: {
+          type: "profile-suppression-bulk-create-job",
+          attributes: {
+            profiles: {
+              data: chunk.map((email) => ({
+                type: "profile",
+                attributes: { email },
+              })),
+            },
+          },
+        },
+      });
+      const jobId = (res.data as { data?: { id?: string } })?.data?.id ?? "";
+      if (!jobId) {
+        throw new KlaviyoApiError(
+          res.status,
+          "OK",
+          "Suppression job id missing in response"
+        );
+      }
+      jobIds.push(jobId);
+      calls++;
+      if (i + SUPPRESSION_CHUNK < unique.length && delayMs > 0) await sleep(delayMs);
+    }
+    return { requested: unique.length, calls, jobIds };
+  }
+
+  /** Poll suppression jobs until all are complete. Throws on timeout/cancellation. */
+  async function waitForSuppressionJobs(
+    jobIds: string[],
+    options?: { timeoutMs?: number; intervalMs?: number }
+  ): Promise<void> {
+    if (jobIds.length === 0) return;
+    const timeoutMs = options?.timeoutMs ?? 240_000;
+    const intervalMs = options?.intervalMs ?? 5_000;
+    const deadline = Date.now() + timeoutMs;
+
+    const pending = new Set(jobIds);
+    while (pending.size > 0) {
+      for (const jobId of [...pending]) {
+        const res = await request(
+          "GET",
+          `/profile-suppression-bulk-create-jobs/${encodeURIComponent(jobId)}/`
+        );
+        const status =
+          (res.data as { data?: { attributes?: { status?: string } } })?.data?.attributes
+            ?.status ?? "";
+        if (status === "complete") {
+          pending.delete(jobId);
+        } else if (status === "cancelled" || status === "failed") {
+          throw new KlaviyoApiError(res.status, "OK", `Suppression job ${jobId} ${status}`);
+        }
+      }
+      if (pending.size === 0) break;
+      if (Date.now() >= deadline) {
+        throw new KlaviyoJobTimeoutError([...pending], timeoutMs);
+      }
+      await sleep(intervalMs);
+    }
+  }
+
   return {
     importProfiles,
     waitForImportJobs,
@@ -383,6 +596,9 @@ export function createKlaviyoClient(config: KlaviyoConfig) {
     removeProfilesFromList,
     listProfilesInList,
     listProfileSubscriptionStates,
+    listAllProfilesForAudit,
+    suppressProfilesByEmail,
+    waitForSuppressionJobs,
   };
 }
 
