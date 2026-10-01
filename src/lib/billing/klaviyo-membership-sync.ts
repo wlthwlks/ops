@@ -360,18 +360,22 @@ export type KlaviyoMembershipSyncResult = {
   churnedUnsubscribed: number;
   churnedUnsubscribeCalls: number;
   skippedNoEmail: number;
-  /** Emails present in the census but not found as Klaviyo profiles after import. */
+  /** Emails we wanted to mutate but could not resolve to a Klaviyo profile id. */
   unresolvedProfiles: number;
 };
 
 /**
- * Full reconcile of the two Klaviyo lists:
+ * Full reconcile of the two Klaviyo lists against the census:
  *   1. Bulk-upsert profiles (identity + columns + custom properties) and wait
  *      for the import jobs to complete.
- *   2. Resolve profile ids by email.
- *   3. Active list: add actives, remove churned.
- *   4. Churned list: add churned, remove actives.
- * List membership moves never touch email consent.
+ *   2. Read the CURRENT membership of both lists (by email).
+ *   3. Diff against the desired state (actives → active list, churned → churned
+ *      list). For each list: add desired-minus-current, remove current-minus-desired.
+ *
+ * This is a true full reconcile: profiles no longer in the census (e.g. whose
+ * subscription status is past_due/unpaid/paused/incomplete) are REMOVED from
+ * both lists, so stale members cannot linger forever. List membership moves
+ * never touch email consent.
  */
 export async function syncKlaviyoMembershipLists(input: {
   klaviyo: KlaviyoClient;
@@ -387,22 +391,50 @@ export async function syncKlaviyoMembershipLists(input: {
   const imported = await klaviyo.importProfiles(input.profiles);
   await klaviyo.waitForImportJobs(imported.jobIds);
 
-  const idsByEmail = await klaviyo.listProfileIdsByEmails([
-    ...input.activeEmails,
-    ...input.churnedEmails,
+  const [currentActive, currentChurned] = await Promise.all([
+    klaviyo.listProfilesInList(activeListId),
+    klaviyo.listProfilesInList(churnedListId),
   ]);
 
-  const activeIds = input.activeEmails
-    .map((email) => idsByEmail.get(email))
-    .filter((id): id is string => Boolean(id));
-  const churnedIds = input.churnedEmails
-    .map((email) => idsByEmail.get(email))
-    .filter((id): id is string => Boolean(id));
+  const desiredActive = new Set(input.activeEmails);
+  const desiredChurned = new Set(input.churnedEmails);
 
-  const activeAdd = await klaviyo.addProfilesToList(activeListId, activeIds);
-  const activeRemove = await klaviyo.removeProfilesFromList(activeListId, churnedIds);
-  const churnedAdd = await klaviyo.addProfilesToList(churnedListId, churnedIds);
-  const churnedRemove = await klaviyo.removeProfilesFromList(churnedListId, activeIds);
+  const activeToAdd = [...desiredActive].filter((e) => !currentActive.has(e));
+  const activeToRemove = [...currentActive].filter((e) => !desiredActive.has(e));
+  const churnedToAdd = [...desiredChurned].filter((e) => !currentChurned.has(e));
+  const churnedToRemove = [...currentChurned].filter((e) => !desiredChurned.has(e));
+
+  const idsByEmail = await klaviyo.listProfileIdsByEmails([
+    ...activeToAdd,
+    ...activeToRemove,
+    ...churnedToAdd,
+    ...churnedToRemove,
+  ]);
+
+  const resolve = (emails: string[]): string[] =>
+    emails
+      .map((email) => idsByEmail.get(email))
+      .filter((id): id is string => Boolean(id));
+
+  const activeAddIds = resolve(activeToAdd);
+  const activeRemoveIds = resolve(activeToRemove);
+  const churnedAddIds = resolve(churnedToAdd);
+  const churnedRemoveIds = resolve(churnedToRemove);
+
+  const activeAdd = await klaviyo.addProfilesToList(activeListId, activeAddIds);
+  const activeRemove = await klaviyo.removeProfilesFromList(activeListId, activeRemoveIds);
+  const churnedAdd = await klaviyo.addProfilesToList(churnedListId, churnedAddIds);
+  const churnedRemove = await klaviyo.removeProfilesFromList(churnedListId, churnedRemoveIds);
+
+  const unresolvedProfiles =
+    activeToAdd.length -
+    activeAddIds.length +
+    activeToRemove.length -
+    activeRemoveIds.length +
+    churnedToAdd.length -
+    churnedAddIds.length +
+    churnedToRemove.length -
+    churnedRemoveIds.length;
 
   return {
     profilesImported: imported.requested,
@@ -416,8 +448,7 @@ export async function syncKlaviyoMembershipLists(input: {
     churnedUnsubscribed: churnedRemove.requested,
     churnedUnsubscribeCalls: churnedRemove.calls,
     skippedNoEmail: input.skippedNoEmail,
-    unresolvedProfiles:
-      input.activeEmails.length + input.churnedEmails.length - activeIds.length - churnedIds.length,
+    unresolvedProfiles,
   };
 }
 

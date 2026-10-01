@@ -82,7 +82,8 @@ function mockAirtable(records: AirtableRecord[]) {
   };
 }
 
-function mockKlaviyo() {
+function mockKlaviyo(currentActive: string[] = [], currentChurned: string[] = []) {
+  const calls = (ids: unknown[]) => Math.ceil(ids.length / 1000);
   return {
     importProfiles: vi.fn(async (profiles: unknown[]) => ({
       requested: profiles.length,
@@ -90,6 +91,10 @@ function mockKlaviyo() {
       jobIds: ["job1"],
     })),
     waitForImportJobs: vi.fn(async () => undefined),
+    listProfilesInList: vi.fn(async (listId: string) => {
+      const emails = listId === "list_active" ? currentActive : currentChurned;
+      return new Set(emails);
+    }),
     listProfileIdsByEmails: vi.fn(async (emails: string[]) => {
       const map = new Map<string, string>();
       emails.forEach((email, i) => map.set(email, `prof_${i}`));
@@ -97,15 +102,16 @@ function mockKlaviyo() {
     }),
     addProfilesToList: vi.fn(async (_listId: string, ids: string[]) => ({
       requested: ids.length,
-      calls: 1,
+      calls: calls(ids),
     })),
     removeProfilesFromList: vi.fn(async (_listId: string, ids: string[]) => ({
       requested: ids.length,
-      calls: 1,
+      calls: calls(ids),
     })),
   } as unknown as KlaviyoClient & {
     importProfiles: ReturnType<typeof vi.fn>;
     waitForImportJobs: ReturnType<typeof vi.fn>;
+    listProfilesInList: ReturnType<typeof vi.fn>;
     listProfileIdsByEmails: ReturnType<typeof vi.fn>;
     addProfilesToList: ReturnType<typeof vi.fn>;
     removeProfilesFromList: ReturnType<typeof vi.fn>;
@@ -467,8 +473,11 @@ describe("buildKlaviyoProfiles", () => {
 });
 
 describe("syncKlaviyoMembershipLists", () => {
-  it("imports profiles, waits, resolves ids and reconciles both lists in full", async () => {
-    const klaviyo = mockKlaviyo();
+  it("reads current membership and diffs both lists to the census (full reconcile)", async () => {
+    const klaviyo = mockKlaviyo(
+      ["a@x.com", "stale@x.com"], // active currently holds an active + a stale profile
+      ["gone@x.com"] // churned currently holds a profile that is now active in census
+    );
     const result = await syncKlaviyoMembershipLists({
       klaviyo,
       activeListId: "list_active",
@@ -484,17 +493,21 @@ describe("syncKlaviyoMembershipLists", () => {
 
     expect(klaviyo.importProfiles).toHaveBeenCalledTimes(1);
     expect(klaviyo.waitForImportJobs).toHaveBeenCalledWith(["job1"]);
-    expect(klaviyo.listProfileIdsByEmails).toHaveBeenCalledWith(["a@x.com", "c@x.com"]);
-    expect(klaviyo.addProfilesToList).toHaveBeenCalledWith("list_active", ["prof_0"]);
-    expect(klaviyo.removeProfilesFromList).toHaveBeenCalledWith("list_active", ["prof_1"]);
+    expect(klaviyo.listProfilesInList).toHaveBeenCalledWith("list_active");
+    expect(klaviyo.listProfilesInList).toHaveBeenCalledWith("list_churned");
+
+    // Active: keep a@x.com (already there), remove stale@x.com.
+    expect(klaviyo.addProfilesToList).toHaveBeenCalledWith("list_active", []);
+    expect(klaviyo.removeProfilesFromList).toHaveBeenCalledWith("list_active", ["prof_0"]);
+    // Churned: add c@x.com, remove gone@x.com (now active).
     expect(klaviyo.addProfilesToList).toHaveBeenCalledWith("list_churned", ["prof_1"]);
-    expect(klaviyo.removeProfilesFromList).toHaveBeenCalledWith("list_churned", ["prof_0"]);
+    expect(klaviyo.removeProfilesFromList).toHaveBeenCalledWith("list_churned", ["prof_2"]);
 
     expect(result).toEqual({
       profilesImported: 2,
       importJobs: 1,
-      activeSubscribed: 1,
-      activeSubscribeCalls: 1,
+      activeSubscribed: 0,
+      activeSubscribeCalls: 0,
       activeUnsubscribed: 1,
       activeUnsubscribeCalls: 1,
       churnedSubscribed: 1,
@@ -506,7 +519,34 @@ describe("syncKlaviyoMembershipLists", () => {
     });
   });
 
-  it("counts unresolved profiles when email lookup misses", async () => {
+  it("adds desired members when the lists start empty", async () => {
+    const klaviyo = mockKlaviyo();
+    const result = await syncKlaviyoMembershipLists({
+      klaviyo,
+      activeListId: "list_active",
+      churnedListId: "list_churned",
+      profiles: [
+        { email: "a@x.com", properties: { membership_status: "active" } },
+        { email: "c@x.com", properties: { membership_status: "churned" } },
+      ],
+      activeEmails: ["a@x.com"],
+      churnedEmails: ["c@x.com"],
+      skippedNoEmail: 0,
+    });
+
+    expect(klaviyo.addProfilesToList).toHaveBeenCalledWith("list_active", ["prof_0"]);
+    expect(klaviyo.removeProfilesFromList).toHaveBeenCalledWith("list_active", []);
+    expect(klaviyo.addProfilesToList).toHaveBeenCalledWith("list_churned", ["prof_1"]);
+    expect(klaviyo.removeProfilesFromList).toHaveBeenCalledWith("list_churned", []);
+
+    expect(result.activeSubscribed).toBe(1);
+    expect(result.activeUnsubscribed).toBe(0);
+    expect(result.churnedSubscribed).toBe(1);
+    expect(result.churnedUnsubscribed).toBe(0);
+    expect(result.unresolvedProfiles).toBe(0);
+  });
+
+  it("counts unresolved profiles when email lookup misses a desired member", async () => {
     const klaviyo = mockKlaviyo();
     klaviyo.listProfileIdsByEmails.mockResolvedValueOnce(new Map([["a@x.com", "prof_0"]]));
     const result = await syncKlaviyoMembershipLists({
