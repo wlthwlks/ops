@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   PairScoreMatrix,
   buildGroups,
+  fillUnmatchedGuarantee,
   rebuildGroupsWithLocks,
   hashSeed,
   mulberry32,
@@ -332,5 +333,73 @@ describe("buildGroups — everyone matched (target 3 / min 2 / max 4)", () => {
     expect(placed).toContain("m0");
     const m0Group = result.groups.find((g) => g.some((m) => m.key === "m0"));
     expect(m0Group?.map((m) => m.key).sort()).toEqual(["m0", "m1", "m2"]);
+  });
+});
+
+describe("fillUnmatchedGuarantee", () => {
+  const sizes34: EffectiveGroupSizes = { target: 3, min: 2, max: 4, strict: false };
+
+  function blockedPair(m: PairScoreMatrix, a: string, b: string) {
+    m.set(a, b, { score: { overall: 0, components: {} }, allowed: false, blockedReason: "recent_pair_repeat" });
+  }
+
+  it("re-groups a single-group city by relaxing repeats", () => {
+    // All three members met each other in the same previous group, so every
+    // pair is repeat-blocked and no strict grouping exists.
+    const strict = new PairScoreMatrix();
+    blockedPair(strict, "m0", "m1");
+    blockedPair(strict, "m0", "m2");
+    blockedPair(strict, "m1", "m2");
+    const relaxed = uniformMatrix(3);
+    const result = fillUnmatchedGuarantee(
+      [],
+      [{ key: "m0" }, { key: "m1" }, { key: "m2" }],
+      strict,
+      relaxed,
+      sizes34
+    );
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0].map((m) => m.key).sort()).toEqual(["m0", "m1", "m2"]);
+    expect(result.reintroducedGroups.size).toBe(1);
+  });
+
+  it("adds a leftover to an existing group with a repeat and flags it", () => {
+    const strict = new PairScoreMatrix();
+    strict.set("a", "b", { score: { overall: 0.5, components: {} }, allowed: true });
+    strict.set("a", "c", { score: { overall: 0.5, components: {} }, allowed: true });
+    blockedPair(strict, "b", "c");
+    const relaxed = uniformMatrix(3);
+    const result = fillUnmatchedGuarantee(
+      [[{ key: "a" }, { key: "b" }]],
+      [{ key: "c" }],
+      strict,
+      relaxed,
+      sizes34
+    );
+    expect(result.groups[0].map((m) => m.key).sort()).toEqual(["a", "b", "c"]);
+    expect(result.reintroducedGroups.has("a|b|c")).toBe(true);
+  });
+
+  it("joins a leftover without a repeat and does not flag", () => {
+    const strict = new PairScoreMatrix();
+    strict.set("a", "b", { score: { overall: 0.5, components: {} }, allowed: true });
+    strict.set("a", "c", { score: { overall: 0.5, components: {} }, allowed: true });
+    strict.set("b", "c", { score: { overall: 0.5, components: {} }, allowed: true });
+    const result = fillUnmatchedGuarantee(
+      [[{ key: "a" }, { key: "b" }]],
+      [{ key: "c" }],
+      strict,
+      uniformMatrix(3),
+      sizes34
+    );
+    expect(result.groups[0].map((m) => m.key).sort()).toEqual(["a", "b", "c"]);
+    expect(result.reintroducedGroups.size).toBe(0);
+  });
+
+  it("is a no-op when there are no unmatched members", () => {
+    const strict = uniformMatrix(2);
+    const result = fillUnmatchedGuarantee([[{ key: "a" }, { key: "b" }]], [], strict, strict, sizes34);
+    expect(result.groups).toHaveLength(1);
+    expect(result.reintroducedGroups.size).toBe(0);
   });
 });

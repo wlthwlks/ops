@@ -15,6 +15,10 @@ import type { EffectiveGroupSizes } from "./settings";
  * always produce identical groups.
  */
 
+export function groupFingerprint(group: Array<{ key: string }>): string {
+  return group.map((m) => m.key).sort().join("|");
+}
+
 export function hashSeed(value: string): number {
   return createHash("sha256").update(value).digest().readUInt32BE(0);
 }
@@ -342,6 +346,102 @@ export function buildGroups(
     quality: result.quality,
     groupScores: result.groupScores,
   };
+}
+
+export interface GuaranteeFillResult {
+  groups: Array<Array<{ key: string }>>;
+  /** Fingerprints of groups that contain a relaxed (repeat/cooldown) pair. */
+  reintroducedGroups: Set<string>;
+}
+
+/**
+ * Guarantee every unmatched member an introduction by relaxing the
+ * repeat/cooldown rule only as a last resort.
+ *
+ * For each unmatched member (deterministic key order):
+ *   1. Join an existing group where the member is allowed with every current
+ *      member (no repeat) — preferred.
+ *   2. Else join the existing group that introduces the fewest disallowed
+ *      pairs (a repeat is now unavoidable) and flag that group.
+ *   3. Else (no group has room) buffer the member and, once all are
+ *      processed, form fresh groups from the buffer using the relaxed matrix
+ *      (repeat/cooldown blocks lifted), flagging those groups too.
+ *
+ * Members that still cannot be placed (e.g. a lone member when every group is
+ * at max size) are omitted — the caller recomputes the final unmatched set.
+ */
+export function fillUnmatchedGuarantee(
+  groups: Array<Array<{ key: string }>>,
+  unmatched: Array<{ key: string }>,
+  strictMatrix: PairMatrixReader,
+  relaxedMatrix: PairScoreMatrix,
+  sizes: EffectiveGroupSizes
+): GuaranteeFillResult {
+  const working = groups.map((g) => [...g]);
+  const reintroduced = new Set<string>();
+  const buffered: Array<{ key: string }> = [];
+  const pool = [...unmatched].sort((a, b) => a.key.localeCompare(b.key));
+
+  for (const member of pool) {
+    // 1) strict join — no repeat introduced.
+    let target: Array<{ key: string }> | null = null;
+    for (const g of working) {
+      if (g.length >= sizes.max) continue;
+      let allAllowed = true;
+      for (const other of g) {
+        const entry = strictMatrix.get(member.key, other.key);
+        if (!entry || !entry.allowed) {
+          allAllowed = false;
+          break;
+        }
+      }
+      if (allAllowed) {
+        target = g;
+        break;
+      }
+    }
+    if (target) {
+      target.push(member);
+      continue;
+    }
+
+    // 2) relaxed join — fewest disallowed pairs.
+    let bestG: Array<{ key: string }> | null = null;
+    let bestDisallowed = Infinity;
+    for (const g of working) {
+      if (g.length >= sizes.max) continue;
+      let disallowed = 0;
+      for (const other of g) {
+        const entry = strictMatrix.get(member.key, other.key);
+        if (!entry || !entry.allowed) disallowed += 1;
+      }
+      if (disallowed < bestDisallowed) {
+        bestDisallowed = disallowed;
+        bestG = g;
+      }
+    }
+    if (bestG) {
+      bestG.push(member);
+      reintroduced.add(groupFingerprint(bestG));
+      continue;
+    }
+
+    // 3) no room anywhere — buffer for a fresh fallback group.
+    buffered.push(member);
+  }
+
+  if (buffered.length > 0) {
+    const fallback = buildGroups(buffered, relaxedMatrix, {
+      sizes,
+      seed: "fill-guarantee",
+    });
+    for (const g of fallback.groups) {
+      working.push(g);
+      reintroduced.add(groupFingerprint(g));
+    }
+  }
+
+  return { groups: working, reintroducedGroups: reintroduced };
 }
 
 /**

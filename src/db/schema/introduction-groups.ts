@@ -42,6 +42,8 @@ export const introductionGroups = pgTable(
     matchingProfileVersionId: text("matching_profile_version_id"),
     cityCode: text("city_code"),
     locked: boolean("locked").notNull().default(false),
+    /** True when the group was formed by relaxing the repeat/cooldown rule to guarantee every member an introduction. */
+    reintroduced: boolean("reintroduced").notNull().default(false),
     emailSubjectSnapshot: text("email_subject_snapshot"),
     emailHtmlSnapshot: text("email_html_snapshot"),
     claimedAt: timestamp("claimed_at", { withTimezone: true }),
