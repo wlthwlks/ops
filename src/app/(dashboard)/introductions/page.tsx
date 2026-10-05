@@ -1,11 +1,59 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Alert, App, Badge, Button, Card, Descriptions, Flex, Table, Tag, Typography } from "antd";
+import {
+  Alert,
+  App,
+  Badge,
+  Button,
+  Card,
+  Descriptions,
+  Flex,
+  Input,
+  Modal,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+} from "antd";
 import { ReloadOutlined } from "@ant-design/icons";
 import Link from "next/link";
 
 const { Title, Text } = Typography;
+
+const COMPONENT_LABELS: Record<string, string> = {
+  proximity: "Proximity",
+  ai_correlation: "AI correlation",
+  help_expertise: "Help/Expertise",
+  goal_relevance: "90-day goal",
+  connection_type: "Connection type",
+  industry: "Industry",
+  business_stage: "Business stage",
+};
+
+interface IndividualPartner {
+  key: string;
+  email: string;
+  name: string | null;
+  professionalHeadline: string | null;
+  city: string | null;
+  industry: string | null;
+  businessStage: string | null;
+}
+
+interface IndividualProposal {
+  success: boolean;
+  code?: string;
+  error?: string;
+  target: IndividualPartner | null;
+  partners: IndividualPartner[];
+  groupScore: number | null;
+  groupScoreBreakdown: Record<string, number> | null;
+  cityCode: string | null;
+  cityName: string | null;
+  eligiblePoolSize: number;
+}
 
 interface RunRow {
   id: string;
@@ -43,6 +91,14 @@ export default function IntroductionsOverviewPage() {
   const [runs, setRuns] = useState<RunRow[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const [individualEmail, setIndividualEmail] = useState("");
+  const [individualPreviewing, setIndividualPreviewing] = useState(false);
+  const [individualProposal, setIndividualProposal] = useState<IndividualProposal | null>(null);
+  const [individualCreating, setIndividualCreating] = useState(false);
+  const [individualDeliveryMode, setIndividualDeliveryMode] = useState("production");
+  const [individualConfirmOpen, setIndividualConfirmOpen] = useState(false);
+  const [individualConfirmation, setIndividualConfirmation] = useState("");
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -77,6 +133,66 @@ export default function IntroductionsOverviewPage() {
     defaultTemplateId?: string | null;
   };
   const configured = (config?.configured ?? {}) as Record<string, boolean>;
+
+  const previewIndividual = async () => {
+    if (!individualEmail.trim()) return;
+    setIndividualPreviewing(true);
+    setIndividualProposal(null);
+    try {
+      const res = await fetch("/api/introductions/individual-match/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: individualEmail.trim() }),
+      });
+      const body = await res.json();
+      setIndividualProposal(body as IndividualProposal);
+    } catch (err) {
+      message.error(`Preview failed: ${err instanceof Error ? err.message : "unknown error"}`);
+    } finally {
+      setIndividualPreviewing(false);
+    }
+  };
+
+  const createIndividual = async () => {
+    setIndividualCreating(true);
+    try {
+      const res = await fetch("/api/introductions/individual-match/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: individualEmail.trim(), deliveryMode: individualDeliveryMode }),
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        message.error(body.error ?? "Could not create individual introduction");
+        return;
+      }
+      message.success(
+        body.runId
+          ? `Created (${body.deliveryCount} deliveries). The delivery worker will send it.`
+          : "Created"
+      );
+      setIndividualProposal(null);
+      setIndividualEmail("");
+      setIndividualConfirmOpen(false);
+      setIndividualConfirmation("");
+      await load();
+    } catch (err) {
+      message.error(`Create failed: ${err instanceof Error ? err.message : "unknown error"}`);
+    } finally {
+      setIndividualCreating(false);
+    }
+  };
+
+  const requestCreate = () => {
+    if (individualDeliveryMode === "production") {
+      setIndividualConfirmOpen(true);
+    } else {
+      void createIndividual();
+    }
+  };
+
+  const memberLine = (m: IndividualPartner) =>
+    [m.name, m.professionalHeadline, m.industry, m.city].filter(Boolean).join(" · ");
 
   return (
     <Flex vertical gap={16}>
@@ -184,6 +300,80 @@ export default function IntroductionsOverviewPage() {
         />
       </Card>
 
+      <Card size="small" title="Individual introduction">
+        <Flex vertical gap={12}>
+          <Text type="secondary">
+            Match one person (paused or cancelled members included) with the two best-fitting
+            active members from their city, using the same matching configuration.
+          </Text>
+          <Space wrap>
+            <Input
+              placeholder="member@example.com"
+              value={individualEmail}
+              onChange={(event) => setIndividualEmail(event.target.value)}
+              onPressEnter={() => void previewIndividual()}
+              style={{ width: 320 }}
+            />
+            <Button type="primary" loading={individualPreviewing} onClick={() => void previewIndividual()}>
+              Preview match
+            </Button>
+          </Space>
+
+          {individualProposal && !individualProposal.success && (
+            <Alert
+              type="error"
+              showIcon
+              message={individualProposal.error ?? individualProposal.code ?? "Could not match"}
+            />
+          )}
+
+          {individualProposal?.success && individualProposal.target && (
+            <Flex vertical gap={12}>
+              <Alert
+                type="info"
+                showIcon
+                message={`${individualProposal.cityName ?? "City"} · ${individualProposal.eligiblePoolSize} eligible member(s) available`}
+              />
+              <Space direction="vertical" size={4}>
+                <Text strong>Person to introduce:</Text>
+                <Text>
+                  {individualProposal.target.name ?? "—"} <Text type="secondary">{individualProposal.target.email}</Text>
+                </Text>
+                <Text strong>Matched with:</Text>
+                {individualProposal.partners.map((p) => (
+                  <Text key={p.key}>
+                    {memberLine(p)} <Text type="secondary">{p.email}</Text>
+                  </Text>
+                ))}
+              </Space>
+              <Space wrap>
+                <Tag color="blue">Group score {individualProposal.groupScore ?? "—"}</Tag>
+                {Object.entries(individualProposal.groupScoreBreakdown ?? {}).map(([component, score]) => (
+                  <Tag key={component}>
+                    {COMPONENT_LABELS[component] ?? component}: {Math.round((score as number) * 100)}
+                  </Tag>
+                ))}
+              </Space>
+              <Space wrap>
+                <Select
+                  value={individualDeliveryMode}
+                  onChange={setIndividualDeliveryMode}
+                  style={{ width: 160 }}
+                  options={[
+                    { value: "production", label: "Production" },
+                    { value: "canary", label: "Canary" },
+                    { value: "provider_test", label: "Provider test" },
+                  ]}
+                />
+                <Button type="primary" danger loading={individualCreating} onClick={requestCreate}>
+                  Create & send
+                </Button>
+              </Space>
+            </Flex>
+          )}
+        </Flex>
+      </Card>
+
       <Card size="small" title="Quick start">
         <Descriptions size="small" column={2}>
           <Descriptions.Item label="Preview a city">
@@ -204,6 +394,32 @@ export default function IntroductionsOverviewPage() {
           </Descriptions.Item>
         </Descriptions>
       </Card>
+
+      <Modal
+        title="Confirm production send"
+        open={individualConfirmOpen}
+        onCancel={() => {
+          setIndividualConfirmOpen(false);
+          setIndividualConfirmation("");
+        }}
+        onOk={() => void createIndividual()}
+        okText="Send"
+        okButtonProps={{ disabled: individualConfirmation !== "SEND" }}
+        confirmLoading={individualCreating}
+      >
+        <Flex vertical gap={12}>
+          <Alert
+            type="error"
+            showIcon
+            message="This will email real members. Type SEND to confirm."
+          />
+          <Input
+            placeholder="SEND"
+            value={individualConfirmation}
+            onChange={(event) => setIndividualConfirmation(event.target.value)}
+          />
+        </Flex>
+      </Modal>
     </Flex>
   );
 }

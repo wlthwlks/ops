@@ -23,6 +23,7 @@ import {
 export const GLOBAL_CONFIG_KEYS = {
   defaultProfileId: "intro.default_profile_id",
   defaultTemplateId: "intro.default_template_id",
+  individualTemplateId: "intro.individual_template_id",
   senderFrom: "intro.sender_from",
   canaryEmails: "intro.canary_emails",
   providerTestEmails: "intro.provider_test_emails",
@@ -296,6 +297,7 @@ export interface GlobalIntroductionConfig {
   providerTestEmails: string[];
   defaultProfileId: string | null;
   defaultTemplateId: string | null;
+  individualTemplateId: string | null;
 }
 
 function parseEmailListJson(raw: string | undefined): string[] {
@@ -324,6 +326,7 @@ export async function getGlobalIntroductionConfig(db: AppDb): Promise<GlobalIntr
     providerTestEmails: parseEmailListJson(map.get(GLOBAL_CONFIG_KEYS.providerTestEmails)),
     defaultProfileId: map.get(GLOBAL_CONFIG_KEYS.defaultProfileId) || null,
     defaultTemplateId: map.get(GLOBAL_CONFIG_KEYS.defaultTemplateId) || null,
+    individualTemplateId: map.get(GLOBAL_CONFIG_KEYS.individualTemplateId) || null,
   };
 }
 
@@ -333,6 +336,7 @@ export const globalConfigPatchSchema = z.object({
   providerTestEmails: z.array(z.string().email()).max(50).optional(),
   defaultProfileId: z.string().min(1).nullable().optional(),
   defaultTemplateId: z.string().min(1).nullable().optional(),
+  individualTemplateId: z.string().min(1).nullable().optional(),
 });
 
 export type GlobalConfigPatch = z.infer<typeof globalConfigPatchSchema>;
@@ -368,6 +372,12 @@ export async function setGlobalIntroductionConfig(
     entries.push({
       key: GLOBAL_CONFIG_KEYS.defaultTemplateId,
       valueJson: parsed.defaultTemplateId ?? "",
+    });
+  }
+  if (parsed.individualTemplateId !== undefined) {
+    entries.push({
+      key: GLOBAL_CONFIG_KEYS.individualTemplateId,
+      valueJson: parsed.individualTemplateId ?? "",
     });
   }
   for (const entry of entries) {

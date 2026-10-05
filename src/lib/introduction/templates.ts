@@ -355,6 +355,32 @@ export async function resolveEffectiveTemplate(
   };
 }
 
+/**
+ * Resolve the template used by individual (manual) introductions. Prefers the
+ * globally configured individual template's latest published version, then
+ * falls back to the default template, then the built-in defaults.
+ */
+export async function resolveIndividualTemplate(db: AppDb): Promise<EffectiveEmailTemplate> {
+  const global = await getGlobalIntroductionConfig(db);
+
+  if (global.individualTemplateId) {
+    const template = await getEmailTemplate(db, global.individualTemplateId);
+    if (template && template.status === "published") {
+      const latest = await getLatestTemplateVersion(db, template.id);
+      if (latest) {
+        return {
+          versionId: latest.id,
+          subject: latest.subject,
+          bodyHtml: latest.bodyHtml,
+          senderFrom: latest.senderFrom || global.senderFrom,
+        };
+      }
+    }
+  }
+
+  return resolveEffectiveTemplate(db, null);
+}
+
 /** Create and publish the built-in default template when none exists. */
 export async function ensureDefaultTemplate(
   db: AppDb,
@@ -374,6 +400,57 @@ export async function ensureDefaultTemplate(
     .insert(introductionConfig)
     .values({
       key: GLOBAL_CONFIG_KEYS.defaultTemplateId,
+      valueJson: template.id,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: introductionConfig.key,
+      set: {
+        valueJson: template.id,
+        updatedAt: new Date(),
+      },
+    });
+  return version;
+}
+
+export const INDIVIDUAL_TEMPLATE_NAME = "Individual introduction";
+export const INDIVIDUAL_TEMPLATE_SUBJECT = "Your personal {{city}} introduction";
+
+export const INDIVIDUAL_TEMPLATE_BODY = `
+<p>Hi {{first_name}},</p>
+<p>We've arranged a personal introduction for you in {{city}}. Here's who you've been matched with:</p>
+{{members}}
+{{why_you_matched}}
+<p>{{coordination_text}}</p>
+<p>Enjoy the walk,<br/>WLTH WLKS</p>
+`.trim();
+
+/**
+ * Ensure the individual-introduction template exists: when the configured
+ * individual template id is missing, create + publish a default one and wire
+ * the global config to it.
+ */
+export async function ensureIndividualTemplate(
+  db: AppDb,
+  opts: { createdBy?: string } = {}
+): Promise<IntroductionEmailTemplateVersion> {
+  const global = await getGlobalIntroductionConfig(db);
+  if (global.individualTemplateId) {
+    const latest = await getLatestTemplateVersion(db, global.individualTemplateId);
+    if (latest) return latest;
+  }
+
+  const { template, version } = await createEmailTemplate(db, {
+    name: INDIVIDUAL_TEMPLATE_NAME,
+    subject: INDIVIDUAL_TEMPLATE_SUBJECT,
+    bodyHtml: INDIVIDUAL_TEMPLATE_BODY,
+    createdBy: opts.createdBy,
+  });
+  await publishEmailTemplate(db, template.id);
+  await db
+    .insert(introductionConfig)
+    .values({
+      key: GLOBAL_CONFIG_KEYS.individualTemplateId,
       valueJson: template.id,
       updatedAt: new Date(),
     })

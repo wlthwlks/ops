@@ -12,6 +12,7 @@ import {
   Popconfirm,
   Space,
   Table,
+  Tabs,
   Tag,
   Typography,
 } from "antd";
@@ -67,12 +68,25 @@ export default function IntroductionsTemplatesPage() {
   const [testTo, setTestTo] = useState("");
   const [testSending, setTestSending] = useState(false);
 
+  const [defaultTemplateId, setDefaultTemplateId] = useState<string | null>(null);
+  const [individualTemplateId, setIndividualTemplateId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"monthly" | "individual">("monthly");
+  const [ensuringIndividual, setEnsuringIndividual] = useState(false);
+
   const loadTemplates = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/introductions/templates", { cache: "no-store" });
-      const body = await res.json();
-      setTemplates(body.templates ?? []);
+      const [templatesRes, configRes] = await Promise.all([
+        fetch("/api/introductions/templates", { cache: "no-store" }),
+        fetch("/api/introductions/config", { cache: "no-store" }),
+      ]);
+      const templatesBody = await templatesRes.json();
+      setTemplates(templatesBody.templates ?? []);
+      if (configRes.ok) {
+        const configBody = await configRes.json();
+        setDefaultTemplateId(configBody.config?.defaultTemplateId ?? null);
+        setIndividualTemplateId(configBody.config?.individualTemplateId ?? null);
+      }
     } catch {
       message.error("Could not load templates");
     } finally {
@@ -83,6 +97,40 @@ export default function IntroductionsTemplatesPage() {
   useEffect(() => {
     void loadTemplates();
   }, [loadTemplates]);
+
+  const visibleTemplateId = activeTab === "monthly" ? defaultTemplateId : individualTemplateId;
+  const visibleTemplates = visibleTemplateId
+    ? templates.filter((t) => t.template.id === visibleTemplateId)
+    : templates;
+
+  // Auto-select the tab's template once it exists.
+  useEffect(() => {
+    if (!visibleTemplateId) return;
+    if (templates.some((t) => t.template.id === visibleTemplateId)) {
+      void loadTemplateDetail(visibleTemplateId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, visibleTemplateId, templates.length]);
+
+  const ensureIndividual = async () => {
+    setEnsuringIndividual(true);
+    try {
+      const res = await fetch("/api/introductions/templates/individual/ensure", {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        message.error(body?.message ?? "Could not create individual template");
+        return;
+      }
+      message.success("Individual template created & published");
+      await loadTemplates();
+    } catch {
+      message.error("Create individual template failed");
+    } finally {
+      setEnsuringIndividual(false);
+    }
+  };
 
   const loadTemplateDetail = async (templateId: string) => {
     setSelectedTemplateId(templateId);
@@ -244,13 +292,36 @@ export default function IntroductionsTemplatesPage() {
         </Space>
       </Flex>
 
+      <Tabs
+        activeKey={activeTab}
+        onChange={(key) => setActiveTab(key as "monthly" | "individual")}
+        items={[
+          { key: "monthly", label: "Monthly intros" },
+          { key: "individual", label: "Individual intros" },
+        ]}
+      />
+
+      {activeTab === "individual" && !individualTemplateId && (
+        <Alert
+          type="info"
+          showIcon
+          message="No individual template yet."
+          description="Individual introductions fall back to the monthly template until one is created."
+          action={
+            <Button loading={ensuringIndividual} onClick={() => void ensureIndividual()}>
+              Create individual template
+            </Button>
+          }
+        />
+      )}
+
       <Card size="small" title="Templates">
         <Table<TemplateRow>
           rowKey={(row) => row.template.id}
           loading={loading}
           size="small"
           pagination={false}
-          dataSource={templates}
+          dataSource={visibleTemplates}
           onRow={(row) => ({ onClick: () => void loadTemplateDetail(row.template.id), style: { cursor: "pointer" } })}
           rowClassName={(row) => (row.template.id === selectedTemplateId ? "ant-table-row-selected" : "")}
           columns={[
