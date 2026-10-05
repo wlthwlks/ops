@@ -93,7 +93,7 @@ export const PLAN_MEMBER_FIELDS = [
  * members across cities. Bases without a "City relation" field fall back
  * to the legacy text-based filter.
  */
-async function fetchCityMemberRecords(
+export async function fetchCityMemberRecords(
   airtable: AirtableClient,
   cityCode: string,
   cityNameOrCode: string,
@@ -416,7 +416,7 @@ export interface IntroductionPreviewResult {
   };
 }
 
-function toRegistryEntry(member: PlanMember): PlanMemberRegistryEntry {
+export function toRegistryEntry(member: PlanMember): PlanMemberRegistryEntry {
   return {
     key: member.key,
     email: member.email,
