@@ -33,6 +33,7 @@ function member(overrides: Partial<MemberEligibilityInput> = {}): MemberEligibil
     membership: "Active",
     payment: "Paid",
     serviceAccessUntil: null,
+    stripeSubscriptionStatus: "active",
     recurringIntroStatus: "",
     recurringPauseUntil: null,
     city: "London",
@@ -72,64 +73,67 @@ describe("memberKey", () => {
   });
 });
 
-describe("checkMemberEligibility — service access", () => {
-  it("excludes members without service access", () => {
+describe("checkMemberEligibility — active Stripe membership", () => {
+  it("accepts members with an active Stripe subscription", () => {
+    const result = checkMemberEligibility(member({ stripeSubscriptionStatus: "active" }), {
+      cycleDate: CYCLE,
+      runCity: null,
+      constraints,
+    });
+    expect(result.eligible).toBe(true);
+  });
+
+  it("accepts members with a trialing Stripe subscription", () => {
+    const result = checkMemberEligibility(member({ stripeSubscriptionStatus: "trialing" }), {
+      cycleDate: CYCLE,
+      runCity: null,
+      constraints,
+    });
+    expect(result.eligible).toBe(true);
+  });
+
+  it("accepts members whose Stripe subscription is paused (pause collection)", () => {
+    const result = checkMemberEligibility(member({ stripeSubscriptionStatus: "paused" }), {
+      cycleDate: CYCLE,
+      runCity: null,
+      constraints,
+    });
+    expect(result.eligible).toBe(true);
+  });
+
+  it("excludes members with a canceled Stripe subscription", () => {
+    const result = checkMemberEligibility(member({ stripeSubscriptionStatus: "canceled" }), {
+      cycleDate: CYCLE,
+      runCity: null,
+      constraints,
+    });
+    expect(result).toEqual({ eligible: false, reason: "no_service_access" });
+  });
+
+  it("excludes members with a past_due Stripe subscription", () => {
+    const result = checkMemberEligibility(member({ stripeSubscriptionStatus: "past_due" }), {
+      cycleDate: CYCLE,
+      runCity: null,
+      constraints,
+    });
+    expect(result).toEqual({ eligible: false, reason: "no_service_access" });
+  });
+
+  it("excludes members with a blank Stripe subscription status", () => {
     const result = checkMemberEligibility(
-      member({ membership: "Inactive", payment: "Unpaid" }),
+      member({ stripeSubscriptionStatus: "" }),
       { cycleDate: CYCLE, runCity: null, constraints }
     );
     expect(result).toEqual({ eligible: false, reason: "no_service_access" });
   });
 
-  it("accepts members with a future service-access extension", () => {
-    const result = checkMemberEligibility(
-      member({
-        membership: "Inactive",
-        payment: "Unpaid",
-        serviceAccessUntil: "2026-09-01T00:00:00Z",
-      }),
-      { cycleDate: CYCLE, runCity: null, constraints }
-    );
+  it("compares Stripe status case-insensitively", () => {
+    const result = checkMemberEligibility(member({ stripeSubscriptionStatus: "ACTIVE" }), {
+      cycleDate: CYCLE,
+      runCity: null,
+      constraints,
+    });
     expect(result.eligible).toBe(true);
-  });
-
-  it("rejects an expired service-access extension for inactive members", () => {
-    const result = checkMemberEligibility(
-      member({
-        membership: "Inactive",
-        payment: "Unpaid",
-        serviceAccessUntil: "2026-08-15T00:00:00Z",
-      }),
-      { cycleDate: CYCLE, runCity: null, constraints }
-    );
-    expect(result.reason).toBe("no_service_access");
-  });
-
-  it("evaluates access against accessReference when provided (late-evening renewal)", () => {
-    // Access expires 4m before the cycle day starts, but is still valid at
-    // plan-build time — the member renews at period end and must not be dropped.
-    const cycleDate = new Date("2026-08-31T00:00:00Z");
-    const accessReference = new Date("2026-08-30T20:24:00Z");
-    const input = member({
-      membership: "Inactive",
-      payment: "Unpaid",
-      serviceAccessUntil: "2026-08-30T23:55:35Z",
-    });
-
-    const withReference = checkMemberEligibility(input, {
-      cycleDate,
-      accessReference,
-      runCity: null,
-      constraints,
-    });
-    expect(withReference.eligible).toBe(true);
-
-    const withoutReference = checkMemberEligibility(input, {
-      cycleDate,
-      runCity: null,
-      constraints,
-    });
-    expect(withoutReference).toEqual({ eligible: false, reason: "no_service_access" });
   });
 
   it("rejects members with an invalid email", () => {
@@ -152,64 +156,21 @@ describe("checkMemberEligibility — introduction states", () => {
     expect(result).toEqual({ eligible: false, reason: "excluded" });
   });
 
-  it("excludes paused members whose pause has not ended", () => {
+  it("accepts members with Recurring intro status Paused (no longer blocks)", () => {
     const result = checkMemberEligibility(
       member({ recurringIntroStatus: "Paused", recurringPauseUntil: "2026-09-01" }),
-      { cycleDate: CYCLE, runCity: null, constraints }
-    );
-    expect(result).toEqual({ eligible: false, reason: "paused" });
-  });
-
-  it("accepts paused members after their pause end", () => {
-    const result = checkMemberEligibility(
-      member({ recurringIntroStatus: "Paused", recurringPauseUntil: "2026-08-01" }),
       { cycleDate: CYCLE, runCity: null, constraints }
     );
     expect(result.eligible).toBe(true);
   });
 
-  it("keeps paused members with no pause end excluded", () => {
+  it("accepts paused members with no pause end", () => {
     const result = checkMemberEligibility(member({ recurringIntroStatus: "Paused" }), {
       cycleDate: CYCLE,
       runCity: null,
       constraints,
     });
-    expect(result).toEqual({ eligible: false, reason: "paused" });
-  });
-
-  it("keeps paused members with an invalid pause end excluded", () => {
-    const result = checkMemberEligibility(
-      member({ recurringIntroStatus: "Paused", recurringPauseUntil: "not-a-date" }),
-      { cycleDate: CYCLE, runCity: null, constraints }
-    );
-    expect(result).toEqual({ eligible: false, reason: "paused" });
-  });
-});
-
-describe("checkMemberEligibility — Stripe billing pause", () => {
-  it("excludes members whose Stripe subscription is paused, even with future access", () => {
-    const result = checkMemberEligibility(
-      member({
-        stripeSubscriptionStatus: "paused",
-        serviceAccessUntil: "2026-12-01T00:00:00Z",
-      }),
-      { cycleDate: CYCLE, runCity: null, constraints }
-    );
-    expect(result).toEqual({ eligible: false, reason: "no_service_access" });
-  });
-
-  it("treats casing-insensitively and ignores other statuses", () => {
-    const paused = checkMemberEligibility(
-      member({ stripeSubscriptionStatus: "PAUSED" }),
-      { cycleDate: CYCLE, runCity: null, constraints }
-    );
-    expect(paused).toEqual({ eligible: false, reason: "no_service_access" });
-
-    const active = checkMemberEligibility(
-      member({ stripeSubscriptionStatus: "active" }),
-      { cycleDate: CYCLE, runCity: null, constraints }
-    );
-    expect(active.eligible).toBe(true);
+    expect(result.eligible).toBe(true);
   });
 });
 

@@ -182,6 +182,7 @@ interface ResolvedProposal {
   partners: PlanMember[];
   effective: EffectiveCitySettings | null;
   targetRecord: AirtableRecord | null;
+  partnerRecords: AirtableRecord[];
   cycleDate: string;
 }
 
@@ -211,6 +212,7 @@ async function resolveProposal(
     partners: [],
     effective: null,
     targetRecord: null,
+    partnerRecords: [],
     cycleDate,
   });
 
@@ -372,6 +374,9 @@ async function resolveProposal(
     partners: best.partners,
     effective,
     targetRecord,
+    partnerRecords: best.partners
+      .map((p) => records.find((r) => r.id === p.airtableRecordId))
+      .filter((r): r is AirtableRecord => Boolean(r)),
     cycleDate,
   };
 }
@@ -413,6 +418,16 @@ export async function createIndividualMatch(
 
   const { target, partners, effective, cycleDate } = resolved;
   const { cityCode, cityName } = resolved.proposal;
+
+  // ── Refresh vectors for the selected partners (target already synced in
+  //    resolveProposal) so the group's embeddings are current. ──
+  for (const record of resolved.partnerRecords) {
+    await syncMemberSemanticProfile(record, {
+      pinecone: deps.pinecone,
+      db,
+      log,
+    });
+  }
 
   // ── Resolve the individual email template (ensure it exists) ──
   await ensureIndividualTemplate(db, { createdBy: input.operator });

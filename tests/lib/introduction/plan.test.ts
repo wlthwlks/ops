@@ -69,6 +69,7 @@ function memberRecord(id: string, overrides: Record<string, unknown> = {}): Airt
       "post code": "SW1A 1AA",
       Membership: "Active",
       Payment: "Paid",
+      "Stripe subscription status": "active",
       "Service access until": "",
       "Recurring intro status": "",
       "Recurring pause until": "",
@@ -413,8 +414,7 @@ describe("runIntroductionPreview", () => {
         memberRecords[0],
         memberRecords[1],
         memberRecord("rec_unpaid", {
-          Membership: "Inactive",
-          Payment: "Unpaid",
+          "Stripe subscription status": "canceled",
         }),
         memberRecord("rec_excluded", {
           "Recurring intro status": "Excluded",

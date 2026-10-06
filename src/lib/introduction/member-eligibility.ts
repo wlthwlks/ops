@@ -1,6 +1,4 @@
 import { normalizeCityKey } from "@/lib/ops/city-normalize";
-import { evaluateServiceAccess } from "./service-access";
-import { resolveIntroPauseState } from "./pause-state";
 import { haversineDistanceKm } from "./geo-cache";
 import { canonicalizeCityName } from "./city-matching";
 import {
@@ -14,9 +12,9 @@ import type { ResolvedConstraints } from "./settings";
 /**
  * Hard eligibility constraints for the unified introduction engine.
  * Everything in here is a hard gate — score weights never influence it.
- * Billing/access is consumed from the centralized service-access module
- * (never reimplemented), and introduction-specific states (Paused /
- * Excluded) are layered on top.
+ * A member is eligible when they have an active Stripe membership
+ * (subscription status active/trialing/paused) and have NOT opted out
+ * (Recurring intro status is not "Excluded").
  */
 
 export type MemberEligibilityReason =
@@ -86,28 +84,19 @@ export function checkMemberEligibility(
     return { eligible: false, reason: "invalid_email" };
   }
 
-  const access = evaluateServiceAccess(
-    member.membership ?? "",
-    member.payment ?? "",
-    member.serviceAccessUntil,
-    options.accessReference ?? options.cycleDate,
-    undefined,
-    { stripeSubscriptionStatus: member.stripeSubscriptionStatus }
-  );
-  if (!access.accessible) {
+  // Active Stripe membership: "active", "trialing" and "paused" (Stripe pause
+  // collection keeps the underlying subscription active) all count as an
+  // active membership. Anything else (canceled, past_due, unpaid, blank) is
+  // excluded.
+  const stripeStatus = (member.stripeSubscriptionStatus ?? "").trim().toLowerCase();
+  if (!["active", "trialing", "paused"].includes(stripeStatus)) {
     return { eligible: false, reason: "no_service_access" };
   }
 
-  const pause = resolveIntroPauseState(
-    member.recurringIntroStatus,
-    member.recurringPauseUntil,
-    options.cycleDate
-  );
-  if (pause.state === "excluded") {
+  // Opt-out only: "Excluded" blocks; "Paused"/"Active"/blank do not.
+  const introStatus = (member.recurringIntroStatus ?? "").trim().toLowerCase();
+  if (introStatus === "excluded") {
     return { eligible: false, reason: "excluded" };
-  }
-  if (pause.isPaused) {
-    return { eligible: false, reason: "paused" };
   }
 
   if (options.runCity != null) {
