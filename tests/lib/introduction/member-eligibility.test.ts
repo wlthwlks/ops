@@ -50,6 +50,7 @@ function pairOptions(overrides: Partial<Parameters<typeof checkPairEligibility>[
     constraints,
     pairHistory: emptyHistory,
     emailsInCycle: new Set<string>(),
+    bannedPairs: new Set<string>(),
     ...overrides,
   } as Parameters<typeof checkPairEligibility>[2];
 }
@@ -278,6 +279,25 @@ describe("checkPairEligibility", () => {
     const result = checkPairEligibility(member(), member(), pairOptions());
     expect(result.reason).toBe("self_pair");
     expect(result.eligible).toBe(false);
+  });
+
+  it("rejects banned pairs regardless of order", () => {
+    const banned = new Set(["at:rec_1|at:rec_2"]);
+    expect(checkPairEligibility(member(), bob, pairOptions({ bannedPairs: banned })).reason).toBe(
+      "banned_pair"
+    );
+    expect(checkPairEligibility(bob, member(), pairOptions({ bannedPairs: banned })).reason).toBe(
+      "banned_pair"
+    );
+  });
+
+  it("allows non-banned pairs", () => {
+    const result = checkPairEligibility(
+      member(),
+      bob,
+      pairOptions({ bannedPairs: new Set(["at:rec_1|at:rec_99"]) })
+    );
+    expect(result.eligible).toBe(true);
   });
 
   it("rejects a member already placed in the cycle", () => {

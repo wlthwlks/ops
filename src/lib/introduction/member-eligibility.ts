@@ -7,6 +7,7 @@ import {
   normalizeEmailKey,
   type PairHistory,
 } from "./pair-history";
+import { bannedPairKey } from "./banned-pairs";
 import type { ResolvedConstraints } from "./settings";
 
 /**
@@ -126,6 +127,7 @@ export function checkMemberEligibility(
 
 export type PairEligibilityReason =
   | "self_pair"
+  | "banned_pair"
   | "already_in_cycle"
   | "recent_pair_repeat"
   | "member_cooldown"
@@ -145,6 +147,8 @@ export interface PairEligibilityOptions {
   pairHistory: PairHistory;
   /** Normalized emails of members already placed in this cycle. */
   emailsInCycle: ReadonlySet<string>;
+  /** Canonical banned-pair keys ("at:{id}|at:{id}") that must never be matched. */
+  bannedPairs: ReadonlySet<string>;
 }
 
 export type PairEligibilityMember = Pick<
@@ -162,6 +166,13 @@ export function checkPairEligibility(
 
   if (a.airtableRecordId === b.airtableRecordId || (emailA && emailA === emailB)) {
     return { eligible: false, reason: "self_pair", distanceKm: null };
+  }
+  const banKey = bannedPairKey(
+    memberKey(a.email, a.airtableRecordId),
+    memberKey(b.email, b.airtableRecordId)
+  );
+  if (options.bannedPairs.has(banKey)) {
+    return { eligible: false, reason: "banned_pair", distanceKm: null };
   }
   if (options.emailsInCycle.has(emailA) || options.emailsInCycle.has(emailB)) {
     return { eligible: false, reason: "already_in_cycle", distanceKm: null };

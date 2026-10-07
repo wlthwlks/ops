@@ -92,6 +92,13 @@
       "when": 1790758777839,
       "tag": "0012_old_magdalene",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791405813535,
+      "tag": "0013_outstanding_moonstone",
+      "breakpoints": true
     }
   ]
 }

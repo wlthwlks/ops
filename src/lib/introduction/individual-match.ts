@@ -20,6 +20,7 @@ import { MEMBER_FIELDS, MEMBERS_TABLE, CITIES_TABLE } from "@/lib/ops/airtable-f
 import { resolveEffectiveCitySettings, type EffectiveCitySettings } from "./settings";
 import { checkMemberEligibility } from "./member-eligibility";
 import { loadPairHistory } from "./pair-history";
+import { loadBannedPairKeys } from "./banned-pairs";
 import {
   loadMatchingOptionsCatalog,
   linkIdsFromField,
@@ -258,6 +259,7 @@ async function resolveProposal(
     pairDays: effective.constraints.repeatPairDays,
     memberDays: effective.constraints.memberCooldownDays,
   });
+  const bannedPairs = await loadBannedPairKeys(db);
 
   // ── Fetch city members ──
   const records = await fetchCityMemberRecords(airtable, cityCode, cityName, log);
@@ -343,6 +345,7 @@ async function resolveProposal(
     constraints: effective.constraints,
     weights: effective.weights,
     pairHistory,
+    bannedPairs,
     maxDistanceKm: effective.constraints.maxDistanceKm,
   });
   const matrix = matrixResult.matrix;
@@ -510,6 +513,7 @@ export async function createIndividualMatch(
     constraints: effective.constraints,
     weights: effective.weights,
     pairHistory: { recentPairs: new Set<string>(), recentMemberEmails: new Set<string>() },
+    bannedPairs: await loadBannedPairKeys(db),
     maxDistanceKm: effective.constraints.maxDistanceKm,
   }).matrix;
   for (const [a, b] of pairs) {
