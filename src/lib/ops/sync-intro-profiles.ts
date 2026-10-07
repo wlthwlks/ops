@@ -56,14 +56,14 @@ function buildCityFilter(cityGroup: CityGroup): string {
   const conditions = [cityGroup.label, ...cityGroup.alternatives].map(
     (name) => `FIND(LOWER("${name}"), LOWER({City}))`
   );
-  // Trialing Stripe subscriptions may not yet carry Membership="Active" in
-  // Airtable — they must still appear in Pinecone, so treat the trialing
-  // subscription status as an alternative to Active.
-  return `AND(OR({Membership} = "Active", {Stripe subscription status} = "trialing"), {Cancellation date} = "", NOT({Recurring intro status} = "Paused"), OR(${conditions.join(", ")}))`;
+  // Active membership = an active/trialing/paused Stripe subscription (pause
+  // collection still counts) and NOT opted out ("Recurring intro status" is
+  // not "Excluded").
+  return `AND(OR({Stripe subscription status} = "active", {Stripe subscription status} = "trialing", {Stripe subscription status} = "paused"), NOT({Recurring intro status} = "Excluded"), OR(${conditions.join(", ")}))`;
 }
 
 function buildAllCitiesFilter(): string {
-  return `AND(OR({Membership} = "Active", {Stripe subscription status} = "trialing"), {Cancellation date} = "", NOT({Recurring intro status} = "Paused"))`;
+  return `AND(OR({Stripe subscription status} = "active", {Stripe subscription status} = "trialing", {Stripe subscription status} = "paused"), NOT({Recurring intro status} = "Excluded"))`;
 }
 
 export interface SemanticReconcileDeps {
@@ -74,8 +74,8 @@ export interface SemanticReconcileDeps {
 
 /**
  * Delete semantic-namespace vectors whose member record is no longer in the
- * active set (cancelled, paused, neither Active nor a trialing Stripe
- * subscription, or deleted from Airtable).
+ * active set (no active/trialing/paused Stripe subscription, opted out via
+ * "Recurring intro status" = Excluded, or deleted from Airtable).
  *
  * Deletion-only and bounded: one minimal Airtable list (email field only),
  * one Pinecone list walk and batched deletes — no embeddings, no OpenAI

@@ -440,6 +440,23 @@ export async function createTestDb(options?: { matchmake?: boolean; introduction
       CREATE INDEX intro_delivery_events_delivery_idx ON introduction_delivery_events (delivery_id);
       CREATE INDEX intro_delivery_events_type_idx ON introduction_delivery_events (event_type);
 
+      CREATE TABLE introduction_banned_pairs (
+        id TEXT PRIMARY KEY NOT NULL,
+        member_a_key TEXT NOT NULL,
+        member_b_key TEXT NOT NULL,
+        pair_key TEXT NOT NULL,
+        member_a_email TEXT,
+        member_b_email TEXT,
+        member_a_name TEXT,
+        member_b_name TEXT,
+        note TEXT,
+        created_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE UNIQUE INDEX intro_banned_pairs_pair_key_uidx ON introduction_banned_pairs (pair_key);
+      CREATE INDEX intro_banned_pairs_member_a_idx ON introduction_banned_pairs (member_a_key);
+      CREATE INDEX intro_banned_pairs_member_b_idx ON introduction_banned_pairs (member_b_key);
+
       ALTER TABLE introduction_delivery_events
         ADD CONSTRAINT introduction_delivery_events_delivery_id_fk
         FOREIGN KEY (delivery_id) REFERENCES introduction_deliveries (id);

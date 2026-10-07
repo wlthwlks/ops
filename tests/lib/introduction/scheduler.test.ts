@@ -68,6 +68,7 @@ function memberRecord(id: string): AirtableRecord {
       "post code": "SW1A 1AA",
       Membership: "Active",
       Payment: "Paid",
+      "Stripe subscription status": "active",
       "Service access until": "",
       "Recurring intro status": "",
       "Recurring pause until": "",

@@ -32,6 +32,7 @@ import {
   type MemberEligibilityReason,
 } from "./member-eligibility";
 import { loadPairHistory, type PairHistory } from "./pair-history";
+import { loadBannedPairKeys } from "./banned-pairs";
 import { cityAliasFilterFormula, canonicalizeCityName } from "./city-matching";
 import { normalizeCityKey } from "@/lib/ops/city-normalize";
 import { resolveMemberGeo, type ResolvedGeo } from "./geo-cache";
@@ -303,6 +304,7 @@ export interface PlanMatrixResult {
   allowedPairs: number;
   repeatedPairsBlocked: number;
   cooldownBlocked: number;
+  bannedPairsBlocked: number;
   notSameCityBlocked: number;
   distanceBlocked: number;
 }
@@ -316,13 +318,16 @@ export function computePairMatrix(
     constraints: EffectiveCitySettings["constraints"];
     weights: EffectiveCitySettings["weights"];
     pairHistory: PairHistory;
+    bannedPairs?: ReadonlySet<string>;
     maxDistanceKm?: number | null;
   }
 ): PlanMatrixResult {
   const matrix = new PairScoreMatrix();
+  const bannedPairs = opts.bannedPairs ?? new Set<string>();
   let allowedPairs = 0;
   let repeatedPairsBlocked = 0;
   let cooldownBlocked = 0;
+  let bannedPairsBlocked = 0;
   let notSameCityBlocked = 0;
   let distanceBlocked = 0;
 
@@ -335,10 +340,12 @@ export function computePairMatrix(
         constraints: opts.constraints,
         pairHistory: opts.pairHistory,
         emailsInCycle: EMPTY_CYCLE,
+        bannedPairs,
       });
       if (!eligibility.eligible) {
         if (eligibility.reason === "recent_pair_repeat") repeatedPairsBlocked += 1;
         if (eligibility.reason === "member_cooldown") cooldownBlocked += 1;
+        if (eligibility.reason === "banned_pair") bannedPairsBlocked += 1;
         if (eligibility.reason === "not_same_city") notSameCityBlocked += 1;
         if (eligibility.reason === "distance_exceeds_max") distanceBlocked += 1;
         matrix.set(a.key, b.key, {
@@ -361,6 +368,7 @@ export function computePairMatrix(
     allowedPairs,
     repeatedPairsBlocked,
     cooldownBlocked,
+    bannedPairsBlocked,
     notSameCityBlocked,
     distanceBlocked,
   };
@@ -550,6 +558,7 @@ export async function runIntroductionPreview(
     pairDays: effective.constraints.repeatPairDays,
     memberDays: effective.constraints.memberCooldownDays,
   });
+  const bannedPairs = await loadBannedPairKeys(db);
 
   const catalog = await loadMatchingOptionsCatalog(deps.airtable);
 
@@ -721,12 +730,13 @@ export async function runIntroductionPreview(
     constraints: effective.constraints,
     weights: effective.weights,
     pairHistory,
+    bannedPairs,
     maxDistanceKm: effective.constraints.maxDistanceKm,
   });
   deps.log(
     `Pair matrix: ${matrixResult.allowedPairs} allowed pair(s), ` +
       `${matrixResult.repeatedPairsBlocked} repeat-blocked, ${matrixResult.cooldownBlocked} cooldown-blocked, ` +
-      `${matrixResult.notSameCityBlocked} not-same-city, ${matrixResult.distanceBlocked} distance-blocked`
+      `${matrixResult.bannedPairsBlocked} banned, ${matrixResult.notSameCityBlocked} not-same-city, ${matrixResult.distanceBlocked} distance-blocked`
   );
 
   // ─── Grouping ───
@@ -750,6 +760,7 @@ export async function runIntroductionPreview(
     constraints: effective.constraints,
     weights: effective.weights,
     pairHistory: { recentPairs: new Set<string>(), recentMemberEmails: new Set<string>() },
+    bannedPairs,
     maxDistanceKm: effective.constraints.maxDistanceKm,
   }).matrix;
   const filled = fillUnmatchedGuarantee(

@@ -20,6 +20,7 @@ import { MEMBER_FIELDS, MEMBERS_TABLE, CITIES_TABLE } from "@/lib/ops/airtable-f
 import { resolveEffectiveCitySettings, type EffectiveCitySettings } from "./settings";
 import { checkMemberEligibility } from "./member-eligibility";
 import { loadPairHistory } from "./pair-history";
+import { loadBannedPairKeys } from "./banned-pairs";
 import {
   loadMatchingOptionsCatalog,
   linkIdsFromField,
@@ -182,6 +183,7 @@ interface ResolvedProposal {
   partners: PlanMember[];
   effective: EffectiveCitySettings | null;
   targetRecord: AirtableRecord | null;
+  partnerRecords: AirtableRecord[];
   cycleDate: string;
 }
 
@@ -211,6 +213,7 @@ async function resolveProposal(
     partners: [],
     effective: null,
     targetRecord: null,
+    partnerRecords: [],
     cycleDate,
   });
 
@@ -256,6 +259,7 @@ async function resolveProposal(
     pairDays: effective.constraints.repeatPairDays,
     memberDays: effective.constraints.memberCooldownDays,
   });
+  const bannedPairs = await loadBannedPairKeys(db);
 
   // ── Fetch city members ──
   const records = await fetchCityMemberRecords(airtable, cityCode, cityName, log);
@@ -341,6 +345,7 @@ async function resolveProposal(
     constraints: effective.constraints,
     weights: effective.weights,
     pairHistory,
+    bannedPairs,
     maxDistanceKm: effective.constraints.maxDistanceKm,
   });
   const matrix = matrixResult.matrix;
@@ -372,6 +377,9 @@ async function resolveProposal(
     partners: best.partners,
     effective,
     targetRecord,
+    partnerRecords: best.partners
+      .map((p) => records.find((r) => r.id === p.airtableRecordId))
+      .filter((r): r is AirtableRecord => Boolean(r)),
     cycleDate,
   };
 }
@@ -413,6 +421,16 @@ export async function createIndividualMatch(
 
   const { target, partners, effective, cycleDate } = resolved;
   const { cityCode, cityName } = resolved.proposal;
+
+  // ── Refresh vectors for the selected partners (target already synced in
+  //    resolveProposal) so the group's embeddings are current. ──
+  for (const record of resolved.partnerRecords) {
+    await syncMemberSemanticProfile(record, {
+      pinecone: deps.pinecone,
+      db,
+      log,
+    });
+  }
 
   // ── Resolve the individual email template (ensure it exists) ──
   await ensureIndividualTemplate(db, { createdBy: input.operator });
@@ -495,6 +513,7 @@ export async function createIndividualMatch(
     constraints: effective.constraints,
     weights: effective.weights,
     pairHistory: { recentPairs: new Set<string>(), recentMemberEmails: new Set<string>() },
+    bannedPairs: await loadBannedPairKeys(db),
     maxDistanceKm: effective.constraints.maxDistanceKm,
   }).matrix;
   for (const [a, b] of pairs) {

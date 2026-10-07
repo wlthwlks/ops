@@ -320,20 +320,23 @@ describe("runIntroProfileSync — city handling", () => {
     expect(options.filterByFormula).toContain('FIND(LOWER("London")');
   });
 
-  it("includes trialing Stripe subscriptions alongside Active members", async () => {
+  it("includes active/trialing/paused Stripe subscriptions and excludes only Excluded", async () => {
     airtableList.mockResolvedValue([alice]);
     await runIntroProfileSync(makeDeps(), {});
     const [, options] = airtableList.mock.calls[0];
-    expect(options.filterByFormula).toContain('OR({Membership} = "Active", {Stripe subscription status} = "trialing")');
-    expect(options.filterByFormula).toContain('{Cancellation date} = ""');
-    expect(options.filterByFormula).toContain('NOT({Recurring intro status} = "Paused")');
+    expect(options.filterByFormula).toContain(
+      'OR({Stripe subscription status} = "active", {Stripe subscription status} = "trialing", {Stripe subscription status} = "paused")'
+    );
+    expect(options.filterByFormula).toContain('NOT({Recurring intro status} = "Excluded")');
   });
 
-  it("includes trialing members in city-scoped filters too", async () => {
+  it("includes active/trialing/paused members in city-scoped filters too", async () => {
     airtableList.mockResolvedValue([alice]);
     await runIntroProfileSync(makeDeps(), { cityLabel: "London" });
     const [, options] = airtableList.mock.calls[0];
-    expect(options.filterByFormula).toContain('OR({Membership} = "Active", {Stripe subscription status} = "trialing")');
+    expect(options.filterByFormula).toContain(
+      'OR({Stripe subscription status} = "active", {Stripe subscription status} = "trialing", {Stripe subscription status} = "paused")'
+    );
   });
 });
 
